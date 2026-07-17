@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
 import "./globals.css";
 import { cn } from "@/lib/utils";
+import { SpeedInsights } from "@vercel/speed-insights/nuxt/runtime";
 
 // globals.css maps --font-sans -> Inter and --font-mono -> Geist Mono.
 // Geist Sans was loaded here but never referenced by the theme, so it is not
@@ -31,9 +32,10 @@ export default function RootLayout({
         "antialiased",
         "font-sans",
         inter.variable,
-        geistMono.variable
+        geistMono.variable,
       )}
     >
+      <SpeedInsights />
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
