@@ -3,60 +3,60 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { parseMoney, parseWholeNumber } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
 
 export type InventoryState = { error: string | null };
-
-/**
- * Quantity is optional. An empty field means "not quantity-tracked" (NULL),
- * which is NOT the same as 0 ("tracked, none left"): checkout neither
- * decrements nor blocks a NULL, but refuses to oversell a 0.
- */
-function parseQuantity(raw: FormDataEntryValue | null): number | null | "bad" {
-  const value = String(raw ?? "").trim();
-  if (value === "") return null;
-
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < 0) return "bad";
-  return parsed;
-}
-
-function parsePrice(raw: FormDataEntryValue | null): number | "bad" {
-  const value = String(raw ?? "").trim();
-  if (value === "") return "bad";
-
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed < 0) return "bad";
-  // numeric(10,2) — reject more precision than the column can hold rather than
-  // letting Postgres round it silently.
-  if (Math.round(parsed * 100) !== parsed * 100) return "bad";
-  return parsed;
-}
 
 type Parsed = {
   name: string;
   price: number;
   stock: number | null;
   description: string | null;
+  category_id: string | null;
 };
 
 function parseForm(formData: FormData): Parsed | { error: string } {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { error: "Name is required." };
 
-  const price = parsePrice(formData.get("price"));
-  if (price === "bad") {
+  const price = parseMoney(formData.get("price"));
+  if (price === "bad" || price === null) {
     return { error: "Price must be a number with at most 2 decimal places." };
   }
 
-  const stock = parseQuantity(formData.get("stock"));
-  if (stock === "bad") {
+  // Blank quantity means "not tracked" (NULL) — deliberately distinct from 0
+  // ("tracked, none left"). Negative is allowed: overselling drives stock
+  // below zero, and the row must stay editable so the owner can recount.
+  const counted = parseWholeNumber(formData.get("stock"), {
+    allowNegative: true,
+  });
+  if (counted === "bad") {
     return { error: "Quantity must be a whole number, or left blank." };
   }
 
+  // Restock: quantity just bought, ADDED to the counted stock rather than
+  // replacing it. A restock on an untracked item starts counting it.
+  const restock = parseWholeNumber(formData.get("restock_qty"));
+  if (restock === "bad") {
+    return { error: "Qty bought must be a whole number." };
+  }
+  const stock =
+    restock !== null && restock > 0 ? (counted ?? 0) + restock : counted;
+
   const description = String(formData.get("description") ?? "").trim();
 
-  return { name, price, stock, description: description || null };
+  // Empty means "no category". A non-empty value must reference a real row —
+  // the foreign key rejects anything else, so no UUID validation needed here.
+  const categoryId = String(formData.get("category_id") ?? "").trim();
+
+  return {
+    name,
+    price,
+    stock,
+    description: description || null,
+    category_id: categoryId || null,
+  };
 }
 
 export async function createProduct(

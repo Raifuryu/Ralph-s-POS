@@ -1,0 +1,123 @@
+"use client";
+
+import { useActionState } from "react";
+import Link from "next/link";
+
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import type { Service } from "@/lib/types";
+import {
+  createService,
+  updateService,
+  type ServiceFormState,
+} from "./serviceActions";
+
+const initialState: ServiceFormState = { error: null };
+
+export default function ServiceForm({
+  service,
+}: {
+  /** Omit to create a new service. */
+  service?: Service;
+}) {
+  const isEdit = Boolean(service);
+  const [state, formAction, isPending] = useActionState(
+    isEdit ? updateService : createService,
+    initialState
+  );
+
+  return (
+    <form action={formAction} className="flex flex-col gap-4">
+      {service ? <input type="hidden" name="id" value={service.id} /> : null}
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="service-name">Name</Label>
+        <Input
+          id="service-name"
+          name="name"
+          required
+          defaultValue={service?.name ?? ""}
+          placeholder="e.g. GCash Cash-in (Load)"
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="cash_flow">Cash direction</Label>
+          <Select
+            id="cash_flow"
+            name="cash_flow"
+            defaultValue={service?.cash_flow ?? "in"}
+          >
+            <option value="in">In — customer pays cash into the box</option>
+            <option value="out">Out — you hand cash to the customer</option>
+          </Select>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="default_fee">
+            Usual fee{" "}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </Label>
+          <Input
+            id="default_fee"
+            name="default_fee"
+            type="number"
+            step="0.01"
+            min="0"
+            inputMode="decimal"
+            defaultValue={service?.default_fee ?? ""}
+            placeholder="Pre-fills at the counter"
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="wallet">
+          Wallet involved{" "}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Select
+          id="wallet"
+          name="wallet"
+          defaultValue={service?.wallet ?? ""}
+        >
+          <option value="">None — cash only (xerox, printing…)</option>
+          <option value="gcash">GCash</option>
+          <option value="maya">Maya</option>
+        </Select>
+      </div>
+
+      <p className="-mt-2 text-xs text-muted-foreground">
+        The fee is your income and is typed at the counter each time — this
+        default just pre-fills it. If a wallet is set, the vault tracks both
+        sides: a load adds cash to the box and deducts the amount from that
+        wallet; a cash-out does the reverse.
+      </p>
+
+      {state.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {state.error}
+        </p>
+      ) : null}
+
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={isPending}>
+          {isPending ? "Saving…" : isEdit ? "Save changes" : "Add service"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          nativeButton={false}
+          render={<Link href="/inventory?tab=services" />}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
+  );
+}

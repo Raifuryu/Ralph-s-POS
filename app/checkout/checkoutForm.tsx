@@ -4,6 +4,7 @@ import { useActionState, useMemo, useState } from "react";
 import Link from "next/link";
 import { PlusIcon, XIcon } from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +16,7 @@ import {
   type PaymentMethod,
   type Product,
 } from "@/lib/types";
+import ChangeCalculator, { isShort } from "../changeCalculator";
 import { recordSale, type CheckoutState } from "./actions";
 
 const initialState: CheckoutState = { error: null };
@@ -51,9 +53,9 @@ function CatalogueRow({
       </div>
 
       {quantity > 0 ? (
-        <span className="shrink-0 rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
+        <Badge variant="primary" className="shrink-0">
           ×{quantity}
-        </span>
+        </Badge>
       ) : (
         <PlusIcon className="size-4 shrink-0 text-muted-foreground" />
       )}
@@ -77,6 +79,7 @@ export default function CheckoutForm({
 }) {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
+  const [tendered, setTendered] = useState("");
   const [search, setSearch] = useState("");
   const [state, formAction, isPending] = useActionState(
     recordSale,
@@ -116,12 +119,23 @@ export default function CheckoutForm({
 
   const isSearching = search.trim().length > 0;
 
+  // Lines selling more than the recorded stock. Allowed — the shelf is the
+  // source of truth, not the system — but flagged and confirmed, and the
+  // stock goes negative as the signal to recount.
+  const oversoldLines = cart.filter(
+    (line) =>
+      line.product.stock !== null && line.quantity > line.product.stock
+  );
+
   // Display only. The authoritative total is computed by the database.
   const previewTotal = cart.reduce(
     (sum, line) => sum + Number(line.product.price) * line.quantity,
     0
   );
   const pieceCount = cart.reduce((sum, line) => sum + line.quantity, 0);
+
+  const insufficient =
+    paymentMethod === "cash" && isShort(tendered, previewTotal);
 
   function setQuantity(id: string, next: number) {
     setQuantities((prev) => ({ ...prev, [id]: Math.max(0, next) }));
@@ -140,7 +154,26 @@ export default function CheckoutForm({
   }
 
   return (
-    <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-4">
+    <form
+      action={formAction}
+      onSubmit={(event) => {
+        if (oversoldLines.length === 0) return;
+        const detail = oversoldLines
+          .map(
+            (line) =>
+              `${line.product.name}: selling ${line.quantity}, only ${line.product.stock} in stock`
+          )
+          .join("\n");
+        if (
+          !confirm(
+            `This sale exceeds recorded stock:\n\n${detail}\n\nRecord anyway? Stock will go negative so you can recount later.`
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+      className="flex min-h-0 flex-1 flex-col gap-4"
+    >
       <input
         type="hidden"
         name="cart"
@@ -207,21 +240,8 @@ export default function CheckoutForm({
                     }
                   />
                 ))}
-                <p className="pt-2 text-xs font-medium text-muted-foreground">
-                  All items
-                </p>
               </>
             ) : null}
-            {products.map((product) => (
-              <CatalogueRow
-                key={product.id}
-                product={product}
-                quantity={quantities[product.id] ?? 0}
-                onAdd={() =>
-                  setQuantity(product.id, (quantities[product.id] ?? 0) + 1)
-                }
-              />
-            ))}
           </>
         )}
       </div>
@@ -230,10 +250,19 @@ export default function CheckoutForm({
         <div className="flex shrink-0 flex-col gap-2 border-t pt-3">
           <p className="text-sm font-medium">In this sale</p>
           <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
-            {cart.map((line) => (
+            {cart.map((line) => {
+              const oversold =
+                line.product.stock !== null &&
+                line.quantity > line.product.stock;
+              return (
               <div
                 key={line.product.id}
-                className="flex items-center justify-between gap-2"
+                data-oversold={oversold || undefined}
+                className={
+                  oversold
+                    ? "flex items-center justify-between gap-2 rounded-lg border border-amber-500/60 bg-amber-500/10 p-2"
+                    : "flex items-center justify-between gap-2"
+                }
               >
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm">{line.product.name}</p>
@@ -241,6 +270,12 @@ export default function CheckoutForm({
                     {formatPeso(Number(line.product.price))} × {line.quantity}{" "}
                     = {formatPeso(Number(line.product.price) * line.quantity)}
                   </p>
+                  {oversold ? (
+                    <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                      Only {line.product.stock} in stock — will drop to{" "}
+                      {line.product.stock! - line.quantity}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="flex shrink-0 items-center gap-1">
@@ -289,7 +324,8 @@ export default function CheckoutForm({
                   </Button>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
@@ -310,6 +346,16 @@ export default function CheckoutForm({
           </TabsList>
         </Tabs>
       </div>
+
+      {/* Cash only. Unmounting on wallet payments also removes the input
+          from the form, so nothing stray is submitted. */}
+      {paymentMethod === "cash" ? (
+        <ChangeCalculator
+          due={previewTotal}
+          value={tendered}
+          onChange={setTendered}
+        />
+      ) : null}
 
       {state.error ? (
         <p role="alert" className="text-sm text-destructive">
@@ -340,7 +386,10 @@ export default function CheckoutForm({
             {formatPeso(previewTotal)}
           </p>
         </div>
-        <Button type="submit" disabled={isPending || cart.length === 0}>
+        <Button
+          type="submit"
+          disabled={isPending || cart.length === 0 || insufficient}
+        >
           {isPending ? "Recording…" : "Record sale"}
         </Button>
       </div>

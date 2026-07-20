@@ -1,16 +1,19 @@
 import Link from "next/link";
 
+import { PageError, PageShell } from "@/components/pageShell";
+import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
 import { formatPeso } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
 import { PAYMENT_METHODS } from "@/lib/types";
 import { signOut } from "./login/actions";
 import NewSaleDrawer from "./newSaleDrawer";
+import ServiceDrawer from "./serviceDrawer";
 import TransactionFilters from "./transactionFilters";
 import TransactionTabs from "./transactionTabs";
 
 const TRANSACTION_SELECT = `
-  id, payment_method, cashier_id, total, created_at,
+  id, payment_method, cashier_id, total, tendered, created_at,
   transaction_items (
     id, transaction_id, product_id, product_name, unit_price, quantity, line_total
   )
@@ -31,26 +34,17 @@ type SearchParams = {
 
 function LoadError({ message }: { message: string }) {
   return (
-    <main className="flex min-h-dvh flex-col items-center p-4 sm:p-8 md:p-12">
-      <div className="w-full max-w-3xl rounded-lg border border-destructive/50 p-4">
-        <h1 className="font-semibold">Could not load transactions</h1>
-        <p className="mt-1 text-sm text-muted-foreground">{message}</p>
-        <p className="mt-3 text-sm text-muted-foreground">
-          If this says the table is missing, the schema in{" "}
-          <code className="text-xs">supabase/migrations/0001_init.sql</code> has
-          not been applied yet.
-        </p>
-      </div>
-    </main>
-  );
-}
-
-function SummaryCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-lg border bg-card p-4">
-      <p className="text-sm text-muted-foreground">{label}</p>
-      <p className="mt-1 text-2xl font-semibold tabular-nums">{value}</p>
-    </div>
+    <PageError
+      title="Could not load transactions"
+      message={message}
+      hint={
+        <>
+          If this says a table is missing, a migration in{" "}
+          <code className="text-xs">supabase/migrations/</code> has not been
+          applied yet.
+        </>
+      }
+    />
   );
 }
 
@@ -93,22 +87,39 @@ export default async function Home({
 
   // `.in("id", [])` is a valid empty-set filter, so no special case is needed
   // for "search matched nothing" — it correctly returns zero rows.
-  const [{ data, error }, { data: products }, { data: topSellers }] =
-    await Promise.all([
-      query,
-      supabase
-        .from("products")
-        .select(
-          "id, name, price, stock, description, is_active, created_at, updated_at"
-        )
-        .eq("is_active", true)
-        .order("name"),
-      supabase
-        .from("product_sales_totals")
-        .select("product_id, units_sold")
-        .order("units_sold", { ascending: false })
-        .limit(5),
-    ]);
+  // Service income respects the same date window as the sales list. PostgREST
+  // aggregates are disabled, so fees are fetched and summed here.
+  let feeQuery = supabase.from("service_transactions").select("fee");
+  if (params.from_ts) feeQuery = feeQuery.gte("created_at", params.from_ts);
+  if (params.to_ts) feeQuery = feeQuery.lte("created_at", params.to_ts);
+
+  const [
+    { data, error },
+    { data: products },
+    { data: topSellers },
+    { data: services },
+    { data: serviceFees },
+  ] = await Promise.all([
+    query,
+    supabase
+      .from("products")
+      .select(
+        "id, name, price, stock, description, category_id, is_active, created_at, updated_at"
+      )
+      .eq("is_active", true)
+      .order("name"),
+    supabase
+      .from("product_sales_totals")
+      .select("product_id, units_sold")
+      .order("units_sold", { ascending: false })
+      .limit(5),
+    supabase
+      .from("services")
+      .select("id, name, cash_flow, default_fee, wallet, is_active, created_at, updated_at")
+      .eq("is_active", true)
+      .order("name"),
+    feeQuery,
+  ]);
 
   if (error) {
     return <LoadError message={error.message} />;
@@ -134,18 +145,31 @@ export default async function Home({
     0
   );
 
+  const serviceIncome = (serviceFees ?? []).reduce(
+    (sum, row) => sum + Number(row.fee),
+    0
+  );
+
   return (
-    <main className="flex min-h-dvh flex-col items-center p-4 pb-28 sm:p-8 sm:pb-8 md:p-12">
-      <div className="flex w-full min-w-0 max-w-3xl flex-col gap-6">
+    <PageShell className="pb-28 sm:pb-8">
+      <>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-semibold">Sales</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <NewSaleDrawer
               products={products ?? []}
               topProductIds={(topSellers ?? [])
                 .map((row) => row.product_id)
                 .filter((id): id is string => id !== null)}
             />
+            <ServiceDrawer services={services ?? []} />
+            <Button
+              variant="outline"
+              nativeButton={false}
+              render={<Link href="/vault" />}
+            >
+              Vault
+            </Button>
             <Button
               variant="outline"
               nativeButton={false}
@@ -167,13 +191,23 @@ export default async function Home({
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <SummaryCard label="Total sales" value={formatPeso(totals.all)} />
-          <SummaryCard label="Cash" value={formatPeso(totals.cash)} />
-          <SummaryCard label="E-Wallet" value={formatPeso(totals.e_wallet)} />
+          <SummaryCard
+            label="Cash"
+            value={formatPeso(totals.cash)}
+            breakdown={[
+              { label: "GCash", value: formatPeso(totals.gcash) },
+              { label: "Maya", value: formatPeso(totals.maya) },
+            ]}
+          />
+          <SummaryCard
+            label="Service income"
+            value={formatPeso(serviceIncome)}
+          />
           <SummaryCard label="Items sold" value={String(itemsSold)} />
         </div>
 
         <TransactionTabs transactions={transactions} />
-      </div>
-    </main>
+      </>
+    </PageShell>
   );
 }

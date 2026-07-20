@@ -39,11 +39,12 @@ export default function NewSaleDrawer({
         New sale
       </DrawerTrigger>
 
-      {/* Floating action button — phones only */}
+      {/* Floating pill on phones, paired with Service: starts just right of
+          the screen's centreline (Service ends just left of it). */}
       <DrawerTrigger
         className={cn(
           buttonVariants(),
-          "fixed inset-x-0 z-50 mx-auto w-fit sm:hidden",
+          "fixed left-1/2 z-50 ml-1 sm:hidden",
           // env() resolves to 0 without viewport-fit=cover, so this falls back
           // to 1.5rem and still clears the home indicator on notched phones.
           "bottom-[calc(1.5rem+env(safe-area-inset-bottom))]",
@@ -58,7 +59,7 @@ export default function NewSaleDrawer({
       {/* Fixed 75% height: a content-sized sheet jumps around as the
           catalogue grows/filters; a stable height keeps the footer and
           Record button in the same place for muscle memory. */}
-      <DrawerContent className="h-[75dvh]">
+      <DrawerContent className="h-[100dvh]">
         <DrawerHeader>
           <DrawerTitle>New sale</DrawerTitle>
           <DrawerDescription>

@@ -14,8 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      categories: {
+        Row: {
+          created_at: string
+          id: string
+          name: string
+          sort_order: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          name: string
+          sort_order?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          name?: string
+          sort_order?: number
+        }
+        Relationships: []
+      }
       products: {
         Row: {
+          category_id: string | null
           created_at: string
           description: string | null
           id: string
@@ -26,6 +48,7 @@ export type Database = {
           updated_at: string
         }
         Insert: {
+          category_id?: string | null
           created_at?: string
           description?: string | null
           id?: string
@@ -36,6 +59,7 @@ export type Database = {
           updated_at?: string
         }
         Update: {
+          category_id?: string | null
           created_at?: string
           description?: string | null
           id?: string
@@ -44,6 +68,106 @@ export type Database = {
           price?: number
           stock?: number | null
           updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "products_category_id_fkey"
+            columns: ["category_id"]
+            isOneToOne: false
+            referencedRelation: "categories"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      service_transactions: {
+        Row: {
+          cash_flow: Database["public"]["Enums"]["cash_flow"]
+          cashier_id: string
+          contact_number: string | null
+          created_at: string
+          description: string | null
+          fee: number
+          id: string
+          payment_account: Database["public"]["Enums"]["money_account"]
+          principal: number
+          reference: string | null
+          service_id: string | null
+          service_name: string
+          tendered: number | null
+          wallet: Database["public"]["Enums"]["money_account"] | null
+        }
+        Insert: {
+          cash_flow: Database["public"]["Enums"]["cash_flow"]
+          cashier_id?: string
+          contact_number?: string | null
+          created_at?: string
+          description?: string | null
+          fee: number
+          id?: string
+          payment_account: Database["public"]["Enums"]["money_account"]
+          principal: number
+          reference?: string | null
+          service_id?: string | null
+          service_name: string
+          tendered?: number | null
+          wallet?: Database["public"]["Enums"]["money_account"] | null
+        }
+        Update: {
+          cash_flow?: Database["public"]["Enums"]["cash_flow"]
+          cashier_id?: string
+          contact_number?: string | null
+          created_at?: string
+          description?: string | null
+          fee?: number
+          id?: string
+          payment_account?: Database["public"]["Enums"]["money_account"]
+          principal?: number
+          reference?: string | null
+          service_id?: string | null
+          service_name?: string
+          tendered?: number | null
+          wallet?: Database["public"]["Enums"]["money_account"] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "service_transactions_service_id_fkey"
+            columns: ["service_id"]
+            isOneToOne: false
+            referencedRelation: "services"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      services: {
+        Row: {
+          cash_flow: Database["public"]["Enums"]["cash_flow"]
+          created_at: string
+          default_fee: number | null
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+          wallet: Database["public"]["Enums"]["money_account"] | null
+        }
+        Insert: {
+          cash_flow?: Database["public"]["Enums"]["cash_flow"]
+          created_at?: string
+          default_fee?: number | null
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+          wallet?: Database["public"]["Enums"]["money_account"] | null
+        }
+        Update: {
+          cash_flow?: Database["public"]["Enums"]["cash_flow"]
+          created_at?: string
+          default_fee?: number | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+          wallet?: Database["public"]["Enums"]["money_account"] | null
         }
         Relationships: []
       }
@@ -97,24 +221,84 @@ export type Database = {
           cashier_id: string
           created_at: string
           id: string
-          payment_method: Database["public"]["Enums"]["payment_method"]
+          payment_method: Database["public"]["Enums"]["money_account"]
+          tendered: number | null
           total: number
         }
         Insert: {
           cashier_id?: string
           created_at?: string
           id?: string
-          payment_method: Database["public"]["Enums"]["payment_method"]
+          payment_method: Database["public"]["Enums"]["money_account"]
+          tendered?: number | null
           total: number
         }
         Update: {
           cashier_id?: string
           created_at?: string
           id?: string
-          payment_method?: Database["public"]["Enums"]["payment_method"]
+          payment_method?: Database["public"]["Enums"]["money_account"]
+          tendered?: number | null
           total?: number
         }
         Relationships: []
+      }
+      vault_entries: {
+        Row: {
+          account: Database["public"]["Enums"]["money_account"]
+          amount: number
+          created_at: string
+          created_by: string
+          entry_type: Database["public"]["Enums"]["vault_entry_type"]
+          expected: number | null
+          id: string
+          note: string | null
+          seq: number
+          service_transaction_id: string | null
+          transaction_id: string | null
+        }
+        Insert: {
+          account: Database["public"]["Enums"]["money_account"]
+          amount: number
+          created_at?: string
+          created_by?: string
+          entry_type: Database["public"]["Enums"]["vault_entry_type"]
+          expected?: number | null
+          id?: string
+          note?: string | null
+          seq?: number
+          service_transaction_id?: string | null
+          transaction_id?: string | null
+        }
+        Update: {
+          account?: Database["public"]["Enums"]["money_account"]
+          amount?: number
+          created_at?: string
+          created_by?: string
+          entry_type?: Database["public"]["Enums"]["vault_entry_type"]
+          expected?: number | null
+          id?: string
+          note?: string | null
+          seq?: number
+          service_transaction_id?: string | null
+          transaction_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vault_entries_service_transaction_id_fkey"
+            columns: ["service_transaction_id"]
+            isOneToOne: false
+            referencedRelation: "service_transactions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "vault_entries_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "transactions"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {
@@ -133,18 +317,49 @@ export type Database = {
           },
         ]
       }
+      vault_balance: {
+        Row: {
+          account: Database["public"]["Enums"]["money_account"] | null
+          balance: number | null
+          last_counted_at: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
       checkout: {
         Args: {
           p_items: Json
-          p_payment_method: Database["public"]["Enums"]["payment_method"]
+          p_payment_method: Database["public"]["Enums"]["money_account"]
+          p_tendered?: number
         }
         Returns: string
       }
+      record_service: {
+        Args: {
+          p_contact_number?: string
+          p_description?: string
+          p_fee: number
+          p_payment_account?: Database["public"]["Enums"]["money_account"]
+          p_principal: number
+          p_reference?: string
+          p_service_id: string
+          p_tendered?: number
+        }
+        Returns: string
+      }
+      record_vault_count: {
+        Args: {
+          p_account: Database["public"]["Enums"]["money_account"]
+          p_counted: number
+        }
+        Returns: Json
+      }
     }
     Enums: {
-      payment_method: "cash" | "e_wallet"
+      cash_flow: "in" | "out"
+      money_account: "cash" | "gcash" | "maya"
+      vault_entry_type: "sale" | "service" | "deposit" | "withdrawal" | "count"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -272,7 +487,9 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      payment_method: ["cash", "e_wallet"],
+      cash_flow: ["in", "out"],
+      money_account: ["cash", "gcash", "maya"],
+      vault_entry_type: ["sale", "service", "deposit", "withdrawal", "count"],
     },
   },
 } as const

@@ -71,8 +71,10 @@ export const config = {
   matcher: [
     /*
      * Everything except static assets and images. Auth cookies must still be
-     * refreshed on most requests, so keep this broad.
+     * refreshed on most requests, so keep this broad. `_vercel` is excluded so
+     * Speed Insights beacons (/_vercel/speed-insights/*) aren't redirected to
+     * /login, which would silently drop all metrics.
      */
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
+    "/((?!_next/static|_next/image|_vercel|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp)$).*)",
   ],
 };

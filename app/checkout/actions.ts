@@ -2,8 +2,9 @@
 
 import { revalidatePath } from "next/cache";
 
+import { parseMoney } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
-import { isPaymentMethod } from "@/lib/types";
+import { isMoneyAccount } from "@/lib/types";
 
 export type CheckoutState = { error: string | null; transactionId?: string };
 
@@ -18,7 +19,7 @@ export async function recordSale(
   formData: FormData
 ): Promise<CheckoutState> {
   const paymentMethod = String(formData.get("payment_method") ?? "");
-  if (!isPaymentMethod(paymentMethod)) {
+  if (!isMoneyAccount(paymentMethod)) {
     return { error: "Choose a payment method." };
   }
 
@@ -34,10 +35,18 @@ export async function recordSale(
     return { error: "Add at least one item before recording the sale." };
   }
 
+  // Optional: what the customer handed over (cash sales only). The DB
+  // enforces tendered >= total and cash-only; this is just early validation.
+  const tendered = parseMoney(formData.get("tendered"), { allowBlank: true });
+  if (tendered === "bad") {
+    return { error: "Amount received must be a valid amount." };
+  }
+
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("checkout", {
     p_payment_method: paymentMethod,
     p_items: items,
+    ...(tendered !== null ? { p_tendered: tendered } : {}),
   });
 
   if (error) {
