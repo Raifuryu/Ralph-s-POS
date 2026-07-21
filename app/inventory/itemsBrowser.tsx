@@ -50,6 +50,14 @@ function ItemRow({ product }: { product: Product }) {
           variant="ghost"
           size="xs"
           nativeButton={false}
+          render={<Link href={`/inventory?history=${product.id}`} />}
+        >
+          History
+        </Button>
+        <Button
+          variant="ghost"
+          size="xs"
+          nativeButton={false}
           render={<Link href={`/inventory?edit=${product.id}`} />}
         >
           Edit

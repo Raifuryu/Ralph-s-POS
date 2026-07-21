@@ -67,9 +67,14 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
     setSelected(service);
     // Each service brings its own default fee; still editable below.
     setFee(service.default_fee !== null ? String(service.default_fee) : "");
+    // Switching services can change which accounts are even valid — jump to
+    // that service's first allowed one rather than leaving a stale, now
+    // disallowed, selection in place.
+    setPaymentAccount(service.allowed_payment_accounts[0] ?? "cash");
   }
 
   const payLabel = MONEY_ACCOUNT_LABELS[paymentAccount];
+  const allowedAccounts = selected?.allowed_payment_accounts ?? ["cash"];
 
   // Change calculator applies only when physical cash is handed over:
   // a cash-in service paid via the cash box. Due = principal + fee.
@@ -113,6 +118,10 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
                   {service.default_fee !== null
                     ? ` · usual fee ${formatPeso(Number(service.default_fee))}`
                     : null}
+                  {" · "}
+                  {service.allowed_payment_accounts
+                    .map((account) => MONEY_ACCOUNT_LABELS[account])
+                    .join(", ")}
                 </p>
               </div>
             </button>
@@ -159,21 +168,29 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
                 ? "Customer pays via"
                 : "Paid out from"}
             </Label>
-            <Tabs
-              value={paymentAccount}
-              onValueChange={(value) =>
-                setPaymentAccount(value as MoneyAccount)
-              }
-              className="w-full min-w-0"
-            >
-              <TabsList className="w-full sm:w-fit">
-                {MONEY_ACCOUNTS.map((account) => (
-                  <TabsTrigger key={account} value={account}>
-                    {MONEY_ACCOUNT_LABELS[account]}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+            {allowedAccounts.length > 1 ? (
+              <Tabs
+                value={paymentAccount}
+                onValueChange={(value) =>
+                  setPaymentAccount(value as MoneyAccount)
+                }
+                className="w-full min-w-0"
+              >
+                <TabsList className="w-full sm:w-fit">
+                  {MONEY_ACCOUNTS.filter((account) =>
+                    allowedAccounts.includes(account)
+                  ).map((account) => (
+                    <TabsTrigger key={account} value={account}>
+                      {MONEY_ACCOUNT_LABELS[account]}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            ) : (
+              // Only one method is valid for this service — nothing to
+              // choose. State stays; no interactive control needed.
+              <p className="text-sm">{payLabel}</p>
+            )}
           </div>
 
           <p
@@ -290,7 +307,7 @@ export default function ServiceDrawer({ services }: { services: Service[] }) {
           "hidden sm:inline-flex"
         )}
       >
-        Service
+        E-Services
       </DrawerTrigger>
 
       {/* Floating pill on phones, paired with New sale: this one ends just
@@ -304,7 +321,7 @@ export default function ServiceDrawer({ services }: { services: Service[] }) {
         )}
       >
         <WalletIcon data-icon="inline-start" />
-        Service
+        E-Services
       </DrawerTrigger>
 
       <DrawerContent className="h-[100dvh]">

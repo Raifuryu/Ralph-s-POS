@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import type { Service } from "@/lib/types";
+import { MONEY_ACCOUNTS, MONEY_ACCOUNT_LABELS, type Service } from "@/lib/types";
 import {
   createService,
   updateService,
@@ -98,6 +98,36 @@ export default function ServiceForm({
         sides: a load adds cash to the box and deducts the amount from that
         wallet; a cash-out does the reverse.
       </p>
+
+      <div className="flex flex-col gap-2">
+        <Label>Accepted payment methods</Label>
+        <div className="flex flex-wrap gap-3">
+          {MONEY_ACCOUNTS.map((account) => (
+            <label
+              key={account}
+              className="flex items-center gap-1.5 text-sm"
+            >
+              <input
+                type="checkbox"
+                name="allowed_payment_accounts"
+                value={account}
+                defaultChecked={
+                  service
+                    ? service.allowed_payment_accounts.includes(account)
+                    : account === "cash"
+                }
+                className="size-4 rounded border-input"
+              />
+              {MONEY_ACCOUNT_LABELS[account]}
+            </label>
+          ))}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          At the counter, only these count as valid payment for this service.
+          Most services should stay cash-only — paying a GCash load with
+          GCash itself makes no sense.
+        </p>
+      </div>
 
       {state.error ? (
         <p role="alert" className="text-sm text-destructive">

@@ -70,12 +70,20 @@ function AmountCell({ entry }: { entry: LedgerEntry }) {
   );
 }
 
-export default function Ledger({ entries }: { entries: LedgerEntry[] }) {
+export default function Ledger({
+  entries,
+  filtered = false,
+}: {
+  entries: LedgerEntry[];
+  /** True when a date/search filter is active — changes the empty-state copy. */
+  filtered?: boolean;
+}) {
   if (entries.length === 0) {
     return (
       <p className="rounded-lg border py-10 text-center text-sm text-muted-foreground">
-        No vault activity yet. Cash sales and services will appear here
-        automatically.
+        {filtered
+          ? "No entries match this filter."
+          : "No vault activity yet. Cash sales and services will appear here automatically."}
       </p>
     );
   }

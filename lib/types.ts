@@ -6,6 +6,7 @@ import { Constants, type Tables } from "./database.types";
  */
 export type Product = Tables<"products">;
 export type Category = Tables<"categories">;
+export type ProductRestock = Tables<"product_restocks">;
 export type Service = Tables<"services">;
 export type ServiceTransaction = Tables<"service_transactions">;
 export type VaultEntry = Tables<"vault_entries">;
@@ -67,7 +68,7 @@ export type TransactionFilter = (typeof TRANSACTION_FILTERS)[number];
 
 export const TRANSACTION_FILTER_LABELS: Record<TransactionFilter, string> = {
   all: "All",
-  cash: "Cash",
+  cash: "Store",
   gcash: "GCash",
   maya: "Maya",
 };

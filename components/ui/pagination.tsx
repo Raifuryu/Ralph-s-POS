@@ -51,9 +51,14 @@ function PaginationLink({
       className={cn(className)}
       nativeButton={false}
       render={
+        // No data-slot here: Button's own render already sets
+        // data-slot="button" on this same element via {...props} spread, and
+        // base-ui's render-prop merge resolves that collision differently
+        // between the SSR pass and hydration — a real, reproducible
+        // hydration mismatch (React devtools console), not just noise.
+        // Nothing in this codebase selects on "pagination-link".
         <a
           aria-current={isActive ? "page" : undefined}
-          data-slot="pagination-link"
           data-active={isActive}
           {...props}
         />

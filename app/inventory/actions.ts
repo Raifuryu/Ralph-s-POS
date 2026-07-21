@@ -14,6 +14,11 @@ type Parsed = {
   stock: number | null;
   description: string | null;
   category_id: string | null;
+  /** Present (> 0) means this submit also restocks — handled via the
+      record_restock RPC, not the plain products update, so the stock bump
+      and the batch's cost land atomically together. */
+  restockQty: number | null;
+  restockCost: number | null;
 };
 
 function parseForm(formData: FormData): Parsed | { error: string } {
@@ -37,12 +42,24 @@ function parseForm(formData: FormData): Parsed | { error: string } {
 
   // Restock: quantity just bought, ADDED to the counted stock rather than
   // replacing it. A restock on an untracked item starts counting it.
-  const restock = parseWholeNumber(formData.get("restock_qty"));
-  if (restock === "bad") {
+  const restockQtyRaw = parseWholeNumber(formData.get("restock_qty"));
+  if (restockQtyRaw === "bad") {
     return { error: "Qty bought must be a whole number." };
   }
-  const stock =
-    restock !== null && restock > 0 ? (counted ?? 0) + restock : counted;
+  const restockQty =
+    restockQtyRaw !== null && restockQtyRaw > 0 ? restockQtyRaw : null;
+
+  const restockCost = parseMoney(formData.get("restock_cost"), {
+    allowBlank: restockQty === null,
+  });
+  if (restockCost === "bad") {
+    return {
+      error: "Price bought must be a number with at most 2 decimal places.",
+    };
+  }
+  if (restockQty !== null && restockCost === null) {
+    return { error: "Price bought is required when restocking." };
+  }
 
   const description = String(formData.get("description") ?? "").trim();
 
@@ -53,9 +70,11 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   return {
     name,
     price,
-    stock,
+    stock: counted,
     description: description || null,
     category_id: categoryId || null,
+    restockQty,
+    restockCost,
   };
 }
 
@@ -67,9 +86,28 @@ export async function createProduct(
   if ("error" in parsed) return { error: parsed.error };
 
   const supabase = await createClient();
-  const { error } = await supabase.from("products").insert(parsed);
+  const { data: created, error } = await supabase
+    .from("products")
+    .insert({
+      name: parsed.name,
+      price: parsed.price,
+      stock: parsed.stock,
+      description: parsed.description,
+      category_id: parsed.category_id,
+    })
+    .select("id")
+    .single();
 
   if (error) return { error: error.message };
+
+  if (parsed.restockQty !== null) {
+    const { error: restockError } = await supabase.rpc("record_restock", {
+      p_product_id: created.id,
+      p_quantity: parsed.restockQty,
+      p_cost: parsed.restockCost ?? 0,
+    });
+    if (restockError) return { error: restockError.message };
+  }
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
@@ -88,9 +126,36 @@ export async function updateProduct(
   if ("error" in parsed) return { error: parsed.error };
 
   const supabase = await createClient();
-  const { error } = await supabase.from("products").update(parsed).eq("id", id);
+
+  const baseFields = {
+    name: parsed.name,
+    price: parsed.price,
+    description: parsed.description,
+    category_id: parsed.category_id,
+  };
+  // Restocking: the RPC owns the stock bump atomically, so `stock` is left
+  // out of this update entirely — otherwise the two writes could race and
+  // one would clobber the other's result.
+  const updatePayload =
+    parsed.restockQty !== null
+      ? baseFields
+      : { ...baseFields, stock: parsed.stock };
+
+  const { error } = await supabase
+    .from("products")
+    .update(updatePayload)
+    .eq("id", id);
 
   if (error) return { error: error.message };
+
+  if (parsed.restockQty !== null) {
+    const { error: restockError } = await supabase.rpc("record_restock", {
+      p_product_id: id,
+      p_quantity: parsed.restockQty,
+      p_cost: parsed.restockCost ?? 0,
+    });
+    if (restockError) return { error: restockError.message };
+  }
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");

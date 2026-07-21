@@ -33,8 +33,15 @@ function daysAgo(n: number): string {
 
 export default function TransactionFilters({
   initial,
+  basePath = "/",
+  searchLabel = "Item name",
+  searchPlaceholder = "e.g. Kropek",
 }: {
   initial: FilterValues;
+  /** Where Apply/Clear navigate to — lets this filter drive any list page. */
+  basePath?: string;
+  searchLabel?: string;
+  searchPlaceholder?: string;
 }) {
   const router = useRouter();
   const [q, setQ] = useState(initial.q);
@@ -63,7 +70,7 @@ export default function TransactionFilters({
       params.set("to_ts", new Date(`${values.to}T23:59:59.999`).toISOString());
     }
 
-    router.push(params.size ? `/?${params}` : "/");
+    router.push(params.size ? `${basePath}?${params}` : basePath);
   }
 
   function preset(fromDate: string) {
@@ -77,7 +84,7 @@ export default function TransactionFilters({
     setQ("");
     setFrom("");
     setTo("");
-    router.push("/");
+    router.push(basePath);
   }
 
   return (
@@ -101,12 +108,12 @@ export default function TransactionFilters({
             className="flex flex-col gap-4"
           >
             <div className="flex flex-col gap-2">
-              <Label htmlFor="q">Item name</Label>
+              <Label htmlFor="q">{searchLabel}</Label>
               <Input
                 id="q"
                 name="q"
                 value={q}
-                placeholder="e.g. Kropek"
+                placeholder={searchPlaceholder}
                 onChange={(event) => setQ(event.target.value)}
               />
             </div>

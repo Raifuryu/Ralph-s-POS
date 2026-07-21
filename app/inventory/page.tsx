@@ -22,6 +22,9 @@ import { createClient } from "@/lib/supabase/server";
 import { MONEY_ACCOUNT_LABELS, type Product, type Service } from "@/lib/types";
 import ItemsBrowser from "./itemsBrowser";
 import ProductSheet from "./productSheet";
+import RestockHistorySheet, {
+  type RestockHistoryEntry,
+} from "./restockHistorySheet";
 import ServiceDeleteButton from "./serviceDeleteButton";
 import ServiceForm from "./serviceForm";
 
@@ -31,6 +34,7 @@ type SearchParams = {
   tab?: string;
   newService?: string;
   editService?: string;
+  history?: string;
 };
 
 export default async function InventoryPage({
@@ -56,7 +60,7 @@ export default async function InventoryPage({
       supabase
         .from("services")
         .select(
-          "id, name, cash_flow, default_fee, wallet, is_active, created_at, updated_at"
+          "id, name, cash_flow, default_fee, wallet, allowed_payment_accounts, is_active, created_at, updated_at"
         )
         .order("name"),
     ]);
@@ -84,6 +88,73 @@ export default async function InventoryPage({
   const defaultTab =
     params.tab === "services" || showServiceForm ? "services" : "items";
 
+  const historyProduct = params.history
+    ? products.find((p) => p.id === params.history)
+    : undefined;
+  const showHistory = params.history !== undefined;
+
+  let historyEntries: RestockHistoryEntry[] = [];
+  if (params.history) {
+    const [{ data: restocks, error: restocksError }, { data: items, error: itemsError }] =
+      await Promise.all([
+        supabase
+          .from("product_restocks")
+          .select("id, quantity, cost, note, created_at")
+          .eq("product_id", params.history)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("transaction_items")
+          .select("line_total, transactions(created_at)")
+          .eq("product_id", params.history)
+          .overrideTypes<
+            { line_total: number; transactions: { created_at: string } | null }[],
+            { merge: false }
+          >(),
+      ]);
+
+    if (restocksError) {
+      return (
+        <PageError
+          title="Could not load restock history"
+          message={restocksError.message}
+        />
+      );
+    }
+    if (itemsError) {
+      return (
+        <PageError
+          title="Could not load restock history"
+          message={itemsError.message}
+        />
+      );
+    }
+
+    // Sales attributed to a batch = this product's revenue from the batch's
+    // created_at onward. An earlier batch's window overlaps a later batch's,
+    // so the same sale can count toward both — see the caveat in the sheet.
+    const sales = (items ?? [])
+      .filter((item) => item.transactions !== null)
+      .map((item) => ({
+        lineTotal: Number(item.line_total),
+        soldAt: new Date(item.transactions!.created_at).getTime(),
+      }));
+
+    historyEntries = (restocks ?? []).map((restock) => {
+      const restockedAt = new Date(restock.created_at).getTime();
+      const recovered = sales
+        .filter((sale) => sale.soldAt >= restockedAt)
+        .reduce((sum, sale) => sum + sale.lineTotal, 0);
+      return {
+        id: restock.id,
+        quantity: restock.quantity,
+        cost: Number(restock.cost),
+        note: restock.note,
+        created_at: restock.created_at,
+        recovered,
+      };
+    });
+  }
+
   return (
     <PageShell>
       <>
@@ -97,7 +168,7 @@ export default async function InventoryPage({
         <Tabs defaultValue={defaultTab} className="w-full min-w-0">
           <TabsList className="w-full sm:w-fit">
             <TabsTrigger value="items">Items</TabsTrigger>
-            <TabsTrigger value="services">Services</TabsTrigger>
+            <TabsTrigger value="services">E-Services</TabsTrigger>
           </TabsList>
 
           <TabsContent value="items" className="flex min-w-0 flex-col gap-4 pt-3">
@@ -202,6 +273,12 @@ export default async function InventoryPage({
           open={showProductForm}
           product={editing}
           categories={categories ?? []}
+        />
+
+        <RestockHistorySheet
+          open={showHistory}
+          productName={historyProduct?.name}
+          entries={historyEntries}
         />
       </>
     </PageShell>

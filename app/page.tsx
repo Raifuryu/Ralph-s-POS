@@ -1,16 +1,65 @@
 import Link from "next/link";
 
+import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
-import { formatPeso } from "@/lib/format";
+import { formatDate, friendlyDayLabel, storeDateFromKey } from "@/lib/format";
+import { escapeLike } from "@/lib/search";
 import { createClient } from "@/lib/supabase/server";
-import { PAYMENT_METHODS } from "@/lib/types";
+import type { MoneyAccount } from "@/lib/types";
 import { signOut } from "./login/actions";
+import IncomeBreakdownCard, { type EServiceFees } from "./incomeBreakdownCard";
 import NewSaleDrawer from "./newSaleDrawer";
 import ServiceDrawer from "./serviceDrawer";
+import VaultCard from "./vaultCard";
 import TransactionFilters from "./transactionFilters";
 import TransactionTabs from "./transactionTabs";
+
+/**
+ * Names the number on the income card after whatever window is active, so
+ * it's never ambiguous whether you're looking at today, a range, or
+ * everything — "the daily transaction only or depending on the filter."
+ */
+function incomeCardCopy({
+  from,
+  to,
+  q,
+}: {
+  from?: string;
+  to?: string;
+  q?: string;
+}): { title: string; subtitle?: string } {
+  const parts: string[] = [];
+  let title = "Total income";
+
+  if (from && to && from === to) {
+    const label = friendlyDayLabel(storeDateFromKey(from));
+    if (label === "Today") {
+      title = "Today's income";
+    } else {
+      title = "Income";
+      parts.push(label);
+    }
+  } else if (from || to) {
+    title = "Income";
+    if (from && to) {
+      parts.push(
+        `${formatDate(storeDateFromKey(from))} – ${formatDate(storeDateFromKey(to))}`
+      );
+    } else if (from) {
+      parts.push(`Since ${formatDate(storeDateFromKey(from))}`);
+    } else if (to) {
+      parts.push(`Until ${formatDate(storeDateFromKey(to))}`);
+    }
+  } else {
+    parts.push("All time");
+  }
+
+  if (q) parts.push(`matching "${q}"`);
+
+  return { title, subtitle: parts.length ? parts.join(" · ") : undefined };
+}
 
 const TRANSACTION_SELECT = `
   id, payment_method, cashier_id, total, tendered, created_at,
@@ -19,10 +68,7 @@ const TRANSACTION_SELECT = `
   )
 `;
 
-/** `%` and `_` are wildcards in ilike; a literal search must escape them. */
-function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
-}
+const PAGE_SIZE = 20;
 
 type SearchParams = {
   q?: string;
@@ -30,6 +76,7 @@ type SearchParams = {
   to?: string;
   from_ts?: string;
   to_ts?: string;
+  page?: string;
 };
 
 function LoadError({ message }: { message: string }) {
@@ -75,32 +122,54 @@ export default async function Home({
     matchedIds = [...new Set(matches.map((row) => row.transaction_id))];
   }
 
+  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
+  const rangeFrom = (page - 1) * PAGE_SIZE;
+  const rangeTo = rangeFrom + PAGE_SIZE - 1;
+
+  // Render query: paginated, drives the visible list only. `count: "exact"`
+  // gets the true row total for the pager without a second round trip.
   let query = supabase
     .from("transactions")
-    .select(TRANSACTION_SELECT)
+    .select(TRANSACTION_SELECT, { count: "exact" })
     .order("created_at", { ascending: false })
-    .limit(100);
+    .range(rangeFrom, rangeTo);
 
   if (params.from_ts) query = query.gte("created_at", params.from_ts);
   if (params.to_ts) query = query.lte("created_at", params.to_ts);
   if (matchedIds) query = query.in("id", matchedIds);
 
+  // Totals query: the SAME filters, but every matching row and no pagination
+  // — the income card sums the whole filtered window, not just the page
+  // someone happens to be looking at. Lean select (no item name/price):
+  // this is for sums only, never rendered.
+  let totalsQuery = supabase
+    .from("transactions")
+    .select("total, payment_method, transaction_items(quantity)");
+
+  if (params.from_ts) totalsQuery = totalsQuery.gte("created_at", params.from_ts);
+  if (params.to_ts) totalsQuery = totalsQuery.lte("created_at", params.to_ts);
+  if (matchedIds) totalsQuery = totalsQuery.in("id", matchedIds);
+
   // `.in("id", [])` is a valid empty-set filter, so no special case is needed
   // for "search matched nothing" — it correctly returns zero rows.
-  // Service income respects the same date window as the sales list. PostgREST
-  // aggregates are disabled, so fees are fetched and summed here.
-  let feeQuery = supabase.from("service_transactions").select("fee");
+  // E-Service income respects the same date window as the sales list.
+  // PostgREST aggregates are disabled, so fees are fetched and grouped by
+  // wallet here rather than in SQL.
+  let feeQuery = supabase.from("service_transactions").select("fee, wallet");
   if (params.from_ts) feeQuery = feeQuery.gte("created_at", params.from_ts);
   if (params.to_ts) feeQuery = feeQuery.lte("created_at", params.to_ts);
 
   const [
-    { data, error },
+    { data, error, count },
+    { data: totalsData, error: totalsError },
     { data: products },
     { data: topSellers },
     { data: services },
     { data: serviceFees },
+    { data: vaultRows },
   ] = await Promise.all([
     query,
+    totalsQuery,
     supabase
       .from("products")
       .select(
@@ -115,38 +184,59 @@ export default async function Home({
       .limit(5),
     supabase
       .from("services")
-      .select("id, name, cash_flow, default_fee, wallet, is_active, created_at, updated_at")
+      .select("id, name, cash_flow, default_fee, wallet, allowed_payment_accounts, is_active, created_at, updated_at")
       .eq("is_active", true)
       .order("name"),
     feeQuery,
+    supabase.from("vault_balance").select("account, balance"),
   ]);
 
   if (error) {
     return <LoadError message={error.message} />;
   }
+  if (totalsError) {
+    return <LoadError message={totalsError.message} />;
+  }
 
   const transactions = data ?? [];
+  const pageCount = Math.max(1, Math.ceil((count ?? 0) / PAGE_SIZE));
 
-  const totals = {
-    all: transactions.reduce((sum, t) => sum + Number(t.total), 0),
-    ...Object.fromEntries(
-      PAYMENT_METHODS.map((method) => [
-        method,
-        transactions
-          .filter((t) => t.payment_method === method)
-          .reduce((sum, t) => sum + Number(t.total), 0),
-      ])
-    ),
-  } as Record<"all" | (typeof PAYMENT_METHODS)[number], number>;
-
-  const itemsSold = transactions.reduce(
-    (sum, t) =>
-      sum + t.transaction_items.reduce((n, item) => n + item.quantity, 0),
+  // Store = all product sales in the window, regardless of payment method —
+  // a sale is store revenue whether the customer paid cash, GCash, or Maya.
+  const storeTotal = (totalsData ?? []).reduce(
+    (sum, t) => sum + Number(t.total),
     0
   );
 
-  const serviceIncome = (serviceFees ?? []).reduce(
-    (sum, row) => sum + Number(row.fee),
+  // E-Service = service fee income, further split by which wallet the
+  // service touches. "Other" catches wallet-less services (e.g. printing)
+  // paid in cash — still fee income, just not tied to a specific e-wallet.
+  const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
+  for (const row of serviceFees ?? []) {
+    const fee = Number(row.fee);
+    if (row.wallet === "gcash") eServiceFees.gcash += fee;
+    else if (row.wallet === "maya") eServiceFees.maya += fee;
+    else eServiceFees.other += fee;
+  }
+
+  const { title: incomeTitle, subtitle: incomeSubtitle } = incomeCardCopy({
+    from: params.from,
+    to: params.to,
+    q,
+  });
+
+  // Live money on hand, straight from the vault ledger (all-time balances —
+  // the date filters deliberately do not apply to a balance).
+  const vault = new Map<MoneyAccount, number>();
+  for (const row of vaultRows ?? []) {
+    if (row.account) vault.set(row.account, Number(row.balance ?? 0));
+  }
+
+  // Same reasoning as storeTotal: counted over the whole filtered window via
+  // totalsData, not just the visible page.
+  const itemsSold = (totalsData ?? []).reduce(
+    (sum, t) =>
+      sum + t.transaction_items.reduce((n, item) => n + item.quantity, 0),
     0
   );
 
@@ -189,24 +279,27 @@ export default async function Home({
           initial={{ q, from: params.from ?? "", to: params.to ?? "" }}
         />
 
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <SummaryCard label="Total sales" value={formatPeso(totals.all)} />
-          <SummaryCard
-            label="Cash"
-            value={formatPeso(totals.cash)}
-            breakdown={[
-              { label: "GCash", value: formatPeso(totals.gcash) },
-              { label: "Maya", value: formatPeso(totals.maya) },
-            ]}
+        {/* Vault (money on hand) and Income (this window, by source) are the
+            two headline cards — equal weight, stacked on mobile, side by
+            side from sm up. */}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <VaultCard balances={vault} />
+          <IncomeBreakdownCard
+            title={incomeTitle}
+            subtitle={incomeSubtitle}
+            store={storeTotal}
+            eService={eServiceFees}
           />
-          <SummaryCard
-            label="Service income"
-            value={formatPeso(serviceIncome)}
-          />
-          <SummaryCard label="Items sold" value={String(itemsSold)} />
         </div>
 
         <TransactionTabs transactions={transactions} />
+
+        <Pager
+          page={page}
+          pageCount={pageCount}
+          basePath="/"
+          params={{ q: params.q, from: params.from, to: params.to }}
+        />
       </>
     </PageShell>
   );

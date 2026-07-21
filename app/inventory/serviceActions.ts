@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 
 import { parseMoney } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
+import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
 
 export type ServiceFormState = { error: string | null };
 
@@ -13,6 +14,7 @@ type Parsed = {
   cash_flow: "in" | "out";
   default_fee: number | null;
   wallet: "gcash" | "maya" | null;
+  allowed_payment_accounts: MoneyAccount[];
 };
 
 function parseForm(formData: FormData): Parsed | { error: string } {
@@ -35,7 +37,15 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   const wallet =
     walletRaw === "gcash" || walletRaw === "maya" ? walletRaw : null;
 
-  return { name, cash_flow: flow, default_fee, wallet };
+  const allowed_payment_accounts = formData
+    .getAll("allowed_payment_accounts")
+    .map(String)
+    .filter(isMoneyAccount);
+  if (allowed_payment_accounts.length === 0) {
+    return { error: "Choose at least one accepted payment method." };
+  }
+
+  return { name, cash_flow: flow, default_fee, wallet, allowed_payment_accounts };
 }
 
 export async function createService(

@@ -35,6 +35,47 @@ export type Database = {
         }
         Relationships: []
       }
+      product_restocks: {
+        Row: {
+          cashier_id: string
+          cost: number
+          created_at: string
+          id: string
+          note: string | null
+          product_id: string | null
+          product_name: string
+          quantity: number
+        }
+        Insert: {
+          cashier_id?: string
+          cost: number
+          created_at?: string
+          id?: string
+          note?: string | null
+          product_id?: string | null
+          product_name: string
+          quantity: number
+        }
+        Update: {
+          cashier_id?: string
+          cost?: number
+          created_at?: string
+          id?: string
+          note?: string | null
+          product_id?: string | null
+          product_name?: string
+          quantity?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "product_restocks_product_id_fkey"
+            columns: ["product_id"]
+            isOneToOne: false
+            referencedRelation: "products"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       products: {
         Row: {
           category_id: string | null
@@ -140,6 +181,7 @@ export type Database = {
       }
       services: {
         Row: {
+          allowed_payment_accounts: Database["public"]["Enums"]["money_account"][]
           cash_flow: Database["public"]["Enums"]["cash_flow"]
           created_at: string
           default_fee: number | null
@@ -150,6 +192,7 @@ export type Database = {
           wallet: Database["public"]["Enums"]["money_account"] | null
         }
         Insert: {
+          allowed_payment_accounts?: Database["public"]["Enums"]["money_account"][]
           cash_flow?: Database["public"]["Enums"]["cash_flow"]
           created_at?: string
           default_fee?: number | null
@@ -160,6 +203,7 @@ export type Database = {
           wallet?: Database["public"]["Enums"]["money_account"] | null
         }
         Update: {
+          allowed_payment_accounts?: Database["public"]["Enums"]["money_account"][]
           cash_flow?: Database["public"]["Enums"]["cash_flow"]
           created_at?: string
           default_fee?: number | null
@@ -266,7 +310,7 @@ export type Database = {
           expected?: number | null
           id?: string
           note?: string | null
-          seq?: number
+          seq?: never
           service_transaction_id?: string | null
           transaction_id?: string | null
         }
@@ -279,7 +323,7 @@ export type Database = {
           expected?: number | null
           id?: string
           note?: string | null
-          seq?: number
+          seq?: never
           service_transaction_id?: string | null
           transaction_id?: string | null
         }
@@ -332,6 +376,15 @@ export type Database = {
           p_items: Json
           p_payment_method: Database["public"]["Enums"]["money_account"]
           p_tendered?: number
+        }
+        Returns: string
+      }
+      record_restock: {
+        Args: {
+          p_cost: number
+          p_note?: string
+          p_product_id: string
+          p_quantity: number
         }
         Returns: string
       }
