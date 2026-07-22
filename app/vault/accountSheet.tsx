@@ -2,11 +2,13 @@
 
 import { useActionState } from "react";
 
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Drawer,
+  DrawerClose,
   DrawerContent,
   DrawerDescription,
+  DrawerFooter,
   DrawerHeader,
   DrawerTitle,
   DrawerTrigger,
@@ -16,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { cashIn, cashOut, type VaultMoveState } from "./actions";
 
 const initialState: VaultMoveState = { error: null };
@@ -25,10 +28,12 @@ const initialState: VaultMoveState = { error: null };
 function CashOutForm({ account }: { account: MoneyAccount }) {
   const [state, formAction, isPending] = useActionState(cashOut, initialState);
   return (
-    <form action={formAction} className="flex flex-col gap-3">
+    <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
       <input type="hidden" name="account" value={account} />
       <div className="flex flex-col gap-2">
-        <Label htmlFor="out-amount">Amount</Label>
+        <Label htmlFor="out-amount" className="text-xs">
+          Amount
+        </Label>
         <Input
           id="out-amount"
           name="amount"
@@ -41,7 +46,9 @@ function CashOutForm({ account }: { account: MoneyAccount }) {
         />
       </div>
       <div className="flex flex-col gap-2">
-        <Label htmlFor="out-note">What for?</Label>
+        <Label htmlFor="out-note" className="text-xs">
+          What for?
+        </Label>
         <Input
           id="out-note"
           name="note"
@@ -59,9 +66,16 @@ function CashOutForm({ account }: { account: MoneyAccount }) {
           Cash out recorded.
         </p>
       ) : null}
-      <Button type="submit" size="sm" disabled={isPending} className="self-start">
-        {isPending ? "Recording…" : "Take cash out"}
-      </Button>
+      <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
+        <DrawerClose
+          className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+        >
+          Cancel
+        </DrawerClose>
+        <Button type="submit" size="sm" disabled={isPending}>
+          {isPending ? "Recording…" : "Take cash out"}
+        </Button>
+      </DrawerFooter>
     </form>
   );
 }
@@ -69,10 +83,12 @@ function CashOutForm({ account }: { account: MoneyAccount }) {
 function CashInForm({ account }: { account: MoneyAccount }) {
   const [state, formAction, isPending] = useActionState(cashIn, initialState);
   return (
-    <form action={formAction} className="flex flex-col gap-3">
+    <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
       <input type="hidden" name="account" value={account} />
       <div className="flex flex-col gap-2">
-        <Label htmlFor="in-amount">Amount</Label>
+        <Label htmlFor="in-amount" className="text-xs">
+          Amount
+        </Label>
         <Input
           id="in-amount"
           name="amount"
@@ -85,7 +101,7 @@ function CashInForm({ account }: { account: MoneyAccount }) {
         />
       </div>
       <div className="flex flex-col gap-2">
-        <Label htmlFor="in-note">
+        <Label htmlFor="in-note" className="text-xs">
           Note{" "}
           <span className="font-normal text-muted-foreground">(optional)</span>
         </Label>
@@ -101,9 +117,16 @@ function CashInForm({ account }: { account: MoneyAccount }) {
           Cash in recorded.
         </p>
       ) : null}
-      <Button type="submit" size="sm" disabled={isPending} className="self-start">
-        {isPending ? "Recording…" : "Add cash in"}
-      </Button>
+      <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
+        <DrawerClose
+          className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+        >
+          Cancel
+        </DrawerClose>
+        <Button type="submit" size="sm" disabled={isPending}>
+          {isPending ? "Recording…" : "Add cash in"}
+        </Button>
+      </DrawerFooter>
     </form>
   );
 }
@@ -130,22 +153,25 @@ export default function AccountSheet({
         </p>
       </DrawerTrigger>
 
-      <DrawerContent>
+      <DrawerContent className="h-[100dvh]">
         <DrawerHeader>
           <DrawerTitle>{label}</DrawerTitle>
           <DrawerDescription>{formatPeso(balance)} on hand</DrawerDescription>
         </DrawerHeader>
 
-        <div className="p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <Tabs defaultValue="out" className="w-full min-w-0">
+        <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <Tabs
+            defaultValue="out"
+            className="min-h-0 w-full min-w-0 flex-1"
+          >
             <TabsList className="w-full sm:w-fit">
               <TabsTrigger value="out">Cash out</TabsTrigger>
               <TabsTrigger value="in">Cash in</TabsTrigger>
             </TabsList>
-            <TabsContent value="out" className="pt-3">
+            <TabsContent value="out" className="flex min-h-0 flex-col pt-3">
               <CashOutForm account={account} />
             </TabsContent>
-            <TabsContent value="in" className="pt-3">
+            <TabsContent value="in" className="flex min-h-0 flex-col pt-3">
               <CashInForm account={account} />
             </TabsContent>
           </Tabs>

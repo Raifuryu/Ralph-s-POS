@@ -1,8 +1,5 @@
-import Link from "next/link";
-
 import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
-import { Button } from "@/components/ui/button";
 import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
 import { escapeLike } from "@/lib/search";
 import { createClient } from "@/lib/supabase/server";
@@ -94,12 +91,7 @@ export default async function VaultPage({
 
   return (
     <PageShell>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Vault</h1>
-        <Button variant="ghost" nativeButton={false} render={<Link href="/" />}>
-          Sales
-        </Button>
-      </div>
+      <h1 className="text-xl font-semibold">Vault</h1>
 
       {/* Tap a card to cash in/out of that account — nothing left to pick */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">

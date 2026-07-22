@@ -25,7 +25,7 @@ export default async function CheckoutPage() {
   return (
     <PageShell innerClassName="max-w-2xl">
       <>
-        <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-semibold">New sale</h1>
           <Button
             variant="ghost"

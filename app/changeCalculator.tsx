@@ -37,7 +37,9 @@ export default function ChangeCalculator({
   return (
     <div className="grid shrink-0 grid-cols-2 items-end gap-3">
       <div className="flex flex-col gap-2">
-        <Label htmlFor="tendered">Customer gave</Label>
+        <Label htmlFor="tendered" className="text-xs">
+          Customer gave
+        </Label>
         <Input
           id="tendered"
           name="tendered"

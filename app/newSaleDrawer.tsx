@@ -45,9 +45,9 @@ export default function NewSaleDrawer({
         className={cn(
           buttonVariants(),
           "fixed left-1/2 z-50 ml-1 sm:hidden",
-          // env() resolves to 0 without viewport-fit=cover, so this falls back
-          // to 1.5rem and still clears the home indicator on notched phones.
-          "bottom-[calc(1.5rem+env(safe-area-inset-bottom))]",
+          // Sits above AppNav's bottom tab bar (--bottom-nav-h), plus the
+          // safe-area inset for notched phones.
+          "bottom-[calc(1.5rem+env(safe-area-inset-bottom)+var(--bottom-nav-h))]",
           // h-12 = 48px: a real thumb target. The `lg` size is only 36px.
           "h-12 rounded-full px-6 text-base shadow-lg"
         )}
@@ -73,7 +73,7 @@ export default function NewSaleDrawer({
             topProductIds={topProductIds}
             doneSlot={
               <DrawerClose
-                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+                className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
               >
                 Done
               </DrawerClose>

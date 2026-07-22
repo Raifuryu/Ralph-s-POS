@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 
+import { EmptyState } from "@/components/emptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +33,7 @@ function StockLabel({ value }: { value: number | null }) {
 
 function ItemRow({ product }: { product: Product }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b py-2.5 last:border-b-0">
+    <div className="-mx-2 flex items-center justify-between gap-2 border-b px-2 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50">
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{product.name}</p>
         <p className="text-sm text-muted-foreground">
@@ -191,11 +192,18 @@ export default function ItemsBrowser({
       </div>
 
       {visibleGroups.length === 0 ? (
-        <p className="rounded-lg border py-10 text-center text-sm text-muted-foreground">
-          {products.length === 0
-            ? "No items yet. Add your first one to start ringing up sales."
-            : `No items match${needle ? ` “${search.trim()}”` : ""}.`}
-        </p>
+        <EmptyState
+          title={
+            products.length === 0
+              ? "No items yet."
+              : `No items match${needle ? ` “${search.trim()}”` : ""}.`
+          }
+          subtitle={
+            products.length === 0
+              ? "Add your first one to start ringing up sales."
+              : undefined
+          }
+        />
       ) : (
         visibleGroups.map((group) => (
           <section

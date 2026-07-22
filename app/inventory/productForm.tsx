@@ -64,7 +64,9 @@ export default function ProductForm({
       {product ? <input type="hidden" name="id" value={product.id} /> : null}
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="name">Name</Label>
+        <Label htmlFor="name" className="text-xs">
+          Name
+        </Label>
         <Input
           id="name"
           name="name"
@@ -74,8 +76,7 @@ export default function ProductForm({
         />
       </div>
 
-
-<div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
+      <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
         <p className="text-sm font-medium">Restock &amp; pricing</p>
         <div className="grid grid-cols-2 gap-3">
           <div className="flex flex-col gap-2">
@@ -157,9 +158,11 @@ export default function ProductForm({
         ) : null}
       </div>
       
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-2">
-          <Label htmlFor="price">Price</Label>
+          <Label htmlFor="price" className="text-xs">
+            Price
+          </Label>
           <Input
             id="price"
             name="price"
@@ -178,7 +181,7 @@ export default function ProductForm({
         </div>
 
         <div className="flex flex-col gap-2">
-          <Label htmlFor="stock">
+          <Label htmlFor="stock" className="text-xs">
             Quantity{" "}
             <span className="font-normal text-muted-foreground">
               (optional)
@@ -193,7 +196,7 @@ export default function ProductForm({
             step="1"
             inputMode="numeric"
             defaultValue={product?.stock ?? ""}
-            placeholder="Blank if not counted"
+            placeholder="Leave blank"
           />
         </div>
       </div>
@@ -206,7 +209,7 @@ export default function ProductForm({
       </p>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="category_id">
+        <Label htmlFor="category_id" className="text-xs">
           Category{" "}
           <span className="font-normal text-muted-foreground">(optional)</span>
         </Label>
@@ -227,7 +230,7 @@ export default function ProductForm({
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="description">
+        <Label htmlFor="description" className="text-xs">
           Description{" "}
           <span className="font-normal text-muted-foreground">(optional)</span>
         </Label>

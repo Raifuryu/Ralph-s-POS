@@ -1,8 +1,15 @@
+import { AppNav } from "@/components/appNav";
 import { cn } from "@/lib/utils";
 
 /**
  * The standard page frame: centred column with responsive padding. Every
- * authenticated page uses this so spacing changes happen in one place.
+ * authenticated page uses this so spacing changes happen in one place. Also
+ * renders AppNav (bottom tab bar on mobile, top bar on desktop) — every
+ * PageShell-using page gets the shared nav automatically; app/login/page.tsx
+ * doesn't use PageShell, so it's excluded with no extra conditionals.
+ *
+ * Top/bottom padding reserves space for AppNav's bar on each breakpoint
+ * (mobile: bottom tab bar; desktop: top bar) on top of the normal padding.
  */
 export function PageShell({
   children,
@@ -10,7 +17,7 @@ export function PageShell({
   innerClassName,
 }: {
   children: React.ReactNode;
-  /** Extra classes on <main> (e.g. pb-28 to clear the floating buttons). */
+  /** Extra classes on <main> (e.g. more bottom padding to clear a page's own floating buttons). */
   className?: string;
   /** Extra classes on the inner column (e.g. a narrower max width). */
   innerClassName?: string;
@@ -18,7 +25,7 @@ export function PageShell({
   return (
     <main
       className={cn(
-        "flex min-h-dvh flex-col items-center p-4 sm:p-8 md:p-12",
+        "flex min-h-dvh flex-col items-center p-4 pb-[calc(var(--bottom-nav-h)+1rem)] sm:p-8 sm:pt-[calc(var(--bottom-nav-h)+2rem)] md:p-12 md:pt-[calc(var(--bottom-nav-h)+3rem)]",
         className
       )}
     >
@@ -30,6 +37,7 @@ export function PageShell({
       >
         {children}
       </div>
+      <AppNav />
     </main>
   );
 }

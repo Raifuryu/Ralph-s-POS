@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { EmptyState } from "@/components/emptyState";
 import { PageError, PageShell } from "@/components/pageShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -185,12 +186,7 @@ export default async function InventoryPage({
   return (
     <PageShell>
       <>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-xl font-semibold">Inventory</h1>
-          <Button variant="ghost" nativeButton={false} render={<Link href="/" />}>
-            Sales
-          </Button>
-        </div>
+        <h1 className="text-xl font-semibold">Inventory</h1>
 
         <Tabs defaultValue={defaultTab} className="w-full min-w-0">
           <TabsList className="w-full sm:w-fit">
@@ -247,9 +243,7 @@ export default async function InventoryPage({
             )}
 
             {serviceList.length === 0 ? (
-              <p className="rounded-lg border py-10 text-center text-sm text-muted-foreground">
-                No services yet.
-              </p>
+              <EmptyState title="No services yet." />
             ) : (
               <Table>
                 <TableHeader>

@@ -265,7 +265,8 @@ export type Database = {
           cashier_id: string
           created_at: string
           id: string
-          payment_method: Database["public"]["Enums"]["money_account"]
+          is_personal_take: boolean
+          payment_method: Database["public"]["Enums"]["money_account"] | null
           tendered: number | null
           total: number
         }
@@ -273,7 +274,8 @@ export type Database = {
           cashier_id?: string
           created_at?: string
           id?: string
-          payment_method: Database["public"]["Enums"]["money_account"]
+          is_personal_take?: boolean
+          payment_method?: Database["public"]["Enums"]["money_account"] | null
           tendered?: number | null
           total: number
         }
@@ -281,7 +283,8 @@ export type Database = {
           cashier_id?: string
           created_at?: string
           id?: string
-          payment_method?: Database["public"]["Enums"]["money_account"]
+          is_personal_take?: boolean
+          payment_method?: Database["public"]["Enums"]["money_account"] | null
           tendered?: number | null
           total?: number
         }
@@ -374,7 +377,8 @@ export type Database = {
       checkout: {
         Args: {
           p_items: Json
-          p_payment_method: Database["public"]["Enums"]["money_account"]
+          p_payment_method?: Database["public"]["Enums"]["money_account"]
+          p_personal_take?: boolean
           p_tendered?: number
         }
         Returns: string

@@ -1,3 +1,4 @@
+import { EmptyState } from "@/components/emptyState";
 import { Badge } from "@/components/ui/badge";
 import {
   formatPeso,
@@ -26,15 +27,18 @@ function groupByDay(transactions: TransactionWithItems[]): DayGroup[] {
   const groups: DayGroup[] = [];
   for (const transaction of transactions) {
     const key = storeDayKey(transaction.created_at);
+    // Personal takes carry a retail value in `total` for record-keeping, but
+    // it's not income — the day total should only ever reflect real sales.
+    const income = transaction.is_personal_take ? 0 : Number(transaction.total);
     const current = groups[groups.length - 1];
     if (current && current.key === key) {
       current.transactions.push(transaction);
-      current.total += Number(transaction.total);
+      current.total += income;
     } else {
       groups.push({
         key,
         label: friendlyDayLabel(transaction.created_at),
-        total: Number(transaction.total),
+        total: income,
         transactions: [transaction],
       });
     }
@@ -51,12 +55,14 @@ function TransactionBlock({
     transaction.tendered !== null ? Number(transaction.tendered) : null;
   return (
     // Indented under the day header: the eye reads date → time as levels.
-    <div className="border-b py-2.5 pl-3 last:border-b-0">
+    <div className="-mx-2 border-b px-2 py-2.5 pl-3 transition-colors last:border-b-0 hover:bg-muted/50">
       <div className="flex items-baseline justify-between gap-2">
         <p className="text-sm font-medium">
           {formatTime(transaction.created_at)}
           <span className="ml-2 font-normal text-muted-foreground">
-            {PAYMENT_METHOD_LABELS[transaction.payment_method]}
+            {transaction.is_personal_take
+              ? "Personal take"
+              : PAYMENT_METHOD_LABELS[transaction.payment_method!]}
           </span>
         </p>
         <p className="text-sm font-semibold tabular-nums">
@@ -100,11 +106,7 @@ export default function TransactionTable({
   transactions: TransactionWithItems[];
 }) {
   if (transactions.length === 0) {
-    return (
-      <p className="py-10 text-center text-sm text-muted-foreground">
-        No sales recorded yet.
-      </p>
-    );
+    return <EmptyState title="No sales recorded yet." />;
   }
 
   return (

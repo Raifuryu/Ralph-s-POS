@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 
+import { EmptyState } from "@/components/emptyState";
 import {
   Drawer,
   DrawerContent,
@@ -59,9 +60,7 @@ export default function RestockHistorySheet({
         </DrawerHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
           {entries.length === 0 ? (
-            <p className="rounded-lg border py-10 text-center text-sm text-muted-foreground">
-              No restocks recorded yet.
-            </p>
+            <EmptyState title="No restocks recorded yet." />
           ) : (
             <ul className="flex flex-col gap-3">
               {entries.map((entry) => {
@@ -86,7 +85,7 @@ export default function RestockHistorySheet({
                       <span
                         className={
                           net >= 0
-                            ? "font-medium text-green-700 dark:text-green-400"
+                            ? "font-medium text-success"
                             : "font-medium"
                         }
                       >

@@ -108,7 +108,9 @@ export default function TransactionFilters({
             className="flex flex-col gap-4"
           >
             <div className="flex flex-col gap-2">
-              <Label htmlFor="q">{searchLabel}</Label>
+              <Label htmlFor="q" className="text-xs">
+                {searchLabel}
+              </Label>
               <Input
                 id="q"
                 name="q"
@@ -120,7 +122,9 @@ export default function TransactionFilters({
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-2">
-                <Label htmlFor="from">From</Label>
+                <Label htmlFor="from" className="text-xs">
+                  From
+                </Label>
                 <Input
                   id="from"
                   name="from"
@@ -131,7 +135,9 @@ export default function TransactionFilters({
                 />
               </div>
               <div className="flex flex-col gap-2">
-                <Label htmlFor="to">To</Label>
+                <Label htmlFor="to" className="text-xs">
+                  To
+                </Label>
                 <Input
                   id="to"
                   name="to"

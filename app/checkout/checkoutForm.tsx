@@ -2,10 +2,13 @@
 
 import { useActionState, useMemo, useState } from "react";
 import Link from "next/link";
-import { PlusIcon, XIcon } from "lucide-react";
+import { MinusIcon, PlusIcon, XIcon } from "lucide-react";
 
+import { EmptyState } from "@/components/emptyState";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -81,6 +84,9 @@ export default function CheckoutForm({
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [tendered, setTendered] = useState("");
   const [search, setSearch] = useState("");
+  // Stock still leaves the shelf, but nothing was sold — no payment method,
+  // no change to tender, no income. See app/checkout/actions.ts.
+  const [personalTake, setPersonalTake] = useState(false);
   const [state, formAction, isPending] = useActionState(
     recordSale,
     initialState
@@ -135,7 +141,7 @@ export default function CheckoutForm({
   const pieceCount = cart.reduce((sum, line) => sum + line.quantity, 0);
 
   const insufficient =
-    paymentMethod === "cash" && isShort(tendered, previewTotal);
+    !personalTake && paymentMethod === "cash" && isShort(tendered, previewTotal);
 
   function setQuantity(id: string, next: number) {
     setQuantities((prev) => ({ ...prev, [id]: Math.max(0, next) }));
@@ -143,13 +149,15 @@ export default function CheckoutForm({
 
   if (products.length === 0) {
     return (
-      <p className="rounded-lg border p-4 text-sm text-muted-foreground">
-        No products yet. Add items in{" "}
-        <Link href="/inventory" className="underline">
-          Inventory
-        </Link>{" "}
-        first, then come back.
-      </p>
+      <EmptyState
+        title="No products yet."
+        subtitle="Add items in Inventory first, then come back."
+        action={
+          <Link href="/inventory" className="text-sm underline">
+            Go to Inventory
+          </Link>
+        }
+      />
     );
   }
 
@@ -164,9 +172,10 @@ export default function CheckoutForm({
               `${line.product.name}: selling ${line.quantity}, only ${line.product.stock} in stock`
           )
           .join("\n");
+        const noun = personalTake ? "take" : "sale";
         if (
           !confirm(
-            `This sale exceeds recorded stock:\n\n${detail}\n\nRecord anyway? Stock will go negative so you can recount later.`
+            `This ${noun} exceeds recorded stock:\n\n${detail}\n\nRecord anyway? Stock will go negative so you can recount later.`
           )
         ) {
           event.preventDefault();
@@ -184,7 +193,11 @@ export default function CheckoutForm({
           }))
         )}
       />
-      <input type="hidden" name="payment_method" value={paymentMethod} />
+      {/* Omitted entirely (not just disabled) for a personal take, so
+          formData.get("payment_method") comes back null server-side. */}
+      {!personalTake ? (
+        <input type="hidden" name="payment_method" value={paymentMethod} />
+      ) : null}
 
       <Input
         type="search"
@@ -205,9 +218,7 @@ export default function CheckoutForm({
       <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
         {isSearching ? (
           visible.length === 0 ? (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              No items match &ldquo;{search.trim()}&rdquo;.
-            </p>
+            <EmptyState title={`No items match “${search.trim()}”.`} />
           ) : (
             visible.map((product) => (
               <CatalogueRow
@@ -260,7 +271,7 @@ export default function CheckoutForm({
                 data-oversold={oversold || undefined}
                 className={
                   oversold
-                    ? "flex items-center justify-between gap-2 rounded-lg border border-amber-500/60 bg-amber-500/10 p-2"
+                    ? "flex items-center justify-between gap-2 rounded-lg border border-warning/60 bg-warning/10 p-2"
                     : "flex items-center justify-between gap-2"
                 }
               >
@@ -271,7 +282,7 @@ export default function CheckoutForm({
                     = {formatPeso(Number(line.product.price) * line.quantity)}
                   </p>
                   {oversold ? (
-                    <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                    <p className="text-xs font-medium text-warning">
                       Only {line.product.stock} in stock — will drop to{" "}
                       {line.product.stock! - line.quantity}
                     </p>
@@ -288,7 +299,7 @@ export default function CheckoutForm({
                       setQuantity(line.product.id, line.quantity - 1)
                     }
                   >
-                    −
+                    <MinusIcon />
                   </Button>
                   <Input
                     aria-label={`Quantity of ${line.product.name}`}
@@ -311,7 +322,7 @@ export default function CheckoutForm({
                       setQuantity(line.product.id, line.quantity + 1)
                     }
                   >
-                    +
+                    <PlusIcon />
                   </Button>
                   <Button
                     type="button"
@@ -330,31 +341,52 @@ export default function CheckoutForm({
         </div>
       ) : null}
 
-      <div className="flex shrink-0 flex-col gap-2">
-        <Label>Payment method</Label>
-        <Tabs
-          value={paymentMethod}
-          onValueChange={(value) => setPaymentMethod(value as PaymentMethod)}
-          className="w-full min-w-0"
-        >
-          <TabsList className="w-full sm:w-fit">
-            {PAYMENT_METHODS.map((method) => (
-              <TabsTrigger key={method} value={method}>
-                {PAYMENT_METHOD_LABELS[method]}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      </div>
-
-      {/* Cash only. Unmounting on wallet payments also removes the input
-          from the form, so nothing stray is submitted. */}
-      {paymentMethod === "cash" ? (
-        <ChangeCalculator
-          due={previewTotal}
-          value={tendered}
-          onChange={setTendered}
+      <label className="flex items-start gap-2.5 rounded-lg border p-3 text-sm has-[[data-checked]]:border-ring has-[[data-checked]]:bg-muted/30">
+        <Checkbox
+          name="personal_take"
+          value="on"
+          checked={personalTake}
+          onCheckedChange={setPersonalTake}
+          className="mt-0.5"
         />
+        <span>
+          <span className="font-medium">Personal take</span>
+          <span className="block text-xs text-muted-foreground">
+            Stock still leaves the shelf, but nothing is recorded as income —
+            no payment method, no money in the vault.
+          </span>
+        </span>
+      </label>
+
+      {!personalTake ? (
+        <>
+          <div className="flex shrink-0 flex-col gap-2">
+            <Label className="text-xs">Payment method</Label>
+            <Tabs
+              value={paymentMethod}
+              onValueChange={(value) => setPaymentMethod(value as PaymentMethod)}
+              className="w-full min-w-0"
+            >
+              <TabsList className="w-full sm:w-fit">
+                {PAYMENT_METHODS.map((method) => (
+                  <TabsTrigger key={method} value={method}>
+                    {PAYMENT_METHOD_LABELS[method]}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          </div>
+
+          {/* Cash only. Unmounting on wallet payments also removes the input
+              from the form, so nothing stray is submitted. */}
+          {paymentMethod === "cash" ? (
+            <ChangeCalculator
+              due={previewTotal}
+              value={tendered}
+              onChange={setTendered}
+            />
+          ) : null}
+        </>
       ) : null}
 
       {state.error ? (
@@ -365,7 +397,7 @@ export default function CheckoutForm({
 
       {state.transactionId ? (
         <div role="status" className="flex items-center gap-3 text-sm">
-          <span>Sale recorded.</span>
+          <span>{personalTake ? "Take recorded." : "Sale recorded."}</span>
           {doneSlot ?? (
             <Link href="/" className="underline">
               Back to sales
@@ -374,10 +406,10 @@ export default function CheckoutForm({
         </div>
       ) : null}
 
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t pt-4">
+      <DrawerFooter className="flex-row items-center justify-between gap-3 border-t p-0 pt-4">
         <div>
           <p className="text-sm text-muted-foreground">
-            Total
+            {personalTake ? "Value taken" : "Total"}
             {pieceCount > 0
               ? ` · ${pieceCount} pc${pieceCount === 1 ? "" : "s"}`
               : ""}
@@ -390,9 +422,13 @@ export default function CheckoutForm({
           type="submit"
           disabled={isPending || cart.length === 0 || insufficient}
         >
-          {isPending ? "Recording…" : "Record sale"}
+          {isPending
+            ? "Recording…"
+            : personalTake
+              ? "Record personal take"
+              : "Record sale"}
         </Button>
-      </div>
+      </DrawerFooter>
     </form>
   );
 }

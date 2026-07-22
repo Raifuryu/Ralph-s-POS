@@ -1,3 +1,4 @@
+import { EmptyState } from "@/components/emptyState";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -36,7 +37,7 @@ function countResult(entry: LedgerEntry) {
       diff === 0
         ? "text-muted-foreground"
         : diff > 0
-          ? "text-green-700 dark:text-green-400"
+          ? "text-success"
           : "text-destructive",
     text:
       diff === 0
@@ -80,11 +81,14 @@ export default function Ledger({
 }) {
   if (entries.length === 0) {
     return (
-      <p className="rounded-lg border py-10 text-center text-sm text-muted-foreground">
-        {filtered
-          ? "No entries match this filter."
-          : "No vault activity yet. Cash sales and services will appear here automatically."}
-      </p>
+      <EmptyState
+        title={filtered ? "No entries match this filter." : "No vault activity yet."}
+        subtitle={
+          filtered
+            ? undefined
+            : "Cash sales and services will appear here automatically."
+        }
+      />
     );
   }
 

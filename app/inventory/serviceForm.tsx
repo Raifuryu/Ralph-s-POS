@@ -33,7 +33,9 @@ export default function ServiceForm({
       {service ? <input type="hidden" name="id" value={service.id} /> : null}
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="service-name">Name</Label>
+        <Label htmlFor="service-name" className="text-xs">
+          Name
+        </Label>
         <Input
           id="service-name"
           name="name"
@@ -43,9 +45,11 @@ export default function ServiceForm({
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-2">
-          <Label htmlFor="cash_flow">Cash direction</Label>
+          <Label htmlFor="cash_flow" className="text-xs">
+            Cash direction
+          </Label>
           <Select
             id="cash_flow"
             name="cash_flow"
@@ -57,7 +61,7 @@ export default function ServiceForm({
         </div>
 
         <div className="flex flex-col gap-2">
-          <Label htmlFor="default_fee">
+          <Label htmlFor="default_fee" className="text-xs">
             Usual fee{" "}
             <span className="font-normal text-muted-foreground">
               (optional)
@@ -71,13 +75,13 @@ export default function ServiceForm({
             min="0"
             inputMode="decimal"
             defaultValue={service?.default_fee ?? ""}
-            placeholder="Pre-fills at the counter"
+            placeholder="Optional"
           />
         </div>
       </div>
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="wallet">
+        <Label htmlFor="wallet" className="text-xs">
           Wallet involved{" "}
           <span className="font-normal text-muted-foreground">(optional)</span>
         </Label>
@@ -100,7 +104,7 @@ export default function ServiceForm({
       </p>
 
       <div className="flex flex-col gap-2">
-        <Label>Accepted payment methods</Label>
+        <Label className="text-xs">Accepted payment methods</Label>
         <div className="flex flex-wrap gap-3">
           {MONEY_ACCOUNTS.map((account) => (
             <label

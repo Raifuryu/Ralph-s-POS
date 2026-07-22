@@ -13,6 +13,7 @@ import {
   ComboboxItem,
   ComboboxList,
 } from "@/components/ui/combobox";
+import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatPeso } from "@/lib/format";
@@ -505,7 +506,7 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
         </p>
       ) : null}
 
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t pt-4">
+      <DrawerFooter className="flex-row items-center justify-between gap-3 border-t p-0 pt-4">
         <div>
           <p className="text-sm text-muted-foreground">
             Total
@@ -532,7 +533,7 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
             {isPending ? "Recording…" : "Record purchase"}
           </Button>
         </div>
-      </div>
+      </DrawerFooter>
     </form>
   );
 }

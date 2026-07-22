@@ -62,7 +62,7 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <main className="flex min-h-dvh items-center justify-center p-4">
-      <div className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-sm">
+      <div className="w-full max-w-sm rounded-lg border bg-card p-6">
         <div className="mb-6 flex flex-col gap-1">
           <h1 className="text-xl font-semibold">Sari-Sari Store POS</h1>
           <p className="text-sm text-muted-foreground">

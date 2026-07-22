@@ -18,9 +18,14 @@ export async function recordSale(
   _prevState: CheckoutState,
   formData: FormData
 ): Promise<CheckoutState> {
-  const paymentMethod = String(formData.get("payment_method") ?? "");
-  if (!isMoneyAccount(paymentMethod)) {
-    return { error: "Choose a payment method." };
+  const personalTake = formData.get("personal_take") === "on";
+
+  let paymentMethod: string | null = null;
+  if (!personalTake) {
+    paymentMethod = String(formData.get("payment_method") ?? "");
+    if (!isMoneyAccount(paymentMethod)) {
+      return { error: "Choose a payment method." };
+    }
   }
 
   let cart: { product_id: string; quantity: number }[];
@@ -32,20 +37,28 @@ export async function recordSale(
 
   const items = cart.filter((line) => line.quantity > 0);
   if (items.length === 0) {
-    return { error: "Add at least one item before recording the sale." };
+    return {
+      error: personalTake
+        ? "Add at least one item before recording the take."
+        : "Add at least one item before recording the sale.",
+    };
   }
 
   // Optional: what the customer handed over (cash sales only). The DB
   // enforces tendered >= total and cash-only; this is just early validation.
-  const tendered = parseMoney(formData.get("tendered"), { allowBlank: true });
+  // A personal take never has anything tendered — nobody paid.
+  const tendered = personalTake
+    ? null
+    : parseMoney(formData.get("tendered"), { allowBlank: true });
   if (tendered === "bad") {
     return { error: "Amount received must be a valid amount." };
   }
 
   const supabase = await createClient();
   const { data, error } = await supabase.rpc("checkout", {
-    p_payment_method: paymentMethod,
     p_items: items,
+    p_personal_take: personalTake,
+    ...(paymentMethod !== null ? { p_payment_method: paymentMethod } : {}),
     ...(tendered !== null ? { p_tendered: tendered } : {}),
   });
 

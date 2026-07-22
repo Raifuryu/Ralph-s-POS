@@ -8,6 +8,8 @@ export type BreakdownRow = {
   label: string;
   value: number;
   color: string;
+  /** Indented child rows under this one (e.g. E-Service split by wallet). */
+  subRows?: BreakdownRow[];
 };
 
 /**
@@ -74,27 +76,51 @@ export function MoneyBreakdownCard({
 
       <div className="mt-3 flex flex-col gap-1">
         {rows.map((row) => (
-          <p
-            key={row.key}
-            className="flex items-baseline justify-between gap-2 text-xs"
-          >
-            <span className="flex items-center gap-1.5 text-muted-foreground">
+          <div key={row.key} className="flex flex-col gap-1">
+            <p className="flex items-baseline justify-between gap-2 text-xs">
+              <span className="flex items-center gap-1.5 text-muted-foreground">
+                <span
+                  aria-hidden
+                  className="size-2 shrink-0 rounded-full"
+                  style={{ backgroundColor: row.color }}
+                />
+                {row.label}
+              </span>
               <span
-                aria-hidden
-                className="size-2 shrink-0 rounded-full"
-                style={{ backgroundColor: row.color }}
-              />
-              {row.label}
-            </span>
-            <span
-              className={cn(
-                "font-medium tabular-nums",
-                row.value < 0 && "text-destructive"
-              )}
-            >
-              {formatPeso(row.value)}
-            </span>
-          </p>
+                className={cn(
+                  "font-medium tabular-nums",
+                  row.value < 0 && "text-destructive"
+                )}
+              >
+                {formatPeso(row.value)}
+              </span>
+            </p>
+
+            {row.subRows?.length ? (
+              // Indented under its parent — visually its children, not the
+              // parent's siblings.
+              <div className="ml-5 flex flex-col gap-1 border-l pl-3">
+                {row.subRows.map((subRow) => (
+                  <p
+                    key={subRow.key}
+                    className="flex items-baseline justify-between gap-2 text-xs"
+                  >
+                    <span className="flex items-center gap-1.5 text-muted-foreground">
+                      <span
+                        aria-hidden
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: subRow.color }}
+                      />
+                      {subRow.label}
+                    </span>
+                    <span className="tabular-nums text-muted-foreground">
+                      {formatPeso(subRow.value)}
+                    </span>
+                  </p>
+                ))}
+              </div>
+            ) : null}
+          </div>
         ))}
       </div>
     </>

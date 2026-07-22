@@ -35,6 +35,7 @@ export default function DeleteButton({
         size="xs"
         disabled={isPending}
         aria-label={`Delete ${name}`}
+        className="text-destructive hover:text-destructive"
       >
         {isPending ? "Deleting…" : "Delete"}
       </Button>

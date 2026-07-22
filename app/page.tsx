@@ -1,5 +1,3 @@
-import Link from "next/link";
-
 import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
@@ -63,7 +61,7 @@ function incomeCardCopy({
 }
 
 const TRANSACTION_SELECT = `
-  id, payment_method, cashier_id, total, tendered, created_at,
+  id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
   transaction_items (
     id, transaction_id, product_id, product_name, unit_price, quantity, line_total
   )
@@ -140,9 +138,12 @@ export default async function Home({
   // — the income card sums the whole filtered window, not just the page
   // someone happens to be looking at. Lean select (no item name/price):
   // this is for sums only, never rendered.
+  // Personal takes deduct stock but aren't income — excluded here so
+  // storeTotal/itemsSold below only ever reflect what was actually sold.
   let totalsQuery = supabase
     .from("transactions")
-    .select("total, payment_method, transaction_items(quantity)");
+    .select("total, payment_method, transaction_items(quantity)")
+    .eq("is_personal_take", false);
 
   if (params.from_ts) totalsQuery = totalsQuery.gte("created_at", params.from_ts);
   if (params.to_ts) totalsQuery = totalsQuery.lte("created_at", params.to_ts);
@@ -242,7 +243,7 @@ export default async function Home({
   );
 
   return (
-    <PageShell className="pb-28 sm:pb-8">
+    <PageShell className="pb-32 sm:pb-8">
       <>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-semibold">Sales</h1>
@@ -253,21 +254,7 @@ export default async function Home({
                 .map((row) => row.product_id)
                 .filter((id): id is string => id !== null)}
             />
-            <ServiceDrawer services={services ?? []} />
-            <Button
-              variant="outline"
-              nativeButton={false}
-              render={<Link href="/vault" />}
-            >
-              Vault
-            </Button>
-            <Button
-              variant="outline"
-              nativeButton={false}
-              render={<Link href="/inventory" />}
-            >
-              Inventory
-            </Button>
+            <ServiceDrawer services={services ?? []} balances={vault} />
             <form action={signOut}>
               <Button type="submit" variant="ghost">
                 Sign out

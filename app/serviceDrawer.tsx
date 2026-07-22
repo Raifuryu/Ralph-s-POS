@@ -3,6 +3,7 @@
 import { useActionState, useState } from "react";
 import { WalletIcon } from "lucide-react";
 
+import { EmptyState } from "@/components/emptyState";
 import {
   Accordion,
   AccordionContent,
@@ -15,6 +16,7 @@ import {
   DrawerClose,
   DrawerContent,
   DrawerDescription,
+  DrawerFooter,
   DrawerHeader,
   DrawerTitle,
   DrawerTrigger,
@@ -49,7 +51,16 @@ function toNumber(value: string): number {
  * and the action state all reset for the next customer, same as the sale
  * drawer.
  */
-function ServiceSaleForm({ services }: { services: Service[] }) {
+function ServiceSaleForm({
+  services,
+  balances,
+}: {
+  services: Service[];
+  /** Current vault balance per account — used to warn when a cash-in
+      service tied to a wallet (e.g. GCash Load) would draw the wallet
+      below zero; the wallet itself can't front money it doesn't have. */
+  balances: Map<MoneyAccount, number>;
+}) {
   const [selected, setSelected] = useState<Service | null>(null);
   const [principal, setPrincipal] = useState("");
   const [fee, setFee] = useState("");
@@ -83,16 +94,46 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
   const due = principalNum + feeNum;
   const insufficient = showTendered && isShort(tendered, due);
 
+  // A cash-in service tied to a wallet (e.g. GCash Load) sends `principal`
+  // OUT of that wallet to the customer — it can't send more than the wallet
+  // actually holds. Flagged, not blocked: the tracked balance can lag the
+  // real one (e.g. a top-up done outside the app), so this warns and lets
+  // the cashier confirm rather than hard-stopping a transaction that may be
+  // perfectly fine in reality.
+  const walletBalance =
+    selected?.wallet !== undefined && selected?.wallet !== null
+      ? (balances.get(selected.wallet) ?? 0)
+      : null;
+  const walletShort =
+    selected?.cash_flow === "in" &&
+    walletBalance !== null &&
+    principalNum > walletBalance;
+
   return (
-    <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-4">
+    <form
+      action={formAction}
+      onSubmit={(event) => {
+        if (!walletShort || !selected?.wallet) return;
+        const label = MONEY_ACCOUNT_LABELS[selected.wallet];
+        if (
+          !confirm(
+            `This sends ${formatPeso(principalNum)} from ${label}, but its tracked balance is only ${formatPeso(walletBalance ?? 0)}.\n\nRecord anyway?`
+          )
+        ) {
+          event.preventDefault();
+        }
+      }}
+      className="flex min-h-0 flex-1 flex-col gap-4"
+    >
       <input type="hidden" name="service_id" value={selected?.id ?? ""} />
       <input type="hidden" name="payment_account" value={paymentAccount} />
 
       <div className="flex min-h-0 flex-col gap-1.5 overflow-y-auto">
         {services.length === 0 ? (
-          <p className="rounded-lg border p-4 text-sm text-muted-foreground">
-            No services set up yet. Add them under Inventory → Services.
-          </p>
+          <EmptyState
+            title="No services set up yet."
+            subtitle="Add them under Inventory → Services."
+          />
         ) : (
           services.map((service) => (
             <button
@@ -133,7 +174,9 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
         <>
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-2">
-              <Label htmlFor="principal">Amount</Label>
+              <Label htmlFor="principal" className="text-xs">
+                Amount
+              </Label>
               <Input
                 id="principal"
                 name="principal"
@@ -147,7 +190,9 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
               />
             </div>
             <div className="flex flex-col gap-2">
-              <Label htmlFor="fee">Fee (your income)</Label>
+              <Label htmlFor="fee" className="text-xs">
+                Fee (your income)
+              </Label>
               <Input
                 id="fee"
                 name="fee"
@@ -163,7 +208,7 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
           </div>
 
           <div className="flex flex-col gap-2">
-            <Label>
+            <Label className="text-xs">
               {selected.cash_flow === "in"
                 ? "Customer pays via"
                 : "Paid out from"}
@@ -208,6 +253,17 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
                   : ".")}
           </p>
 
+          {walletShort && selected.wallet ? (
+            <p
+              data-testid="wallet-short"
+              className="rounded-lg border border-warning/60 bg-warning/10 p-2 text-xs font-medium text-warning"
+            >
+              Only {formatPeso(walletBalance ?? 0)} tracked in{" "}
+              {MONEY_ACCOUNT_LABELS[selected.wallet]} — this sends{" "}
+              {formatPeso(principalNum)}.
+            </p>
+          ) : null}
+
           {showTendered ? (
             <ChangeCalculator due={due} value={tendered} onChange={setTendered} />
           ) : null}
@@ -224,7 +280,9 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
                 <div className="flex flex-col gap-3 pt-1">
                   <div className="grid grid-cols-2 gap-3">
                     <div className="flex flex-col gap-2">
-                      <Label htmlFor="contact_number">Number</Label>
+                      <Label htmlFor="contact_number" className="text-xs">
+                        Number
+                      </Label>
                       <Input
                         id="contact_number"
                         name="contact_number"
@@ -233,7 +291,9 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
                       />
                     </div>
                     <div className="flex flex-col gap-2">
-                      <Label htmlFor="reference">Reference no.</Label>
+                      <Label htmlFor="reference" className="text-xs">
+                        Reference no.
+                      </Label>
                       <Input
                         id="reference"
                         name="reference"
@@ -242,7 +302,9 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
                     </div>
                   </div>
                   <div className="flex flex-col gap-2">
-                    <Label htmlFor="description">Description</Label>
+                    <Label htmlFor="description" className="text-xs">
+                      Description
+                    </Label>
                     <Input
                       id="description"
                       name="description"
@@ -270,14 +332,14 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
         <div role="status" className="flex items-center gap-3 text-sm">
           <span>Service recorded.</span>
           <DrawerClose
-            className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
           >
             Done
           </DrawerClose>
         </div>
       ) : null}
 
-      <div className="mt-auto flex shrink-0 items-center justify-between gap-3 border-t pt-4">
+      <DrawerFooter className="flex-row items-center justify-between gap-3 border-t p-0 pt-4">
         <div>
           <p className="text-sm text-muted-foreground">Income</p>
           <p className="text-2xl font-semibold tabular-nums">
@@ -292,12 +354,18 @@ function ServiceSaleForm({ services }: { services: Service[] }) {
         >
           {isPending ? "Recording…" : "Record"}
         </Button>
-      </div>
+      </DrawerFooter>
     </form>
   );
 }
 
-export default function ServiceDrawer({ services }: { services: Service[] }) {
+export default function ServiceDrawer({
+  services,
+  balances,
+}: {
+  services: Service[];
+  balances: Map<MoneyAccount, number>;
+}) {
   return (
     <Drawer showSwipeHandle>
       {/* Header placement — tablet and up */}
@@ -316,7 +384,7 @@ export default function ServiceDrawer({ services }: { services: Service[] }) {
         className={cn(
           buttonVariants({ variant: "outline" }),
           "fixed right-1/2 z-50 mr-1 sm:hidden",
-          "bottom-[calc(1.5rem+env(safe-area-inset-bottom))]",
+          "bottom-[calc(1.5rem+env(safe-area-inset-bottom)+var(--bottom-nav-h))]",
           "h-12 rounded-full bg-background px-5 text-base shadow-lg"
         )}
       >
@@ -333,7 +401,7 @@ export default function ServiceDrawer({ services }: { services: Service[] }) {
         </DrawerHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <ServiceSaleForm services={services} />
+          <ServiceSaleForm services={services} balances={balances} />
         </div>
       </DrawerContent>
     </Drawer>
