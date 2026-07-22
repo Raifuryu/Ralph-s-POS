@@ -1,4 +1,6 @@
+import { ACCOUNT_COLORS } from "@/lib/accountColors";
 import { formatPeso } from "@/lib/format";
+import { MONEY_ACCOUNT_LABELS } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -9,11 +11,13 @@ import { cn } from "@/lib/utils";
  * 16.6). Deliberately NOT the blue/green/pink used for money accounts on the
  * Vault card — "Store" here means product revenue regardless of how it was
  * paid, so reusing "Cash blue" would wrongly imply cash-only.
+ *
+ * GCash/Maya reuse lib/accountColors.ts (the canonical account→hue mapping)
+ * rather than redeclaring their hex values, so a future palette change stays
+ * in sync with the Vault card automatically.
  */
 const STORE_COLOR = "#4a3aa7"; // violet
 const ESERVICE_COLOR = "#eda100"; // yellow
-const GCASH_COLOR = "#008300"; // green — same hue GCash uses everywhere
-const MAYA_COLOR = "#e87ba4"; // magenta — same hue Maya uses everywhere
 const OTHER_COLOR = "#1baf7a"; // aqua — wallet-less service fees (e.g. xerox)
 
 export type EServiceFees = {
@@ -56,8 +60,18 @@ export default function IncomeBreakdownCard({
   const barTotal = topRows.reduce((sum, row) => sum + row.value, 0);
 
   const subRows = [
-    { key: "gcash", label: "GCash", value: eService.gcash, color: GCASH_COLOR },
-    { key: "maya", label: "Maya", value: eService.maya, color: MAYA_COLOR },
+    {
+      key: "gcash",
+      label: MONEY_ACCOUNT_LABELS.gcash,
+      value: eService.gcash,
+      color: ACCOUNT_COLORS.gcash,
+    },
+    {
+      key: "maya",
+      label: MONEY_ACCOUNT_LABELS.maya,
+      value: eService.maya,
+      color: ACCOUNT_COLORS.maya,
+    },
     ...(eService.other > 0
       ? [{ key: "other", label: "Other", value: eService.other, color: OTHER_COLOR }]
       : []),

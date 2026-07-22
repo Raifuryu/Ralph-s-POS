@@ -50,6 +50,7 @@ export async function cashOut(
   if (error) return { error: error.message };
 
   revalidatePath("/vault");
+  revalidatePath("/");
   return { error: null, ok: true };
 }
 
@@ -79,6 +80,7 @@ export async function cashIn(
   if (error) return { error: error.message };
 
   revalidatePath("/vault");
+  revalidatePath("/");
   return { error: null, ok: true };
 }
 

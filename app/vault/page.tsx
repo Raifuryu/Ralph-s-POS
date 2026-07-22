@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
 import { Button } from "@/components/ui/button";
+import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
 import { escapeLike } from "@/lib/search";
 import { createClient } from "@/lib/supabase/server";
 import { type MoneyAccount } from "@/lib/types";
@@ -11,7 +12,6 @@ import AccountSheet from "./accountSheet";
 import Ledger, { type LedgerEntry } from "./ledger";
 
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
-const PAGE_SIZE = 20;
 
 type SearchParams = {
   q?: string;
@@ -47,9 +47,8 @@ export default async function VaultPage({
     matchedServiceTxnIds = (matches ?? []).map((row) => row.id);
   }
 
-  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
-  const rangeFrom = (page - 1) * PAGE_SIZE;
-  const rangeTo = rangeFrom + PAGE_SIZE - 1;
+  const page = parsePage(params.page);
+  const { rangeFrom, rangeTo } = pageRange(page);
 
   let entriesQuery = supabase
     .from("vault_entries")
@@ -82,7 +81,7 @@ export default async function VaultPage({
     return <PageError title="Could not load the vault" message={error.message} />;
   }
 
-  const pageCount = Math.max(1, Math.ceil((count ?? 0) / PAGE_SIZE));
+  const pageCount = pageCountFor(count);
 
   const balances = new Map(
     (balanceRows ?? [])
@@ -129,7 +128,13 @@ export default async function VaultPage({
         page={page}
         pageCount={pageCount}
         basePath="/vault"
-        params={{ q: params.q, from: params.from, to: params.to }}
+        params={{
+          q: params.q,
+          from: params.from,
+          to: params.to,
+          from_ts: params.from_ts,
+          to_ts: params.to_ts,
+        }}
       />
     </PageShell>
   );

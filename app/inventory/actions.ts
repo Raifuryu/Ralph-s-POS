@@ -5,6 +5,8 @@ import { redirect } from "next/navigation";
 
 import { parseMoney, parseWholeNumber } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import type { Database } from "@/lib/database.types";
 
 export type InventoryState = { error: string | null };
 
@@ -14,12 +16,29 @@ type Parsed = {
   stock: number | null;
   description: string | null;
   category_id: string | null;
-  /** Present (> 0) means this submit also restocks — handled via the
-      record_restock RPC, not the plain products update, so the stock bump
-      and the batch's cost land atomically together. */
+  /** Present (> 0) means this submit also restocks — logged via the
+      record_restock RPC (batch qty + cost), run after the plain products
+      update above so it adds to whatever `stock` that update just wrote. */
   restockQty: number | null;
   restockCost: number | null;
 };
+
+/** Runs after the products update, so a restock always adds to the just-
+    written stock value rather than a stale pre-edit one. */
+async function applyRestock(
+  supabase: SupabaseClient<Database>,
+  productId: string,
+  parsed: Parsed
+): Promise<{ error: string } | null> {
+  if (parsed.restockQty === null) return null;
+
+  const { error } = await supabase.rpc("record_restock", {
+    p_product_id: productId,
+    p_quantity: parsed.restockQty,
+    p_cost: parsed.restockCost ?? 0,
+  });
+  return error ? { error: error.message } : null;
+}
 
 function parseForm(formData: FormData): Parsed | { error: string } {
   const name = String(formData.get("name") ?? "").trim();
@@ -100,14 +119,8 @@ export async function createProduct(
 
   if (error) return { error: error.message };
 
-  if (parsed.restockQty !== null) {
-    const { error: restockError } = await supabase.rpc("record_restock", {
-      p_product_id: created.id,
-      p_quantity: parsed.restockQty,
-      p_cost: parsed.restockCost ?? 0,
-    });
-    if (restockError) return { error: restockError.message };
-  }
+  const restockError = await applyRestock(supabase, created.id, parsed);
+  if (restockError) return restockError;
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
@@ -127,35 +140,109 @@ export async function updateProduct(
 
   const supabase = await createClient();
 
-  const baseFields = {
-    name: parsed.name,
-    price: parsed.price,
-    description: parsed.description,
-    category_id: parsed.category_id,
-  };
-  // Restocking: the RPC owns the stock bump atomically, so `stock` is left
-  // out of this update entirely — otherwise the two writes could race and
-  // one would clobber the other's result.
-  const updatePayload =
-    parsed.restockQty !== null
-      ? baseFields
-      : { ...baseFields, stock: parsed.stock };
-
+  // Always write the manually-entered stock first — a restock in the same
+  // submit runs its RPC afterward (below) and adds to whatever this write
+  // just wrote, so a correction and a restock in one submit both land.
   const { error } = await supabase
     .from("products")
-    .update(updatePayload)
+    .update({
+      name: parsed.name,
+      price: parsed.price,
+      description: parsed.description,
+      category_id: parsed.category_id,
+      stock: parsed.stock,
+    })
     .eq("id", id);
 
   if (error) return { error: error.message };
 
-  if (parsed.restockQty !== null) {
-    const { error: restockError } = await supabase.rpc("record_restock", {
-      p_product_id: id,
-      p_quantity: parsed.restockQty,
-      p_cost: parsed.restockCost ?? 0,
-    });
-    if (restockError) return { error: restockError.message };
+  const restockError = await applyRestock(supabase, id, parsed);
+  if (restockError) return restockError;
+
+  revalidatePath("/inventory");
+  revalidatePath("/checkout");
+  redirect("/inventory");
+}
+
+type BulkRestockItem = {
+  product_id: string | null;
+  name: string | null;
+  quantity: number;
+  cost: number;
+  price: number;
+};
+
+/** Logs a whole supplier receipt at once via record_bulk_restock — every
+    line either restocks + re-prices an existing product or creates a new
+    one and restocks it, atomically. Never trusts the client-sent cart JSON
+    blindly: every field is re-parsed with the same helpers every other form
+    in this file uses. */
+export async function bulkRestock(
+  _prev: InventoryState,
+  formData: FormData
+): Promise<InventoryState> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(String(formData.get("cart") ?? "[]"));
+  } catch {
+    return { error: "Could not read the cart." };
   }
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return { error: "Add at least one item before submitting." };
+  }
+
+  const items: BulkRestockItem[] = [];
+  const seen = new Set<string>();
+
+  for (const [i, entry] of raw.entries()) {
+    const line = (entry ?? {}) as Record<string, unknown>;
+    const label = `Line ${i + 1}`;
+
+    const productId =
+      typeof line.product_id === "string" && line.product_id
+        ? line.product_id
+        : null;
+    const name = typeof line.name === "string" ? line.name.trim() : "";
+
+    if (!productId && !name) {
+      return { error: `${label}: pick an item or type a name for the new one.` };
+    }
+    if (productId) {
+      if (seen.has(productId)) {
+        return { error: `${label}: this item is already in the cart.` };
+      }
+      seen.add(productId);
+    }
+
+    const quantity = parseWholeNumber(String(line.quantity ?? ""));
+    if (quantity === "bad" || quantity === null || quantity <= 0) {
+      return { error: `${label}: quantity must be a whole number greater than 0.` };
+    }
+
+    const cost = parseMoney(String(line.cost ?? ""));
+    if (cost === "bad" || cost === null) {
+      return { error: `${label}: cost must be a valid amount.` };
+    }
+
+    const price = parseMoney(String(line.price ?? ""), { requirePositive: true });
+    if (price === "bad" || price === null) {
+      return { error: `${label}: price must be greater than 0.` };
+    }
+
+    items.push({
+      product_id: productId,
+      name: productId ? null : name,
+      quantity,
+      cost,
+      price,
+    });
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.rpc("record_bulk_restock", {
+    p_items: items,
+  });
+  if (error) return { error: error.message };
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");

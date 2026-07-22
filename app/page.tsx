@@ -5,6 +5,7 @@ import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
 import { formatDate, friendlyDayLabel, storeDateFromKey } from "@/lib/format";
+import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
 import { escapeLike } from "@/lib/search";
 import { createClient } from "@/lib/supabase/server";
 import type { MoneyAccount } from "@/lib/types";
@@ -68,8 +69,6 @@ const TRANSACTION_SELECT = `
   )
 `;
 
-const PAGE_SIZE = 20;
-
 type SearchParams = {
   q?: string;
   from?: string;
@@ -122,9 +121,8 @@ export default async function Home({
     matchedIds = [...new Set(matches.map((row) => row.transaction_id))];
   }
 
-  const page = Math.max(1, Number.parseInt(params.page ?? "1", 10) || 1);
-  const rangeFrom = (page - 1) * PAGE_SIZE;
-  const rangeTo = rangeFrom + PAGE_SIZE - 1;
+  const page = parsePage(params.page);
+  const { rangeFrom, rangeTo } = pageRange(page);
 
   // Render query: paginated, drives the visible list only. `count: "exact"`
   // gets the true row total for the pager without a second round trip.
@@ -166,7 +164,7 @@ export default async function Home({
     { data: topSellers },
     { data: services },
     { data: serviceFees },
-    { data: vaultRows },
+    { data: vaultRows, error: vaultError },
   ] = await Promise.all([
     query,
     totalsQuery,
@@ -197,9 +195,12 @@ export default async function Home({
   if (totalsError) {
     return <LoadError message={totalsError.message} />;
   }
+  if (vaultError) {
+    return <LoadError message={vaultError.message} />;
+  }
 
   const transactions = data ?? [];
-  const pageCount = Math.max(1, Math.ceil((count ?? 0) / PAGE_SIZE));
+  const pageCount = pageCountFor(count);
 
   // Store = all product sales in the window, regardless of payment method —
   // a sale is store revenue whether the customer paid cash, GCash, or Maya.
@@ -292,13 +293,26 @@ export default async function Home({
           />
         </div>
 
+        <SummaryCard
+          label="Items sold"
+          value={String(itemsSold)}
+          compact
+          className="sm:w-fit sm:min-w-40"
+        />
+
         <TransactionTabs transactions={transactions} />
 
         <Pager
           page={page}
           pageCount={pageCount}
           basePath="/"
-          params={{ q: params.q, from: params.from, to: params.to }}
+          params={{
+            q: params.q,
+            from: params.from,
+            to: params.to,
+            from_ts: params.from_ts,
+            to_ts: params.to_ts,
+          }}
         />
       </>
     </PageShell>

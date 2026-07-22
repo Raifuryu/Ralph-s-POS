@@ -8,23 +8,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { formatPeso } from "@/lib/format";
+import { sellingPriceFor, toNumber } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
 import { createProduct, updateProduct, type InventoryState } from "./actions";
 
 const initialState: InventoryState = { error: null };
-
-function toNumber(value: string): number {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
-}
-
-const MARKUP = 0.3;
-
-/** Selling price rounded UP to the centavo, so the markup is never short
-    (rounding down would land the margin a fraction of a centavo under 30%). */
-function sellingPriceFor(costPerPiece: number): number {
-  return Math.ceil(costPerPiece * (1 + MARKUP) * 100) / 100;
-}
 
 export default function ProductForm({
   product,
@@ -43,10 +31,16 @@ export default function ProductForm({
   const [price, setPrice] = useState(
     product?.price !== undefined ? String(product.price) : ""
   );
+  // Only auto-fills for a brand-new item (no existing price to protect) and
+  // only until the user types into Price themselves — restocking an
+  // existing item never auto-fills, since there's already a real price that
+  // shouldn't get silently overwritten while just logging a restock.
+  const [priceTouched, setPriceTouched] = useState(false);
 
   // Restock & pricing helper. Only restock_qty and restock_cost are
   // submitted — cost per piece and the suggested selling price (cost + 30%)
-  // are shown as a reference only; Price above is never touched by it.
+  // are also used to auto-fill Price above, for new items only (see
+  // priceTouched).
   const [batchCost, setBatchCost] = useState("");
   const [restockQty, setRestockQty] = useState("");
 
@@ -57,6 +51,13 @@ export default function ProductForm({
   const sellingPrice =
     costPerPiece !== null ? sellingPriceFor(costPerPiece) : null;
   const currentStock = product?.stock ?? null;
+
+  function applyAutoPrice(nextBatchCost: string, nextRestockQty: string) {
+    if (isEdit || priceTouched) return;
+    const c = toNumber(nextBatchCost);
+    const q = toNumber(nextRestockQty);
+    if (c > 0 && q > 0) setPrice(String(sellingPriceFor(c / q)));
+  }
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
@@ -73,6 +74,89 @@ export default function ProductForm({
         />
       </div>
 
+
+<div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
+        <p className="text-sm font-medium">Restock &amp; pricing</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="batch_cost" className="text-xs">
+              Price bought
+            </Label>
+            <Input
+              id="batch_cost"
+              name="restock_cost"
+              type="number"
+              step="0.01"
+              min="0"
+              inputMode="decimal"
+              required={qty > 0}
+              placeholder="60.00"
+              value={batchCost}
+              onChange={(event) => {
+                setBatchCost(event.target.value);
+                applyAutoPrice(event.target.value, restockQty);
+              }}
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="restock_qty" className="text-xs">
+              Qty bought
+            </Label>
+            <Input
+              id="restock_qty"
+              name="restock_qty"
+              type="number"
+              step="1"
+              min="0"
+              inputMode="numeric"
+              placeholder="6"
+              value={restockQty}
+              onChange={(event) => {
+                setRestockQty(event.target.value);
+                applyAutoPrice(batchCost, event.target.value);
+              }}
+            />
+          </div>
+        </div>
+
+        {costPerPiece !== null && sellingPrice !== null ? (
+          <p className="text-xs" data-testid="pricing-line">
+            <span className="font-medium">
+              {formatPeso(costPerPiece)} cost per piece
+            </span>
+            <span className="text-muted-foreground"> · sells for </span>
+            <span className="font-medium">{formatPeso(sellingPrice)}</span>
+            <span className="text-muted-foreground">
+              {" "}
+              at 30% markup
+              {isEdit
+                ? " — set the price above yourself."
+                : priceTouched
+                  ? " — price above is yours to keep."
+                  : " — filled in above, adjust if you like."}
+            </span>
+          </p>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            e.g. bought 6 pcs for ₱60 → costs ₱10 each → sells for ₱13 at 30%
+            markup.
+          </p>
+        )}
+
+        {qty > 0 ? (
+          <p
+            className="text-xs text-muted-foreground"
+            data-testid="restock-line"
+          >
+            Saving adds {qty} pc{qty === 1 ? "" : "s"} to stock
+            {currentStock !== null
+              ? ` (${currentStock} → ${currentStock + qty})`
+              : " (starts counting this item)"}
+            .
+          </p>
+        ) : null}
+      </div>
+      
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <div className="flex flex-col gap-2">
           <Label htmlFor="price">Price</Label>
@@ -85,7 +169,10 @@ export default function ProductForm({
             required
             inputMode="decimal"
             value={price}
-            onChange={(event) => setPrice(event.target.value)}
+            onChange={(event) => {
+              setPrice(event.target.value);
+              setPriceTouched(true);
+            }}
             placeholder="0.00"
           />
         </div>
@@ -117,77 +204,6 @@ export default function ProductForm({
         <span className="font-medium">0</span> means the opposite: counted, and
         currently out of stock.
       </p>
-
-      <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
-        <p className="text-sm font-medium">Restock &amp; pricing</p>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="batch_cost" className="text-xs">
-              Price bought
-            </Label>
-            <Input
-              id="batch_cost"
-              name="restock_cost"
-              type="number"
-              step="0.01"
-              min="0"
-              inputMode="decimal"
-              required={qty > 0}
-              placeholder="60.00"
-              value={batchCost}
-              onChange={(event) => setBatchCost(event.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="restock_qty" className="text-xs">
-              Qty bought
-            </Label>
-            <Input
-              id="restock_qty"
-              name="restock_qty"
-              type="number"
-              step="1"
-              min="0"
-              inputMode="numeric"
-              placeholder="6"
-              value={restockQty}
-              onChange={(event) => setRestockQty(event.target.value)}
-            />
-          </div>
-        </div>
-
-        {costPerPiece !== null && sellingPrice !== null ? (
-          <p className="text-xs" data-testid="pricing-line">
-            <span className="font-medium">
-              {formatPeso(costPerPiece)} cost per piece
-            </span>
-            <span className="text-muted-foreground"> · sells for </span>
-            <span className="font-medium">{formatPeso(sellingPrice)}</span>
-            <span className="text-muted-foreground">
-              {" "}
-              at 30% markup — set the price above yourself.
-            </span>
-          </p>
-        ) : (
-          <p className="text-xs text-muted-foreground">
-            e.g. bought 6 pcs for ₱60 → costs ₱10 each → sells for ₱13 at 30%
-            markup.
-          </p>
-        )}
-
-        {qty > 0 ? (
-          <p
-            className="text-xs text-muted-foreground"
-            data-testid="restock-line"
-          >
-            Saving adds {qty} pc{qty === 1 ? "" : "s"} to stock
-            {currentStock !== null
-              ? ` (${currentStock} → ${currentStock + qty})`
-              : " (starts counting this item)"}
-            .
-          </p>
-        ) : null}
-      </div>
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="category_id">

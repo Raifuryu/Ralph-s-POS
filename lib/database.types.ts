@@ -379,6 +379,12 @@ export type Database = {
         }
         Returns: string
       }
+      record_bulk_restock: {
+        Args: {
+          p_items: Json
+        }
+        Returns: Json
+      }
       record_restock: {
         Args: {
           p_cost: number
