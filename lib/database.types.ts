@@ -83,6 +83,7 @@ export type Database = {
           description: string | null
           id: string
           is_active: boolean
+          low_stock_threshold: number | null
           name: string
           price: number
           stock: number | null
@@ -94,6 +95,7 @@ export type Database = {
           description?: string | null
           id?: string
           is_active?: boolean
+          low_stock_threshold?: number | null
           name: string
           price: number
           stock?: number | null
@@ -105,6 +107,7 @@ export type Database = {
           description?: string | null
           id?: string
           is_active?: boolean
+          low_stock_threshold?: number | null
           name?: string
           price?: number
           stock?: number | null
@@ -401,6 +404,7 @@ export type Database = {
           p_contact_number?: string
           p_description?: string
           p_fee: number
+          p_fee_in_wallet?: boolean
           p_payment_account?: Database["public"]["Enums"]["money_account"]
           p_principal: number
           p_reference?: string

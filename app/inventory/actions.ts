@@ -16,6 +16,9 @@ type Parsed = {
   stock: number | null;
   description: string | null;
   category_id: string | null;
+  /** Blank means "use the store-wide default" (NULL) — a whole-number
+      override of when this specific item's row starts reading as "low." */
+  low_stock_threshold: number | null;
   /** Present (> 0) means this submit also restocks — logged via the
       record_restock RPC (batch qty + cost), run after the plain products
       update above so it adds to whatever `stock` that update just wrote. */
@@ -86,12 +89,20 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   // the foreign key rejects anything else, so no UUID validation needed here.
   const categoryId = String(formData.get("category_id") ?? "").trim();
 
+  // Blank means "use the store default" (NULL) — distinct from 0, which is a
+  // deliberate "flag this the moment it's not full" setting.
+  const lowStockThreshold = parseWholeNumber(formData.get("low_stock_threshold"));
+  if (lowStockThreshold === "bad") {
+    return { error: "Low stock threshold must be a whole number, or left blank." };
+  }
+
   return {
     name,
     price,
     stock: counted,
     description: description || null,
     category_id: categoryId || null,
+    low_stock_threshold: lowStockThreshold,
     restockQty,
     restockCost,
   };
@@ -120,6 +131,7 @@ export async function updateProduct(
       description: parsed.description,
       category_id: parsed.category_id,
       stock: parsed.stock,
+      low_stock_threshold: parsed.low_stock_threshold,
     })
     .eq("id", id);
 

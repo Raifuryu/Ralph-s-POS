@@ -180,6 +180,28 @@ export default function ProductForm({
       </p>
 
       <div className="flex flex-col gap-2">
+        <Label htmlFor="low_stock_threshold" className="text-xs">
+          Low stock alert{" "}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          id="low_stock_threshold"
+          name="low_stock_threshold"
+          type="number"
+          step="1"
+          min="0"
+          inputMode="numeric"
+          defaultValue={product.low_stock_threshold ?? ""}
+          placeholder="e.g. 5"
+        />
+        <p className="text-xs text-muted-foreground">
+          Flags this item in the inventory list once its tracked count drops
+          to this number or below. Leave blank to never flag this item as low
+          — no effect on untracked items.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2">
         <Label htmlFor="category_id" className="text-xs">
           Category{" "}
           <span className="font-normal text-muted-foreground">(optional)</span>

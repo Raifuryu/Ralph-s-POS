@@ -11,6 +11,7 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Drawer,
   DrawerClose,
@@ -77,6 +78,13 @@ function ServiceSaleForm({
   // Once the cashier types into Fee directly, stop auto-filling it from the
   // amount/tiers — same "touched" pattern as the bulk restock calculator.
   const [feeTouched, setFeeTouched] = useState(false);
+  // Cash-in only: some customers ask for the fee to come out of the load
+  // instead of paying extra cash for it — an opt-in choice.
+  const [deductFee, setDeductFee] = useState(false);
+  // Cash-out only: whether the fee lands in cash (its own ledger line,
+  // default) or gets embedded in the wallet-side transfer instead (the
+  // customer sends the fee via GCash/Maya rather than handing over cash).
+  const [feeInWallet, setFeeInWallet] = useState(false);
   const [paymentAccount, setPaymentAccount] = useState<MoneyAccount>("cash");
   const [tendered, setTendered] = useState("");
   const [state, formAction, isPending] = useActionState(
@@ -86,6 +94,19 @@ function ServiceSaleForm({
 
   const principalNum = toNumber(principal);
   const feeNum = toNumber(fee);
+  const hasWallet = Boolean(selected?.wallet);
+  const isCashOut = selected?.cash_flow === "out";
+  // Cash-in only — what actually moves through the wallet once the
+  // fee-included-in-amount adjustment is applied. The server re-derives
+  // this itself rather than trusting this client-side number; this is
+  // preview only. Cash-out never adjusts principal on the client: the full
+  // typed Amount is submitted as-is, and record_service() itself splits the
+  // fee into its own ledger line (see box-effect text below for the cash-out
+  // preview of that split).
+  const cashInEffectivePrincipal = deductFee
+    ? Math.max(0, principalNum - feeNum)
+    : principalNum;
+  const feeExceedsAmount = deductFee && feeNum > principalNum;
 
   const tiers = selected ? parseFeeTiers(selected.fee_tiers) : [];
   const matchedTier =
@@ -98,6 +119,8 @@ function ServiceSaleForm({
   function pick(service: Service) {
     setSelected(service);
     setFeeTouched(false);
+    setDeductFee(false);
+    setFeeInWallet(false);
     // Each service brings its own default fee (or a tier match against
     // whatever amount is already typed); still editable below.
     const resolved = resolveFee(service, toNumber(principal));
@@ -112,18 +135,21 @@ function ServiceSaleForm({
   const allowedAccounts = selected?.allowed_payment_accounts ?? ["cash"];
 
   // Change calculator applies only when physical cash is handed over:
-  // a cash-in service paid via the cash box. Due = principal + fee.
+  // a cash-in service paid via the cash box. Due = effective principal + fee
+  // — with the deduct-fee adjustment applied, that's exactly the raw typed
+  // Amount again (the fee comes out of the wallet side, not the cash due).
   const showTendered =
     selected?.cash_flow === "in" && paymentAccount === "cash";
-  const due = principalNum + feeNum;
+  const due = cashInEffectivePrincipal + feeNum;
   const insufficient = showTendered && isShort(tendered, due);
 
-  // A cash-in service tied to a wallet (e.g. GCash Load) sends `principal`
-  // OUT of that wallet to the customer — it can't send more than the wallet
-  // actually holds. Flagged, not blocked: the tracked balance can lag the
-  // real one (e.g. a top-up done outside the app), so this warns and lets
-  // the cashier confirm rather than hard-stopping a transaction that may be
-  // perfectly fine in reality.
+  // A cash-in service tied to a wallet (e.g. GCash Load) sends the effective
+  // principal OUT of that wallet to the customer — it can't send more than
+  // the wallet actually holds. Flagged, not blocked: the tracked balance can
+  // lag the real one (e.g. a top-up done outside the app), so this warns and
+  // lets the cashier confirm rather than hard-stopping a transaction that
+  // may be perfectly fine in reality. Cash-out never draws the wallet down,
+  // it adds to it, so this check only ever applies to cash-in.
   const walletBalance =
     selected?.wallet !== undefined && selected?.wallet !== null
       ? (balances.get(selected.wallet) ?? 0)
@@ -131,7 +157,7 @@ function ServiceSaleForm({
   const walletShort =
     selected?.cash_flow === "in" &&
     walletBalance !== null &&
-    principalNum > walletBalance;
+    cashInEffectivePrincipal > walletBalance;
 
   return (
     <form
@@ -141,7 +167,7 @@ function ServiceSaleForm({
         const label = MONEY_ACCOUNT_LABELS[selected.wallet];
         if (
           !confirm(
-            `This sends ${formatPeso(principalNum)} from ${label}, but its tracked balance is only ${formatPeso(walletBalance ?? 0)}.\n\nRecord anyway?`
+            `This sends ${formatPeso(cashInEffectivePrincipal)} from ${label}, but its tracked balance is only ${formatPeso(walletBalance ?? 0)}.\n\nRecord anyway?`
           )
         ) {
           event.preventDefault();
@@ -151,6 +177,8 @@ function ServiceSaleForm({
     >
       <input type="hidden" name="service_id" value={selected?.id ?? ""} />
       <input type="hidden" name="payment_account" value={paymentAccount} />
+      <input type="hidden" name="deduct_fee" value={deductFee ? "on" : ""} />
+      <input type="hidden" name="fee_in_wallet" value={feeInWallet ? "on" : ""} />
 
       <div className="flex min-h-0 flex-col gap-1.5 overflow-y-auto">
         {services.length === 0 ? (
@@ -263,6 +291,40 @@ function ServiceSaleForm({
             </p>
           ) : null}
 
+          {hasWallet && !isCashOut ? (
+            <label className="flex items-center gap-2 text-sm">
+              <Checkbox
+                checked={deductFee}
+                onCheckedChange={(checked) => setDeductFee(checked === true)}
+              />
+              Fee is already included in the amount above
+            </label>
+          ) : null}
+
+          {isCashOut && hasWallet && selected.wallet ? (
+            <>
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={feeInWallet}
+                  onCheckedChange={(checked) => setFeeInWallet(checked === true)}
+                />
+                Fee is added to the {MONEY_ACCOUNT_LABELS[selected.wallet]}{" "}
+                amount instead of cash
+              </label>
+              <p className="-mt-1 text-xs text-muted-foreground">
+                {feeInWallet
+                  ? `Sent electronically — the customer's ${MONEY_ACCOUNT_LABELS[selected.wallet]} transfer covers the fee too, so cash just hands back the plain amount.`
+                  : "Received in cash, as its own entry in the Vault ledger. A customer who wants a round bill (e.g. ₱1,000 instead of ₱980) can just hand you the difference first; either way the box nets the same."}
+              </p>
+            </>
+          ) : null}
+
+          {feeExceedsAmount ? (
+            <p className="text-xs text-destructive">
+              Fee can&apos;t be more than the amount.
+            </p>
+          ) : null}
+
           <div className="flex flex-col gap-2">
             <Label className="text-xs">
               {selected.cash_flow === "in"
@@ -299,14 +361,19 @@ function ServiceSaleForm({
             data-testid="box-effect"
           >
             {selected.cash_flow === "in"
-              ? `Adds ${formatPeso(principalNum + feeNum)} to ${payLabel}` +
+              ? `Adds ${formatPeso(cashInEffectivePrincipal + feeNum)} to ${payLabel}` +
                 (selected.wallet
-                  ? ` · sends ${formatPeso(principalNum)} from ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`
+                  ? ` · sends ${formatPeso(cashInEffectivePrincipal)} from ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`
                   : ".")
-              : `Takes ${formatPeso(principalNum)} from ${payLabel}` +
-                (selected.wallet
-                  ? ` · ${formatPeso(principalNum + feeNum)} arrives in ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`
-                  : ".")}
+              : selected.wallet && feeInWallet
+                ? `Takes ${formatPeso(principalNum)} from ${payLabel} · ${formatPeso(principalNum + feeNum)} arrives in ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`
+                : `Takes ${formatPeso(principalNum)} from ${payLabel}` +
+                  (feeNum > 0
+                    ? `, ${formatPeso(feeNum)} of that back for the fee — nets ${formatPeso(principalNum - feeNum)}`
+                    : "") +
+                  (selected.wallet
+                    ? ` · ${formatPeso(principalNum)} arrives in ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`
+                    : ".")}
           </p>
 
           {walletShort && selected.wallet ? (
@@ -316,7 +383,7 @@ function ServiceSaleForm({
             >
               Only {formatPeso(walletBalance ?? 0)} tracked in{" "}
               {MONEY_ACCOUNT_LABELS[selected.wallet]} — this sends{" "}
-              {formatPeso(principalNum)}.
+              {formatPeso(cashInEffectivePrincipal)}.
             </p>
           ) : null}
 
@@ -405,7 +472,11 @@ function ServiceSaleForm({
         <Button
           type="submit"
           disabled={
-            isPending || !selected || principalNum + feeNum <= 0 || insufficient
+            isPending ||
+            !selected ||
+            principalNum + feeNum <= 0 ||
+            insufficient ||
+            feeExceedsAmount
           }
         >
           {isPending ? "Recording…" : "Record"}

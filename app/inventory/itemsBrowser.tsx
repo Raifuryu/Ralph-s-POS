@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 
 import { EmptyState } from "@/components/emptyState";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatPeso } from "@/lib/format";
@@ -14,31 +13,66 @@ import DeleteButton from "./deleteButton";
 
 const UNCATEGORIZED = "__none__";
 
-function StockLabel({ value }: { value: number | null }) {
+type StockStatus = "ok" | "low" | "out";
+
+/** Untracked (null) items are never flagged — there's nothing to compare
+    against. 0 or negative (oversold, needs recount) always reads as "out,"
+    regardless of any threshold — that's a fact, not a warning preference.
+    "Low" only fires when the item has its own `low_stock_threshold` set —
+    leaving it blank opts an item out of low-stock flagging entirely, rather
+    than falling back to some store-wide number. */
+function stockStatus(product: Pick<Product, "stock" | "low_stock_threshold">): StockStatus {
+  const value = product.stock;
+  if (value === null) return "ok";
+  if (value <= 0) return "out";
+  if (product.low_stock_threshold === null) return "ok";
+  if (value <= product.low_stock_threshold) return "low";
+  return "ok";
+}
+
+function StockLabel({
+  value,
+  status,
+}: {
+  value: number | null;
+  status: StockStatus;
+}) {
   // NULL and 0 are different states and must not read the same;
   // negative means oversold and needs a recount.
   if (value === null) {
     return <span className="text-muted-foreground">not counted</span>;
-  }
-  if (value === 0) {
-    return <span className="text-destructive">out of stock</span>;
   }
   if (value < 0) {
     return (
       <span className="text-destructive tabular-nums">{value} · recount</span>
     );
   }
+  if (status === "out") {
+    return <span className="text-destructive">out of stock</span>;
+  }
+  if (status === "low") {
+    return (
+      <span className="text-warning tabular-nums">{value} in stock · low</span>
+    );
+  }
   return <span className="tabular-nums">{value} in stock</span>;
 }
 
 function ItemRow({ product }: { product: Product }) {
+  const status = stockStatus(product);
   return (
-    <div className="-mx-2 flex items-center justify-between gap-2 border-b px-2 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50">
+    <div
+      className={cn(
+        "-mx-2 flex items-center justify-between gap-2 border-b border-l-4 border-l-transparent px-2 py-2.5 pl-3 transition-colors last:border-b-0 hover:bg-muted/50",
+        status === "low" && "border-l-warning bg-warning/5",
+        status === "out" && "border-l-destructive bg-destructive/5"
+      )}
+    >
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium">{product.name}</p>
         <p className="text-sm text-muted-foreground">
           {formatPeso(Number(product.price))} ·{" "}
-          <StockLabel value={product.stock} />
+          <StockLabel value={product.stock} status={status} />
         </p>
         {product.description ? (
           <p className="truncate text-xs text-muted-foreground">
@@ -69,9 +103,54 @@ function ItemRow({ product }: { product: Product }) {
   );
 }
 
+type StockFilter = "all" | "low" | "out";
+
+const STOCK_FILTER_LABELS: Record<Exclude<StockFilter, "all">, string> = {
+  low: "Low stock",
+  out: "No stock",
+};
+
+function FilterChip({
+  label,
+  active,
+  tone = "neutral",
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  tone?: "neutral" | "warning" | "destructive";
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onClick}
+      className={cn(
+        "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
+        tone === "neutral" &&
+          (active
+            ? "border-primary bg-primary text-primary-foreground"
+            : "bg-transparent text-muted-foreground hover:bg-muted/50"),
+        tone === "warning" &&
+          (active
+            ? "border-warning bg-warning text-white"
+            : "border-warning/40 text-warning hover:bg-warning/10"),
+        tone === "destructive" &&
+          (active
+            ? "border-destructive bg-destructive text-white"
+            : "border-destructive/40 text-destructive hover:bg-destructive/10")
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
 /**
- * Searchable, category-filtered inventory list, grouped into one card per
- * category. Chips toggle a single category; "All" shows every group.
+ * Searchable, filterable inventory list — one flat list (no per-category
+ * grouping; the category/stock chips are the grouping) so items with a
+ * low/no-stock indicator are never split across separate cards.
  */
 export default function ItemsBrowser({
   products,
@@ -82,6 +161,7 @@ export default function ItemsBrowser({
 }) {
   const [search, setSearch] = useState("");
   const [activeCategory, setActiveCategory] = useState<string>("all");
+  const [activeStockFilter, setActiveStockFilter] = useState<StockFilter>("all");
 
   const needle = search.trim().toLowerCase();
   const searched = useMemo(
@@ -96,39 +176,24 @@ export default function ItemsBrowser({
     [products, needle]
   );
 
-  // Group into category buckets, in the categories' own sort order, with
-  // uncategorized items last. Empty groups are dropped.
-  const groups = useMemo(() => {
-    const byCategory = new Map<string, Product[]>();
-    for (const product of searched) {
-      const key = product.category_id ?? UNCATEGORIZED;
-      const bucket = byCategory.get(key);
-      if (bucket) bucket.push(product);
-      else byCategory.set(key, [product]);
-    }
+  const filtered = useMemo(
+    () =>
+      searched.filter((product) => {
+        if (activeCategory !== "all") {
+          const key = product.category_id ?? UNCATEGORIZED;
+          if (key !== activeCategory) return false;
+        }
+        if (activeStockFilter !== "all") {
+          if (stockStatus(product) !== activeStockFilter) return false;
+        }
+        return true;
+      }),
+    [searched, activeCategory, activeStockFilter]
+  );
 
-    const ordered: { key: string; name: string; items: Product[] }[] = [];
-    for (const category of categories) {
-      const items = byCategory.get(category.id);
-      if (items?.length) {
-        ordered.push({ key: category.id, name: category.name, items });
-      }
-    }
-    const loose = byCategory.get(UNCATEGORIZED);
-    if (loose?.length) {
-      ordered.push({ key: UNCATEGORIZED, name: "No category", items: loose });
-    }
-    return ordered;
-  }, [searched, categories]);
-
-  const visibleGroups =
-    activeCategory === "all"
-      ? groups
-      : groups.filter((group) => group.key === activeCategory);
-
-  // Chips only for categories that actually hold items (pre-search), so the
-  // filter row never offers an empty result.
-  const chipCounts = useMemo(() => {
+  // Chip counts come from the full (pre-search) product list, so the filter
+  // row never offers a chip whose count is stale relative to what's typed.
+  const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const product of products) {
       const key = product.category_id ?? UNCATEGORIZED;
@@ -137,19 +202,28 @@ export default function ItemsBrowser({
     return counts;
   }, [products]);
 
-  const chips: { key: string; label: string }[] = [
+  const stockCounts = useMemo(() => {
+    const counts: Record<Exclude<StockFilter, "all">, number> = { low: 0, out: 0 };
+    for (const product of products) {
+      const status = stockStatus(product);
+      if (status === "low" || status === "out") counts[status] += 1;
+    }
+    return counts;
+  }, [products]);
+
+  const categoryChips: { key: string; label: string }[] = [
     { key: "all", label: `All (${products.length})` },
     ...categories
-      .filter((category) => chipCounts.has(category.id))
+      .filter((category) => categoryCounts.has(category.id))
       .map((category) => ({
         key: category.id,
-        label: `${category.name} (${chipCounts.get(category.id)})`,
+        label: `${category.name} (${categoryCounts.get(category.id)})`,
       })),
-    ...(chipCounts.has(UNCATEGORIZED)
+    ...(categoryCounts.has(UNCATEGORIZED)
       ? [
           {
             key: UNCATEGORIZED,
-            label: `No category (${chipCounts.get(UNCATEGORIZED)})`,
+            label: `No category (${categoryCounts.get(UNCATEGORIZED)})`,
           },
         ]
       : []),
@@ -169,29 +243,49 @@ export default function ItemsBrowser({
       />
 
       <div className="flex gap-1.5 overflow-x-auto pb-1">
-        {chips.map((chip) => (
-          <button
+        {categoryChips.map((chip) => (
+          <FilterChip
             key={chip.key}
-            type="button"
-            aria-pressed={activeCategory === chip.key}
+            label={chip.label}
+            active={activeCategory === chip.key}
             onClick={() =>
-              setActiveCategory((prev) =>
-                prev === chip.key ? "all" : chip.key
-              )
+              setActiveCategory((prev) => (prev === chip.key ? "all" : chip.key))
             }
-            className={cn(
-              "shrink-0 rounded-full border px-3 py-1 text-xs font-medium transition-colors",
-              activeCategory === chip.key
-                ? "border-primary bg-primary text-primary-foreground"
-                : "bg-transparent text-muted-foreground hover:bg-muted/50"
-            )}
-          >
-            {chip.label}
-          </button>
+          />
         ))}
       </div>
 
-      {visibleGroups.length === 0 ? (
+      {stockCounts.low > 0 || stockCounts.out > 0 ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <FilterChip
+            label="All stock"
+            active={activeStockFilter === "all"}
+            onClick={() => setActiveStockFilter("all")}
+          />
+          {stockCounts.low > 0 ? (
+            <FilterChip
+              label={`${STOCK_FILTER_LABELS.low} (${stockCounts.low})`}
+              active={activeStockFilter === "low"}
+              tone="warning"
+              onClick={() =>
+                setActiveStockFilter((prev) => (prev === "low" ? "all" : "low"))
+              }
+            />
+          ) : null}
+          {stockCounts.out > 0 ? (
+            <FilterChip
+              label={`${STOCK_FILTER_LABELS.out} (${stockCounts.out})`}
+              active={activeStockFilter === "out"}
+              tone="destructive"
+              onClick={() =>
+                setActiveStockFilter((prev) => (prev === "out" ? "all" : "out"))
+              }
+            />
+          ) : null}
+        </div>
+      ) : null}
+
+      {filtered.length === 0 ? (
         <EmptyState
           title={
             products.length === 0
@@ -205,20 +299,11 @@ export default function ItemsBrowser({
           }
         />
       ) : (
-        visibleGroups.map((group) => (
-          <section
-            key={group.key}
-            className="rounded-lg border bg-card px-4 py-2"
-          >
-            <div className="flex items-baseline justify-between border-b pb-2 pt-1">
-              <h3 className="text-sm font-semibold">{group.name}</h3>
-              <Badge>{group.items.length}</Badge>
-            </div>
-            {group.items.map((product) => (
-              <ItemRow key={product.id} product={product} />
-            ))}
-          </section>
-        ))
+        <section className="rounded-lg border bg-card px-4 py-2">
+          {filtered.map((product) => (
+            <ItemRow key={product.id} product={product} />
+          ))}
+        </section>
       )}
     </div>
   );

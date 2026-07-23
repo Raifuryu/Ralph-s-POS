@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { Trash2Icon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { deleteProduct, type InventoryState } from "./actions";
@@ -32,12 +33,12 @@ export default function DeleteButton({
       <Button
         type="submit"
         variant="ghost"
-        size="xs"
+        size="icon-xs"
         disabled={isPending}
-        aria-label={`Delete ${name}`}
+        aria-label={isPending ? `Deleting ${name}` : `Delete ${name}`}
         className="text-destructive hover:text-destructive"
       >
-        {isPending ? "Deleting…" : "Delete"}
+        <Trash2Icon />
       </Button>
       {state.error ? (
         <p role="alert" className="text-xs text-destructive">

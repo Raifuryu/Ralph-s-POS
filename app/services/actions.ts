@@ -20,8 +20,8 @@ export async function recordServiceSale(
   const serviceId = String(formData.get("service_id") ?? "").trim();
   if (!serviceId) return { error: "Pick a service first." };
 
-  const principal = parseMoney(formData.get("principal"));
-  if (principal === "bad" || principal === null) {
+  const rawPrincipal = parseMoney(formData.get("principal"));
+  if (rawPrincipal === "bad" || rawPrincipal === null) {
     return { error: "Amount must be a number with at most 2 decimal places." };
   }
 
@@ -30,7 +30,7 @@ export async function recordServiceSale(
     return { error: "Fee must be a number with at most 2 decimal places." };
   }
 
-  if (principal + fee <= 0) {
+  if (rawPrincipal + fee <= 0) {
     return { error: "Enter an amount or a fee." };
   }
 
@@ -49,11 +49,42 @@ export async function recordServiceSale(
   const description = String(formData.get("description") ?? "").trim();
 
   const supabase = await createClient();
+
+  const { data: serviceRow, error: serviceError } = await supabase
+    .from("services")
+    .select("cash_flow")
+    .eq("id", serviceId)
+    .single();
+  if (serviceError || !serviceRow) {
+    return { error: "Service not found." };
+  }
+
+  // Cash-in only: some customers ask for the fee to come out of the load
+  // instead of paying extra cash for it — an opt-in choice, so `principal`
+  // shrinks by the fee before it ever reaches record_service(). Ignored
+  // entirely outside of cash-in — even if a crafted request sends it for a
+  // cash-out, it has no effect here.
+  const deductFeeRequested = formData.get("deduct_fee") === "on";
+  const principal =
+    serviceRow.cash_flow === "in" && deductFeeRequested
+      ? rawPrincipal - fee
+      : rawPrincipal;
+  if (principal < 0) {
+    return { error: "Fee can't be more than the amount." };
+  }
+
+  // Cash-out only: whether the fee lands as its own cash entry (default) or
+  // gets embedded in the wallet-side transfer instead — record_service()
+  // itself decides based on this flag, since the two modes post a different
+  // number of ledger entries.
+  const feeInWallet = formData.get("fee_in_wallet") === "on";
+
   const { data, error } = await supabase.rpc("record_service", {
     p_service_id: serviceId,
     p_principal: principal,
     p_fee: fee,
     p_payment_account: paymentAccount,
+    p_fee_in_wallet: feeInWallet,
     ...(contactNumber ? { p_contact_number: contactNumber } : {}),
     ...(reference ? { p_reference: reference } : {}),
     ...(description ? { p_description: description } : {}),

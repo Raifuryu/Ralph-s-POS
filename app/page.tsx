@@ -169,7 +169,7 @@ export default async function Home({
     supabase
       .from("products")
       .select(
-        "id, name, price, stock, description, category_id, is_active, created_at, updated_at"
+        "id, name, price, stock, description, category_id, low_stock_threshold, is_active, created_at, updated_at"
       )
       .eq("is_active", true)
       .order("name"),
