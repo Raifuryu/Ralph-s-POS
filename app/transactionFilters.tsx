@@ -37,6 +37,7 @@ export default function TransactionFilters({
   searchLabel = "Item name",
   searchPlaceholder = "e.g. Kropek",
   showDateRange = true,
+  showSearch = true,
 }: {
   initial: FilterValues;
   /** Where Apply/Clear navigate to — lets this filter drive any list page. */
@@ -47,6 +48,10 @@ export default function TransactionFilters({
       (e.g. the daily dashboard) — hides the From/To pickers and presets,
       leaving just the search field. */
   showDateRange?: boolean;
+  /** Set false on pages where item-name search doesn't apply (e.g.
+      aggregate/statistics views) — hides the search field, leaving just the
+      date range. */
+  showSearch?: boolean;
 }) {
   const router = useRouter();
   const [q, setQ] = useState(initial.q);
@@ -54,7 +59,7 @@ export default function TransactionFilters({
   const [to, setTo] = useState(initial.to);
 
   const activeCount = [
-    initial.q,
+    showSearch && initial.q,
     showDateRange && initial.from,
     showDateRange && initial.to,
   ].filter(Boolean).length;
@@ -114,18 +119,20 @@ export default function TransactionFilters({
             }}
             className="flex flex-col gap-4"
           >
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="q" className="text-xs">
-                {searchLabel}
-              </Label>
-              <Input
-                id="q"
-                name="q"
-                value={q}
-                placeholder={searchPlaceholder}
-                onChange={(event) => setQ(event.target.value)}
-              />
-            </div>
+            {showSearch ? (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="q" className="text-xs">
+                  {searchLabel}
+                </Label>
+                <Input
+                  id="q"
+                  name="q"
+                  value={q}
+                  placeholder={searchPlaceholder}
+                  onChange={(event) => setQ(event.target.value)}
+                />
+              </div>
+            ) : null}
 
             {showDateRange ? (
               <>

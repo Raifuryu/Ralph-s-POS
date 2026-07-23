@@ -37,6 +37,18 @@ export function formatDate(value: string | Date): string {
   return dateOnly.format(new Date(value));
 }
 
+const shortDate = new Intl.DateTimeFormat("en-PH", {
+  month: "short",
+  day: "numeric",
+  timeZone: STORE_TIME_ZONE,
+});
+
+/** Compact "Jul 23" — for chart axis labels, where formatDate's full
+    weekday+year is too wide to repeat across many bars. */
+export function formatShortDate(value: string | Date): string {
+  return shortDate.format(new Date(value));
+}
+
 const timeOnly = new Intl.DateTimeFormat("en-PH", {
   timeStyle: "short",
   timeZone: STORE_TIME_ZONE,

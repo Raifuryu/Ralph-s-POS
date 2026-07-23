@@ -15,8 +15,11 @@ import { MONEY_ACCOUNT_LABELS } from "@/lib/types";
  * rather than redeclaring their hex values, so a future palette change stays
  * in sync with the Vault card automatically.
  */
-const STORE_COLOR = "#4a3aa7"; // violet
-const ESERVICE_COLOR = "#eda100"; // yellow
+// Exported so other range-scoped views (e.g. the statistics page's revenue
+// trend chart) can reuse the exact same Store/E-Service meaning rather than
+// picking their own colors for the same two concepts.
+export const STORE_COLOR = "#4a3aa7"; // violet
+export const ESERVICE_COLOR = "#eda100"; // yellow
 const OTHER_COLOR = "#1baf7a"; // aqua — wallet-less service fees (e.g. xerox)
 
 export type EServiceFees = {

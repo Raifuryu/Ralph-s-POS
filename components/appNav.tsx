@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { PackageIcon, ReceiptIcon, WalletIcon } from "lucide-react";
+import { ChartColumnIcon, PackageIcon, ReceiptIcon, WalletIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,7 @@ const DESTINATIONS = [
   { href: "/", label: "Sales", icon: ReceiptIcon },
   { href: "/inventory", label: "Inventory", icon: PackageIcon },
   { href: "/vault", label: "Vault", icon: WalletIcon },
+  { href: "/statistics", label: "Stats", icon: ChartColumnIcon },
 ] as const;
 
 /**
