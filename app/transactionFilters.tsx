@@ -36,21 +36,28 @@ export default function TransactionFilters({
   basePath = "/",
   searchLabel = "Item name",
   searchPlaceholder = "e.g. Kropek",
+  showDateRange = true,
 }: {
   initial: FilterValues;
   /** Where Apply/Clear navigate to — lets this filter drive any list page. */
   basePath?: string;
   searchLabel?: string;
   searchPlaceholder?: string;
+  /** Set false on pages that are always scoped to a single fixed window
+      (e.g. the daily dashboard) — hides the From/To pickers and presets,
+      leaving just the search field. */
+  showDateRange?: boolean;
 }) {
   const router = useRouter();
   const [q, setQ] = useState(initial.q);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
 
-  const activeCount = [initial.q, initial.from, initial.to].filter(
-    Boolean
-  ).length;
+  const activeCount = [
+    initial.q,
+    showDateRange && initial.from,
+    showDateRange && initial.to,
+  ].filter(Boolean).length;
 
   function apply(next?: Partial<FilterValues>) {
     const values = { q, from, to, ...next };
@@ -120,61 +127,65 @@ export default function TransactionFilters({
               />
             </div>
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="from" className="text-xs">
-                  From
-                </Label>
-                <Input
-                  id="from"
-                  name="from"
-                  type="date"
-                  value={from}
-                  max={to || undefined}
-                  onChange={(event) => setFrom(event.target.value)}
-                />
-              </div>
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="to" className="text-xs">
-                  To
-                </Label>
-                <Input
-                  id="to"
-                  name="to"
-                  type="date"
-                  value={to}
-                  min={from || undefined}
-                  onChange={(event) => setTo(event.target.value)}
-                />
-              </div>
-            </div>
+            {showDateRange ? (
+              <>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="from" className="text-xs">
+                      From
+                    </Label>
+                    <Input
+                      id="from"
+                      name="from"
+                      type="date"
+                      value={from}
+                      max={to || undefined}
+                      onChange={(event) => setFrom(event.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2">
+                    <Label htmlFor="to" className="text-xs">
+                      To
+                    </Label>
+                    <Input
+                      id="to"
+                      name="to"
+                      type="date"
+                      value={to}
+                      min={from || undefined}
+                      onChange={(event) => setTo(event.target.value)}
+                    />
+                  </div>
+                </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                onClick={() => preset(localDate(new Date()))}
-              >
-                Today
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                onClick={() => preset(daysAgo(6))}
-              >
-                Last 7 days
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="xs"
-                onClick={() => preset(daysAgo(29))}
-              >
-                Last 30 days
-              </Button>
-            </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => preset(localDate(new Date()))}
+                  >
+                    Today
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => preset(daysAgo(6))}
+                  >
+                    Last 7 days
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="xs"
+                    onClick={() => preset(daysAgo(29))}
+                  >
+                    Last 30 days
+                  </Button>
+                </div>
+              </>
+            ) : null}
 
             <div className="flex gap-2">
               <Button type="submit" size="sm">

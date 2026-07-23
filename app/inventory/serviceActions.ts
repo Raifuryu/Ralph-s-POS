@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 
 import { parseMoney } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
-import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
+import { isMoneyAccount, type FeeTier, type MoneyAccount } from "@/lib/types";
 
 export type ServiceFormState = { error: string | null };
 
@@ -15,7 +15,53 @@ type Parsed = {
   default_fee: number | null;
   wallet: "gcash" | "maya" | null;
   allowed_payment_accounts: MoneyAccount[];
+  fee_tiers: FeeTier[];
 };
+
+/** Never trusts the client-sent tiers JSON blindly — every field is
+    re-parsed with the same money-parsing rules as everything else in this
+    file. Sorted by min ascending on the way out: resolution (in
+    lib/types.ts's feeForPrincipal) picks the first matching tier in array
+    order, so storage order has to be deterministic regardless of how the
+    tiers were entered/reordered in the form. */
+function parseFeeTiersInput(raw: string): FeeTier[] | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || "[]");
+  } catch {
+    return { error: "Could not read the fee tiers." };
+  }
+  if (!Array.isArray(parsed)) return { error: "Could not read the fee tiers." };
+
+  const tiers: FeeTier[] = [];
+  for (const [i, entry] of parsed.entries()) {
+    const label = `Tier ${i + 1}`;
+    const line = (entry ?? {}) as Record<string, unknown>;
+
+    const min = parseMoney(String(line.min ?? ""));
+    if (min === "bad" || min === null) {
+      return { error: `${label}: enter a minimum amount.` };
+    }
+
+    const fee = parseMoney(String(line.fee ?? ""));
+    if (fee === "bad" || fee === null) {
+      return { error: `${label}: enter a fee.` };
+    }
+
+    const max = parseMoney(String(line.max ?? ""), { allowBlank: true });
+    if (max === "bad") {
+      return { error: `${label}: max must be a valid amount.` };
+    }
+    if (max !== null && max < min) {
+      return { error: `${label}: max must be at least the minimum.` };
+    }
+
+    tiers.push({ min, max, fee });
+  }
+
+  tiers.sort((a, b) => a.min - b.min);
+  return tiers;
+}
 
 function parseForm(formData: FormData): Parsed | { error: string } {
   const name = String(formData.get("name") ?? "").trim();
@@ -45,7 +91,17 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     return { error: "Choose at least one accepted payment method." };
   }
 
-  return { name, cash_flow: flow, default_fee, wallet, allowed_payment_accounts };
+  const fee_tiers = parseFeeTiersInput(String(formData.get("fee_tiers") ?? "[]"));
+  if ("error" in fee_tiers) return fee_tiers;
+
+  return {
+    name,
+    cash_flow: flow,
+    default_fee,
+    wallet,
+    allowed_payment_accounts,
+    fee_tiers,
+  };
 }
 
 export async function createService(

@@ -97,37 +97,6 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   };
 }
 
-export async function createProduct(
-  _prev: InventoryState,
-  formData: FormData
-): Promise<InventoryState> {
-  const parsed = parseForm(formData);
-  if ("error" in parsed) return { error: parsed.error };
-
-  const supabase = await createClient();
-  const { data: created, error } = await supabase
-    .from("products")
-    .insert({
-      name: parsed.name,
-      price: parsed.price,
-      stock: parsed.stock,
-      description: parsed.description,
-      category_id: parsed.category_id,
-    })
-    .select("id")
-    .single();
-
-  if (error) return { error: error.message };
-
-  const restockError = await applyRestock(supabase, created.id, parsed);
-  if (restockError) return restockError;
-
-  revalidatePath("/inventory");
-  revalidatePath("/checkout");
-  // Closes the form by dropping ?new — no client state to keep in sync.
-  redirect("/inventory");
-}
-
 export async function updateProduct(
   _prev: InventoryState,
   formData: FormData
@@ -167,14 +136,18 @@ export async function updateProduct(
 type BulkRestockItem = {
   product_id: string | null;
   name: string | null;
-  quantity: number;
-  cost: number;
+  quantity: number | null;
+  cost: number | null;
   price: number;
+  category_id: string | null;
+  description: string | null;
 };
 
 /** Logs a whole supplier receipt at once via record_bulk_restock — every
-    line either restocks + re-prices an existing product or creates a new
-    one and restocks it, atomically. Never trusts the client-sent cart JSON
+    line either restocks + re-prices an existing product, or creates a new
+    one (optionally restocking it too — a new item can also be registered
+    with no quantity/cost, same as leaving Quantity blank on the old
+    single-item form), atomically. Never trusts the client-sent cart JSON
     blindly: every field is re-parsed with the same helpers every other form
     in this file uses. */
 export async function bulkRestock(
@@ -214,20 +187,56 @@ export async function bulkRestock(
       seen.add(productId);
     }
 
-    const quantity = parseWholeNumber(String(line.quantity ?? ""));
-    if (quantity === "bad" || quantity === null || quantity <= 0) {
-      return { error: `${label}: quantity must be a whole number greater than 0.` };
-    }
+    const quantityRaw = String(line.quantity ?? "").trim();
+    const costRaw = String(line.cost ?? "").trim();
 
-    const cost = parseMoney(String(line.cost ?? ""));
-    if (cost === "bad" || cost === null) {
-      return { error: `${label}: cost must be a valid amount.` };
+    let quantity: number | null = null;
+    let cost: number | null = null;
+
+    if (productId) {
+      // Existing item: always a restock, quantity + cost are required.
+      const q = parseWholeNumber(quantityRaw);
+      if (q === "bad" || q === null || q <= 0) {
+        return { error: `${label}: quantity must be a whole number greater than 0.` };
+      }
+      const c = parseMoney(costRaw);
+      if (c === "bad" || c === null) {
+        return { error: `${label}: cost must be a valid amount.` };
+      }
+      quantity = q;
+      cost = c;
+    } else if (quantityRaw !== "" || costRaw !== "") {
+      // New item, partially filled in: must be both or neither.
+      if ((quantityRaw === "") !== (costRaw === "")) {
+        return { error: `${label}: enter both quantity and cost, or leave both blank.` };
+      }
+      const q = parseWholeNumber(quantityRaw);
+      if (q === "bad" || q === null || q <= 0) {
+        return { error: `${label}: quantity must be a whole number greater than 0.` };
+      }
+      const c = parseMoney(costRaw);
+      if (c === "bad" || c === null) {
+        return { error: `${label}: cost must be a valid amount.` };
+      }
+      quantity = q;
+      cost = c;
     }
+    // else: new item, both left blank — quantity/cost stay null (register
+    // without stocking, same as leaving Quantity blank on the old form).
 
     const price = parseMoney(String(line.price ?? ""), { requirePositive: true });
     if (price === "bad" || price === null) {
       return { error: `${label}: price must be greater than 0.` };
     }
+
+    const categoryId =
+      typeof line.category_id === "string" && line.category_id
+        ? line.category_id
+        : null;
+    const description =
+      typeof line.description === "string" && line.description.trim()
+        ? line.description.trim()
+        : null;
 
     items.push({
       product_id: productId,
@@ -235,6 +244,8 @@ export async function bulkRestock(
       quantity,
       cost,
       price,
+      category_id: productId ? null : categoryId,
+      description: productId ? null : description,
     });
   }
 

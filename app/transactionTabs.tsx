@@ -9,43 +9,44 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import {
-  TRANSACTION_FILTERS,
-  TRANSACTION_FILTER_LABELS,
-  type TransactionWithItems,
+  SALES_FILTERS,
+  SALES_FILTER_LABELS,
+  salesEntryCategory,
+  type SalesEntry,
 } from "@/lib/types";
 import TransactionTable from "./transactionTable";
 
 export default function TransactionTabs({
-  transactions,
+  entries,
 }: {
-  transactions: TransactionWithItems[];
+  entries: SalesEntry[];
 }) {
   const byFilter = useMemo(
     () =>
       Object.fromEntries(
-        TRANSACTION_FILTERS.map((filter) => [
+        SALES_FILTERS.map((filter) => [
           filter,
           filter === "all"
-            ? transactions
-            : transactions.filter((t) => t.payment_method === filter),
+            ? entries
+            : entries.filter((entry) => salesEntryCategory(entry) === filter),
         ])
-      ) as Record<(typeof TRANSACTION_FILTERS)[number], TransactionWithItems[]>,
-    [transactions]
+      ) as Record<(typeof SALES_FILTERS)[number], SalesEntry[]>,
+    [entries]
   );
 
   return (
     <Tabs defaultValue="all" className="w-full min-w-0">
       <TabsList className="w-full sm:w-fit">
-        {TRANSACTION_FILTERS.map((filter) => (
+        {SALES_FILTERS.map((filter) => (
           <TabsTrigger key={filter} value={filter}>
-            {TRANSACTION_FILTER_LABELS[filter]}
+            {SALES_FILTER_LABELS[filter]}
           </TabsTrigger>
         ))}
       </TabsList>
 
-      {TRANSACTION_FILTERS.map((filter) => (
+      {SALES_FILTERS.map((filter) => (
         <TabsContent key={filter} value={filter} className="min-w-0">
-          <TransactionTable transactions={byFilter[filter]} />
+          <TransactionTable entries={byFilter[filter]} />
         </TabsContent>
       ))}
     </Tabs>

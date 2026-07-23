@@ -1,13 +1,19 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import Link from "next/link";
+import { PlusIcon, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { MONEY_ACCOUNTS, MONEY_ACCOUNT_LABELS, type Service } from "@/lib/types";
+import {
+  MONEY_ACCOUNTS,
+  MONEY_ACCOUNT_LABELS,
+  parseFeeTiers,
+  type Service,
+} from "@/lib/types";
 import {
   createService,
   updateService,
@@ -15,6 +21,12 @@ import {
 } from "./serviceActions";
 
 const initialState: ServiceFormState = { error: null };
+
+type TierDraft = { key: string; min: string; max: string; fee: string };
+
+function emptyTier(): TierDraft {
+  return { key: crypto.randomUUID(), min: "", max: "", fee: "" };
+}
 
 export default function ServiceForm({
   service,
@@ -27,6 +39,30 @@ export default function ServiceForm({
     isEdit ? updateService : createService,
     initialState
   );
+
+  // Fixed, index-based keys for tiers present on mount (not
+  // crypto.randomUUID()) — this initializer runs during SSR too, and a
+  // random key here would mismatch on hydration. Tiers added later via "Add
+  // tier" only ever happen from a client-side click, so those are safe to
+  // key randomly.
+  const [tiers, setTiers] = useState<TierDraft[]>(() =>
+    parseFeeTiers(service?.fee_tiers ?? []).map((tier, i) => ({
+      key: `initial-${i}`,
+      min: String(tier.min),
+      max: tier.max === null ? "" : String(tier.max),
+      fee: String(tier.fee),
+    }))
+  );
+
+  function updateTier(key: string, patch: Partial<TierDraft>) {
+    setTiers((prev) =>
+      prev.map((tier) => (tier.key === key ? { ...tier, ...patch } : tier))
+    );
+  }
+
+  function removeTier(key: string) {
+    setTiers((prev) => prev.filter((tier) => tier.key !== key));
+  }
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
@@ -102,6 +138,104 @@ export default function ServiceForm({
         sides: a load adds cash to the box and deducts the amount from that
         wallet; a cash-out does the reverse.
       </p>
+
+      <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
+        <div>
+          <p className="text-sm font-medium">
+            Fee tiers{" "}
+            <span className="font-normal text-muted-foreground">
+              (optional)
+            </span>
+          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Fee changes with the amount — e.g. ₱100–500 = ₱10, ₱501 and up =
+            ₱12. Leave Max blank for an open-ended top tier. Falls back to
+            the usual fee above for amounts no tier covers.
+          </p>
+        </div>
+
+        {tiers.map((tier) => (
+          <div key={tier.key} className="flex items-end gap-2">
+            <div className="flex flex-1 flex-col gap-1">
+              <Label htmlFor={`tier-min-${tier.key}`} className="text-xs">
+                Min
+              </Label>
+              <Input
+                id={`tier-min-${tier.key}`}
+                type="number"
+                step="0.01"
+                min="0"
+                inputMode="decimal"
+                placeholder="100"
+                value={tier.min}
+                onChange={(event) => updateTier(tier.key, { min: event.target.value })}
+              />
+            </div>
+            <div className="flex flex-1 flex-col gap-1">
+              <Label htmlFor={`tier-max-${tier.key}`} className="text-xs">
+                Max
+              </Label>
+              <Input
+                id={`tier-max-${tier.key}`}
+                type="number"
+                step="0.01"
+                min="0"
+                inputMode="decimal"
+                placeholder="and up"
+                value={tier.max}
+                onChange={(event) => updateTier(tier.key, { max: event.target.value })}
+              />
+            </div>
+            <div className="flex flex-1 flex-col gap-1">
+              <Label htmlFor={`tier-fee-${tier.key}`} className="text-xs">
+                Fee
+              </Label>
+              <Input
+                id={`tier-fee-${tier.key}`}
+                type="number"
+                step="0.01"
+                min="0"
+                inputMode="decimal"
+                placeholder="10"
+                value={tier.fee}
+                onChange={(event) => updateTier(tier.key, { fee: event.target.value })}
+              />
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Remove this tier"
+              onClick={() => removeTier(tier.key)}
+            >
+              <XIcon />
+            </Button>
+          </div>
+        ))}
+
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="self-start"
+          onClick={() => setTiers((prev) => [...prev, emptyTier()])}
+        >
+          <PlusIcon data-icon="inline-start" />
+          Add tier
+        </Button>
+
+        <input
+          type="hidden"
+          name="fee_tiers"
+          value={JSON.stringify(
+            tiers.map((tier) => ({
+              min: tier.min,
+              max: tier.max,
+              fee: tier.fee,
+            }))
+          )}
+        />
+      </div>
 
       <div className="flex flex-col gap-2">
         <Label className="text-xs">Accepted payment methods</Label>

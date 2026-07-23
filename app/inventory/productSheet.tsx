@@ -13,9 +13,9 @@ import type { Category, Product } from "@/lib/types";
 import ProductForm from "./productForm";
 
 /**
- * The add/edit item form as a bottom sheet. Open state is URL-driven
- * (?new / ?edit=<id>), so links open it, deep links work, and the server
- * action's redirect to /inventory closes it after a successful save.
+ * The edit-item form as a bottom sheet. Open state is URL-driven
+ * (?edit=<id>), so links open it, deep links work, and the server action's
+ * redirect to /inventory closes it after a successful save.
  */
 export default function ProductSheet({
   open,
@@ -23,7 +23,6 @@ export default function ProductSheet({
   categories,
 }: {
   open: boolean;
-  /** Present when editing; omitted for a new item. */
   product?: Product;
   categories: Category[];
 }) {
@@ -39,22 +38,15 @@ export default function ProductSheet({
     >
       <DrawerContent className="h-[100dvh]">
         <DrawerHeader>
-          <DrawerTitle>
-            {product ? `Edit ${product.name}` : "New item"}
-          </DrawerTitle>
+          <DrawerTitle>{product ? `Edit ${product.name}` : "Edit item"}</DrawerTitle>
           <DrawerDescription>
-            {product
-              ? "Price changes never affect sales already recorded."
-              : "Blank quantity means the item isn't counted."}
+            Price changes never affect sales already recorded.
           </DrawerDescription>
         </DrawerHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          {/* key resets the form when switching between items */}
-          <ProductForm
-            key={product?.id ?? "new"}
-            product={product}
-            categories={categories}
-          />
+          {product ? (
+            <ProductForm key={product.id} product={product} categories={categories} />
+          ) : null}
         </div>
       </DrawerContent>
     </Drawer>

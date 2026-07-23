@@ -31,8 +31,10 @@ import {
 import { formatPeso } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import {
+  feeForPrincipal,
   MONEY_ACCOUNTS,
   MONEY_ACCOUNT_LABELS,
+  parseFeeTiers,
   type MoneyAccount,
   type Service,
 } from "@/lib/types";
@@ -44,6 +46,14 @@ const initialState: ServiceSaleState = { error: null };
 function toNumber(value: string): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+}
+
+/** Tier-matched fee for the amount, falling back to the service's flat
+    default_fee when no tier covers it (or none are configured at all). */
+function resolveFee(service: Service, principal: number): number | null {
+  const tierFee = feeForPrincipal(parseFeeTiers(service.fee_tiers), principal);
+  if (tierFee !== null) return tierFee;
+  return service.default_fee !== null ? Number(service.default_fee) : null;
 }
 
 /**
@@ -64,6 +74,9 @@ function ServiceSaleForm({
   const [selected, setSelected] = useState<Service | null>(null);
   const [principal, setPrincipal] = useState("");
   const [fee, setFee] = useState("");
+  // Once the cashier types into Fee directly, stop auto-filling it from the
+  // amount/tiers — same "touched" pattern as the bulk restock calculator.
+  const [feeTouched, setFeeTouched] = useState(false);
   const [paymentAccount, setPaymentAccount] = useState<MoneyAccount>("cash");
   const [tendered, setTendered] = useState("");
   const [state, formAction, isPending] = useActionState(
@@ -74,10 +87,21 @@ function ServiceSaleForm({
   const principalNum = toNumber(principal);
   const feeNum = toNumber(fee);
 
+  const tiers = selected ? parseFeeTiers(selected.fee_tiers) : [];
+  const matchedTier =
+    tiers.length > 0
+      ? (tiers.find(
+          (t) => principalNum >= t.min && (t.max === null || principalNum <= t.max)
+        ) ?? null)
+      : null;
+
   function pick(service: Service) {
     setSelected(service);
-    // Each service brings its own default fee; still editable below.
-    setFee(service.default_fee !== null ? String(service.default_fee) : "");
+    setFeeTouched(false);
+    // Each service brings its own default fee (or a tier match against
+    // whatever amount is already typed); still editable below.
+    const resolved = resolveFee(service, toNumber(principal));
+    setFee(resolved !== null ? String(resolved) : "");
     // Switching services can change which accounts are even valid — jump to
     // that service's first allowed one rather than leaving a stale, now
     // disallowed, selection in place.
@@ -156,9 +180,11 @@ function ServiceSaleForm({
                   {service.wallet
                     ? ` · ${MONEY_ACCOUNT_LABELS[service.wallet]} wallet`
                     : null}
-                  {service.default_fee !== null
-                    ? ` · usual fee ${formatPeso(Number(service.default_fee))}`
-                    : null}
+                  {parseFeeTiers(service.fee_tiers).length > 0
+                    ? " · tiered fee"
+                    : service.default_fee !== null
+                      ? ` · usual fee ${formatPeso(Number(service.default_fee))}`
+                      : null}
                   {" · "}
                   {service.allowed_payment_accounts
                     .map((account) => MONEY_ACCOUNT_LABELS[account])
@@ -186,7 +212,16 @@ function ServiceSaleForm({
                 inputMode="decimal"
                 placeholder="0.00"
                 value={principal}
-                onChange={(event) => setPrincipal(event.target.value)}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setPrincipal(value);
+                  // Tiered services only — untiered ones never had the fee
+                  // react to the amount, and that stays true here.
+                  if (selected && !feeTouched && tiers.length > 0) {
+                    const resolved = resolveFee(selected, toNumber(value));
+                    if (resolved !== null) setFee(String(resolved));
+                  }
+                }}
               />
             </div>
             <div className="flex flex-col gap-2">
@@ -202,10 +237,31 @@ function ServiceSaleForm({
                 inputMode="decimal"
                 placeholder="0.00"
                 value={fee}
-                onChange={(event) => setFee(event.target.value)}
+                onChange={(event) => {
+                  setFee(event.target.value);
+                  setFeeTouched(true);
+                }}
               />
             </div>
           </div>
+
+          {tiers.length > 0 ? (
+            <p className="-mt-2 text-xs text-muted-foreground">
+              {matchedTier ? (
+                <>
+                  {formatPeso(matchedTier.min)}–
+                  {matchedTier.max !== null ? formatPeso(matchedTier.max) : "up"}
+                  {" → "}
+                  <span className="font-medium text-foreground">
+                    {formatPeso(matchedTier.fee)}
+                  </span>
+                  {!feeTouched ? " — filled in above, adjust if you like." : null}
+                </>
+              ) : (
+                "No tier matches this amount — check the fee."
+              )}
+            </p>
+          ) : null}
 
           <div className="flex flex-col gap-2">
             <Label className="text-xs">

@@ -2,11 +2,11 @@ import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
-import { formatDate, friendlyDayLabel, storeDateFromKey } from "@/lib/format";
+import { storeDayKey, storeDayRange } from "@/lib/format";
 import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
 import { escapeLike } from "@/lib/search";
 import { createClient } from "@/lib/supabase/server";
-import type { MoneyAccount } from "@/lib/types";
+import type { MoneyAccount, SalesEntry } from "@/lib/types";
 import { signOut } from "./login/actions";
 import IncomeBreakdownCard, { type EServiceFees } from "./incomeBreakdownCard";
 import NewSaleDrawer from "./newSaleDrawer";
@@ -16,48 +16,18 @@ import TransactionFilters from "./transactionFilters";
 import TransactionTabs from "./transactionTabs";
 
 /**
- * Names the number on the income card after whatever window is active, so
- * it's never ambiguous whether you're looking at today, a range, or
- * everything — "the daily transaction only or depending on the filter."
+ * The dashboard is a daily view, always — a separate summary page will
+ * eventually cover ranges/all-time, so the title here never has to say
+ * anything other than "today."
  */
-function incomeCardCopy({
-  from,
-  to,
-  q,
-}: {
-  from?: string;
-  to?: string;
-  q?: string;
-}): { title: string; subtitle?: string } {
-  const parts: string[] = [];
-  let title = "Total income";
-
-  if (from && to && from === to) {
-    const label = friendlyDayLabel(storeDateFromKey(from));
-    if (label === "Today") {
-      title = "Today's income";
-    } else {
-      title = "Income";
-      parts.push(label);
-    }
-  } else if (from || to) {
-    title = "Income";
-    if (from && to) {
-      parts.push(
-        `${formatDate(storeDateFromKey(from))} – ${formatDate(storeDateFromKey(to))}`
-      );
-    } else if (from) {
-      parts.push(`Since ${formatDate(storeDateFromKey(from))}`);
-    } else if (to) {
-      parts.push(`Until ${formatDate(storeDateFromKey(to))}`);
-    }
-  } else {
-    parts.push("All time");
-  }
-
-  if (q) parts.push(`matching "${q}"`);
-
-  return { title, subtitle: parts.length ? parts.join(" · ") : undefined };
+function incomeCardCopy({ q }: { q?: string }): {
+  title: string;
+  subtitle?: string;
+} {
+  return {
+    title: "Today's income",
+    subtitle: q ? `matching "${q}"` : undefined,
+  };
 }
 
 const TRANSACTION_SELECT = `
@@ -67,12 +37,17 @@ const TRANSACTION_SELECT = `
   )
 `;
 
+/** Newest-first merge of both money-in event kinds into one feed. */
+function sortByCreatedAtDesc(entries: SalesEntry[]): SalesEntry[] {
+  return [...entries].sort(
+    (a, b) =>
+      new Date(b.data.created_at).getTime() -
+      new Date(a.data.created_at).getTime()
+  );
+}
+
 type SearchParams = {
   q?: string;
-  from?: string;
-  to?: string;
-  from_ts?: string;
-  to_ts?: string;
   page?: string;
 };
 
@@ -101,74 +76,96 @@ export default async function Home({
   const q = params.q?.trim() ?? "";
   const supabase = await createClient();
 
-  // Item search runs as a separate lookup rather than an inner join on
-  // transaction_items. An inner join would filter the *nested rows* too, so a
-  // matched sale would render only its matching lines while still showing its
-  // full total — the rows wouldn't add up. Instead: find which transactions
-  // contain a match, then load those transactions whole.
+  // Item/service search runs as separate lookups rather than inner joins on
+  // the nested rows. An inner join on transaction_items would filter those
+  // *nested* rows too, so a matched sale would render only its matching
+  // lines while still showing its full total — the rows wouldn't add up.
+  // Both run in parallel — neither depends on the other.
   let matchedIds: string[] | null = null;
+  let matchedServiceIds: string[] | null = null;
   if (q) {
-    const { data: matches, error: matchError } = await supabase
-      .from("transaction_items")
-      .select("transaction_id")
-      .ilike("product_name", `%${escapeLike(q)}%`);
+    const [
+      { data: itemMatches, error: itemMatchError },
+      { data: serviceMatches, error: serviceMatchError },
+    ] = await Promise.all([
+      supabase
+        .from("transaction_items")
+        .select("transaction_id")
+        .ilike("product_name", `%${escapeLike(q)}%`),
+      supabase
+        .from("service_transactions")
+        .select("id")
+        .or(
+          `service_name.ilike.%${escapeLike(q)}%,reference.ilike.%${escapeLike(q)}%`
+        ),
+    ]);
 
-    if (matchError) {
-      return <LoadError message={matchError.message} />;
+    if (itemMatchError) {
+      return <LoadError message={itemMatchError.message} />;
     }
-    matchedIds = [...new Set(matches.map((row) => row.transaction_id))];
+    if (serviceMatchError) {
+      return <LoadError message={serviceMatchError.message} />;
+    }
+    matchedIds = [...new Set(itemMatches.map((row) => row.transaction_id))];
+    matchedServiceIds = serviceMatches.map((row) => row.id);
   }
 
   const page = parsePage(params.page);
   const { rangeFrom, rangeTo } = pageRange(page);
 
-  // Render query: paginated, drives the visible list only. `count: "exact"`
-  // gets the true row total for the pager without a second round trip.
-  let query = supabase
+  // The dashboard is a daily view, always — a separate summary page will
+  // eventually cover ranges/all-time (not built yet), so every query below
+  // is unconditionally pinned to the store's "today," not a user-picked
+  // window.
+  const { fromTs, toTs } = storeDayRange(storeDayKey(new Date()));
+
+  // Sales list: every matching transaction today, unpaginated — pagination
+  // happens in JS below, after merging with service_transactions into one
+  // chronological feed. This also doubles as the source for storeTotal/
+  // itemsSold, replacing what used to be a second "totals" query.
+  let salesQuery = supabase
     .from("transactions")
-    .select(TRANSACTION_SELECT, { count: "exact" })
-    .order("created_at", { ascending: false })
-    .range(rangeFrom, rangeTo);
+    .select(TRANSACTION_SELECT)
+    .gte("created_at", fromTs)
+    .lte("created_at", toTs)
+    .order("created_at", { ascending: false });
 
-  if (params.from_ts) query = query.gte("created_at", params.from_ts);
-  if (params.to_ts) query = query.lte("created_at", params.to_ts);
-  if (matchedIds) query = query.in("id", matchedIds);
+  if (matchedIds) salesQuery = salesQuery.in("id", matchedIds);
 
-  // Totals query: the SAME filters, but every matching row and no pagination
-  // — the income card sums the whole filtered window, not just the page
-  // someone happens to be looking at. Lean select (no item name/price):
-  // this is for sums only, never rendered.
-  // Personal takes deduct stock but aren't income — excluded here so
-  // storeTotal/itemsSold below only ever reflect what was actually sold.
-  let totalsQuery = supabase
-    .from("transactions")
-    .select("total, payment_method, transaction_items(quantity)")
-    .eq("is_personal_take", false);
+  // Same idea, the e-service side of the merged feed.
+  let serviceListQuery = supabase
+    .from("service_transactions")
+    .select("*")
+    .gte("created_at", fromTs)
+    .lte("created_at", toTs)
+    .order("created_at", { ascending: false });
 
-  if (params.from_ts) totalsQuery = totalsQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) totalsQuery = totalsQuery.lte("created_at", params.to_ts);
-  if (matchedIds) totalsQuery = totalsQuery.in("id", matchedIds);
+  if (matchedServiceIds) serviceListQuery = serviceListQuery.in("id", matchedServiceIds);
 
   // `.in("id", [])` is a valid empty-set filter, so no special case is needed
   // for "search matched nothing" — it correctly returns zero rows.
-  // E-Service income respects the same date window as the sales list.
+  // E-Service income respects the same date window as the sales list, but
+  // deliberately NOT the search filter above — it's a summary total for the
+  // whole day, same as it's always been, not a filtered-view figure.
   // PostgREST aggregates are disabled, so fees are fetched and grouped by
   // wallet here rather than in SQL.
-  let feeQuery = supabase.from("service_transactions").select("fee, wallet");
-  if (params.from_ts) feeQuery = feeQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) feeQuery = feeQuery.lte("created_at", params.to_ts);
+  const feeQuery = supabase
+    .from("service_transactions")
+    .select("fee, wallet")
+    .gte("created_at", fromTs)
+    .lte("created_at", toTs);
 
   const [
-    { data, error, count },
-    { data: totalsData, error: totalsError },
+    { data: salesData, error: salesError },
+    { data: serviceListData, error: serviceListError },
     { data: products },
     { data: topSellers },
     { data: services },
     { data: serviceFees },
     { data: vaultRows, error: vaultError },
   ] = await Promise.all([
-    query,
-    totalsQuery,
+    salesQuery,
+    serviceListQuery,
     supabase
       .from("products")
       .select(
@@ -183,30 +180,42 @@ export default async function Home({
       .limit(5),
     supabase
       .from("services")
-      .select("id, name, cash_flow, default_fee, wallet, allowed_payment_accounts, is_active, created_at, updated_at")
+      .select("id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, is_active, created_at, updated_at")
       .eq("is_active", true)
       .order("name"),
     feeQuery,
     supabase.from("vault_balance").select("account, balance"),
   ]);
 
-  if (error) {
-    return <LoadError message={error.message} />;
+  if (salesError) {
+    return <LoadError message={salesError.message} />;
   }
-  if (totalsError) {
-    return <LoadError message={totalsError.message} />;
+  if (serviceListError) {
+    return <LoadError message={serviceListError.message} />;
   }
   if (vaultError) {
     return <LoadError message={vaultError.message} />;
   }
 
-  const transactions = data ?? [];
-  const pageCount = pageCountFor(count);
+  const sales = salesData ?? [];
+  const serviceList = serviceListData ?? [];
+
+  // One chronological feed, newest first, then paginated in JS — the two
+  // source tables can't share a single DB-level .range() the way one table
+  // could, so both are fetched in full for the window and sliced here.
+  const merged = sortByCreatedAtDesc([
+    ...sales.map((t) => ({ kind: "sale" as const, data: t })),
+    ...serviceList.map((s) => ({ kind: "service" as const, data: s })),
+  ]);
+  const pageCount = pageCountFor(merged.length);
+  const pageEntries = merged.slice(rangeFrom, rangeTo + 1);
 
   // Store = all product sales in the window, regardless of payment method —
   // a sale is store revenue whether the customer paid cash, GCash, or Maya.
-  const storeTotal = (totalsData ?? []).reduce(
-    (sum, t) => sum + Number(t.total),
+  // Personal takes deduct stock but aren't income, so they're excluded here
+  // (and from itemsSold below) the same way they're excluded everywhere else.
+  const storeTotal = sales.reduce(
+    (sum, t) => sum + (t.is_personal_take ? 0 : Number(t.total)),
     0
   );
 
@@ -222,8 +231,6 @@ export default async function Home({
   }
 
   const { title: incomeTitle, subtitle: incomeSubtitle } = incomeCardCopy({
-    from: params.from,
-    to: params.to,
     q,
   });
 
@@ -235,10 +242,13 @@ export default async function Home({
   }
 
   // Same reasoning as storeTotal: counted over the whole filtered window via
-  // totalsData, not just the visible page.
-  const itemsSold = (totalsData ?? []).reduce(
+  // `sales`, not just the visible page.
+  const itemsSold = sales.reduce(
     (sum, t) =>
-      sum + t.transaction_items.reduce((n, item) => n + item.quantity, 0),
+      sum +
+      (t.is_personal_take
+        ? 0
+        : t.transaction_items.reduce((n, item) => n + item.quantity, 0)),
     0
   );
 
@@ -264,7 +274,8 @@ export default async function Home({
         </div>
 
         <TransactionFilters
-          initial={{ q, from: params.from ?? "", to: params.to ?? "" }}
+          initial={{ q, from: "", to: "" }}
+          showDateRange={false}
         />
 
         {/* Vault (money on hand) and Income (this window, by source) are the
@@ -280,26 +291,13 @@ export default async function Home({
           />
         </div>
 
-        <SummaryCard
-          label="Items sold"
-          value={String(itemsSold)}
-          compact
-          className="sm:w-fit sm:min-w-40"
-        />
-
-        <TransactionTabs transactions={transactions} />
+        <TransactionTabs entries={pageEntries} />
 
         <Pager
           page={page}
           pageCount={pageCount}
           basePath="/"
-          params={{
-            q: params.q,
-            from: params.from,
-            to: params.to,
-            from_ts: params.from_ts,
-            to_ts: params.to_ts,
-          }}
+          params={{ q: params.q }}
         />
       </>
     </PageShell>

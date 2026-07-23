@@ -31,7 +31,6 @@ import ServiceDeleteButton from "./serviceDeleteButton";
 import ServiceForm from "./serviceForm";
 
 type SearchParams = {
-  new?: string;
   edit?: string;
   tab?: string;
   newService?: string;
@@ -72,7 +71,7 @@ export default async function InventoryPage({
     supabase
       .from("services")
       .select(
-        "id, name, cash_flow, default_fee, wallet, allowed_payment_accounts, is_active, created_at, updated_at"
+        "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, is_active, created_at, updated_at"
       )
       .order("name"),
     // Restock history is independent of the queries above (keyed only by
@@ -125,7 +124,7 @@ export default async function InventoryPage({
   const editing = params.edit
     ? products.find((p) => p.id === params.edit)
     : undefined;
-  const showProductForm = params.new !== undefined || editing !== undefined;
+  const showProductForm = editing !== undefined;
 
   const editingService = params.editService
     ? serviceList.find((s) => s.id === params.editService)
@@ -195,23 +194,13 @@ export default async function InventoryPage({
           </TabsList>
 
           <TabsContent value="items" className="flex min-w-0 flex-col gap-4 pt-3">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                className="self-start"
-                nativeButton={false}
-                render={<Link href="/inventory?new" />}
-              >
-                Add item
-              </Button>
-              <Button
-                className="self-start"
-                variant="outline"
-                nativeButton={false}
-                render={<Link href="/inventory?bulk" />}
-              >
-                Bulk restock
-              </Button>
-            </div>
+            <Button
+              className="self-start"
+              nativeButton={false}
+              render={<Link href="/inventory?bulk" />}
+            >
+              Bulk restock
+            </Button>
 
             <ItemsBrowser products={products} categories={categories ?? []} />
           </TabsContent>
@@ -312,7 +301,11 @@ export default async function InventoryPage({
           entries={historyEntries}
         />
 
-        <BulkRestockSheet open={showBulkRestock} products={products} />
+        <BulkRestockSheet
+          open={showBulkRestock}
+          products={products}
+          categories={categories ?? []}
+        />
       </>
     </PageShell>
   );

@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useState } from "react";
 import Link from "next/link";
-import { PlusIcon, XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -16,9 +16,10 @@ import {
 import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { formatPeso } from "@/lib/format";
-import { sellingPriceFor, toNumber } from "@/lib/pricing";
-import type { Product } from "@/lib/types";
+import { costFor, sellingPriceFor, toNumber } from "@/lib/pricing";
+import type { Category, Product } from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
 
 const initialState: InventoryState = { error: null };
@@ -41,10 +42,16 @@ type CartLine = {
   quantity: string;
   cost: string;
   price: string;
-  /** Only meaningful for new-item lines (productId === null): once the user
-      types into Price themselves, stop auto-filling it from the markup
-      calculator. Existing-item lines never auto-fill regardless. */
+  /** Only meaningful for new-item lines (productId === null): whichever of
+      Cost/Price the user has typed into directly is a "driver" the
+      calculator won't overwrite; the other one (if untouched) is free to be
+      auto-filled from Qty + the touched field. If both get touched, neither
+      is auto-filled anymore. Existing-item lines never auto-fill regardless. */
   priceTouched: boolean;
+  costTouched: boolean;
+  /** Only meaningful for new-item lines. */
+  categoryId: string;
+  description: string;
 };
 
 function emptyLine(): CartLine {
@@ -57,6 +64,9 @@ function emptyLine(): CartLine {
     cost: "",
     price: "",
     priceTouched: false,
+    costTouched: false,
+    categoryId: "",
+    description: "",
   };
 }
 
@@ -71,7 +81,10 @@ function isValidCartLine(value: unknown): value is CartLine {
     typeof v.quantity === "string" &&
     typeof v.cost === "string" &&
     typeof v.price === "string" &&
-    typeof v.priceTouched === "boolean"
+    typeof v.priceTouched === "boolean" &&
+    typeof v.costTouched === "boolean" &&
+    typeof v.categoryId === "string" &&
+    typeof v.description === "string"
   );
 }
 
@@ -85,6 +98,19 @@ function hasAnyContent(line: CartLine): boolean {
   );
 }
 
+/** A line is ready to submit — also doubles as "safe to auto-collapse",
+    since there's nothing left to fill in. */
+function isLineComplete(line: CartLine): boolean {
+  if (line.productId === null && !line.newName.trim()) return false;
+  if (!line.price) return false;
+  if (line.productId !== null) {
+    return Boolean(line.quantity) && Boolean(line.cost);
+  }
+  const hasQty = line.quantity.trim() !== "";
+  const hasCost = line.cost.trim() !== "";
+  return hasQty === hasCost;
+}
+
 type PickerOption = { value: string; label: string };
 
 const NEW_ITEM_OPTION: PickerOption = { value: "__new__", label: "+ New item" };
@@ -92,18 +118,24 @@ const NEW_ITEM_OPTION: PickerOption = { value: "__new__", label: "+ New item" };
 function CartLineCard({
   line,
   products,
+  categories,
   otherSelectedIds,
   onChange,
   onRemove,
   removable,
+  collapsed,
+  onToggleCollapse,
 }: {
   line: CartLine;
   products: Product[];
+  categories: Category[];
   /** Products already picked by other lines — hidden from this line's picker. */
   otherSelectedIds: Set<string>;
   onChange: (patch: Partial<CartLine>) => void;
   onRemove: () => void;
   removable: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   const pickerOptions = products.filter(
     (p) => p.id === line.productId || !otherSelectedIds.has(p.id)
@@ -121,6 +153,48 @@ function CartLineCard({
   const costPerPiece = qty > 0 && cost > 0 ? cost / qty : null;
   const suggested = costPerPiece !== null ? sellingPriceFor(costPerPiece) : null;
 
+  if (collapsed) {
+    const displayName =
+      (line.productId ? line.productName : line.newName.trim()) || "New item";
+    const price = toNumber(line.price);
+    const summary = !isLineComplete(line)
+      ? "Incomplete — tap to finish"
+      : qty > 0 && cost > 0
+        ? `${qty} pc${qty === 1 ? "" : "s"} · ${formatPeso(cost)} → ${formatPeso(price)}`
+        : `${formatPeso(price)} · not stocked yet`;
+
+    return (
+      <div className="flex items-center gap-2 rounded-lg border bg-card p-2.5">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+        >
+          <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium">
+              {displayName}
+            </span>
+            <span className="block truncate text-xs text-muted-foreground">
+              {summary}
+            </span>
+          </span>
+        </button>
+        {removable ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Remove this item from the cart"
+            onClick={onRemove}
+          >
+            <XIcon />
+          </Button>
+        ) : null}
+      </div>
+    );
+  }
+
   function handleProductChange(option: PickerOption | null) {
     if (!option || option.value === "__new__") {
       onChange({
@@ -128,6 +202,9 @@ function CartLineCard({
         productName: "",
         price: "",
         priceTouched: false,
+        costTouched: false,
+        categoryId: "",
+        description: "",
       });
       return;
     }
@@ -137,24 +214,33 @@ function CartLineCard({
       productName: product?.name ?? "",
       price: product ? String(product.price) : "",
       priceTouched: false,
+      costTouched: false,
+      categoryId: "",
+      description: "",
     });
   }
 
-  // New-item lines only: fill Price from the markup calculator as qty/cost
-  // are typed, until the user edits Price directly. Existing-item lines
-  // never auto-fill — restocking shouldn't silently change a real price.
+  // New-item lines only: whichever of Cost/Price hasn't been typed into
+  // directly gets auto-filled from the markup calculator as the other two
+  // fields change. Existing-item lines never auto-fill — restocking
+  // shouldn't silently change a real price.
   function handleQuantityChange(value: string) {
     const patch: Partial<CartLine> = { quantity: value };
-    if (line.productId === null && !line.priceTouched) {
-      const c = toNumber(line.cost);
+    if (line.productId === null) {
       const q = toNumber(value);
-      if (c > 0 && q > 0) patch.price = String(sellingPriceFor(c / q));
+      if (line.priceTouched && !line.costTouched) {
+        const p = toNumber(line.price);
+        if (p > 0 && q > 0) patch.cost = String(costFor(p, q));
+      } else if (!line.priceTouched) {
+        const c = toNumber(line.cost);
+        if (c > 0 && q > 0) patch.price = String(sellingPriceFor(c / q));
+      }
     }
     onChange(patch);
   }
 
   function handleCostChange(value: string) {
-    const patch: Partial<CartLine> = { cost: value };
+    const patch: Partial<CartLine> = { cost: value, costTouched: true };
     if (line.productId === null && !line.priceTouched) {
       const c = toNumber(value);
       const q = toNumber(line.quantity);
@@ -163,10 +249,20 @@ function CartLineCard({
     onChange(patch);
   }
 
+  function handlePriceChange(value: string) {
+    const patch: Partial<CartLine> = { price: value, priceTouched: true };
+    if (line.productId === null && !line.costTouched) {
+      const p = toNumber(value);
+      const q = toNumber(line.quantity);
+      if (p > 0 && q > 0) patch.cost = String(costFor(p, q));
+    }
+    onChange(patch);
+  }
+
   return (
-    <div className="flex flex-col gap-3 rounded-lg border bg-card p-3">
+    <div className="flex flex-col gap-2 rounded-lg border bg-card p-2.5">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <Label htmlFor={`item-${line.key}`} className="text-xs">
             Item
           </Label>
@@ -192,39 +288,82 @@ function CartLineCard({
             </ComboboxContent>
           </Combobox>
         </div>
-        {removable ? (
+        <div className="mt-5 flex items-center gap-1">
           <Button
             type="button"
             variant="ghost"
             size="icon-sm"
-            aria-label="Remove this item from the cart"
-            className="mt-6"
-            onClick={onRemove}
+            aria-label="Collapse this item"
+            onClick={onToggleCollapse}
           >
-            <XIcon />
+            <ChevronDownIcon />
           </Button>
-        ) : null}
+          {removable ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Remove this item from the cart"
+              onClick={onRemove}
+            >
+              <XIcon />
+            </Button>
+          ) : null}
+        </div>
       </div>
 
       {line.productId === null ? (
-        <div className="flex flex-col gap-2">
-          <Label htmlFor={`name-${line.key}`} className="text-xs">
-            New item name
-          </Label>
-          <Input
-            id={`name-${line.key}`}
-            required
-            placeholder="e.g. Sardinas"
-            value={line.newName}
-            onChange={(event) => onChange({ newName: event.target.value })}
-          />
-        </div>
+        <>
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={`name-${line.key}`} className="text-xs">
+              New item name
+            </Label>
+            <Input
+              id={`name-${line.key}`}
+              required
+              placeholder="e.g. Sardinas"
+              value={line.newName}
+              onChange={(event) => onChange({ newName: event.target.value })}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`category-${line.key}`} className="text-xs">
+                Category
+              </Label>
+              <Select
+                id={`category-${line.key}`}
+                value={line.categoryId}
+                onChange={(event) => onChange({ categoryId: event.target.value })}
+              >
+                <option value="">No category</option>
+                {categories.map((category) => (
+                  <option key={category.id} value={category.id}>
+                    {category.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor={`description-${line.key}`} className="text-xs">
+                Description
+              </Label>
+              <Input
+                id={`description-${line.key}`}
+                placeholder="Optional"
+                value={line.description}
+                onChange={(event) => onChange({ description: event.target.value })}
+              />
+            </div>
+          </div>
+        </>
       ) : null}
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="flex flex-col gap-2">
+      <div className="grid grid-cols-3 gap-2">
+        <div className="flex flex-col gap-1">
           <Label htmlFor={`qty-${line.key}`} className="text-xs">
-            Qty bought
+            Qty
           </Label>
           <Input
             id={`qty-${line.key}`}
@@ -232,15 +371,15 @@ function CartLineCard({
             step="1"
             min="0"
             inputMode="numeric"
-            required
-            placeholder="6"
+            required={line.productId !== null}
+            placeholder={line.productId === null ? "Optional" : "6"}
             value={line.quantity}
             onChange={(event) => handleQuantityChange(event.target.value)}
           />
         </div>
-        <div className="flex flex-col gap-2">
+        <div className="flex flex-col gap-1">
           <Label htmlFor={`cost-${line.key}`} className="text-xs">
-            Price bought
+            Cost
           </Label>
           <Input
             id={`cost-${line.key}`}
@@ -248,10 +387,26 @@ function CartLineCard({
             step="0.01"
             min="0"
             inputMode="decimal"
-            required
-            placeholder="60.00"
+            required={line.productId !== null || qty > 0}
+            placeholder={line.productId === null ? "Optional" : "60.00"}
             value={line.cost}
             onChange={(event) => handleCostChange(event.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label htmlFor={`price-${line.key}`} className="text-xs">
+            Price
+          </Label>
+          <Input
+            id={`price-${line.key}`}
+            type="number"
+            step="0.01"
+            min="0.01"
+            inputMode="decimal"
+            required
+            placeholder="0.00"
+            value={line.price}
+            onChange={(event) => handlePriceChange(event.target.value)}
           />
         </div>
       </div>
@@ -259,17 +414,11 @@ function CartLineCard({
       {costPerPiece !== null && suggested !== null ? (
         <p className="text-xs">
           <span className="font-medium">
-            {formatPeso(costPerPiece)} cost per piece
+            {formatPeso(costPerPiece)}/pc
           </span>
           <span className="text-muted-foreground"> · suggested </span>
           <span className="font-medium">{formatPeso(suggested)}</span>
-          <span className="text-muted-foreground"> at 30% markup</span>
-          {line.productId === null && !line.priceTouched ? (
-            <span className="text-muted-foreground">
-              {" "}
-              — filled in below, adjust if you like.
-            </span>
-          ) : (
+          {line.productId === null && !line.priceTouched ? null : (
             <>
               <span className="text-muted-foreground"> — </span>
               <button
@@ -283,30 +432,17 @@ function CartLineCard({
           )}
         </p>
       ) : null}
-
-      <div className="flex flex-col gap-2">
-        <Label htmlFor={`price-${line.key}`} className="text-xs">
-          Selling price
-        </Label>
-        <Input
-          id={`price-${line.key}`}
-          type="number"
-          step="0.01"
-          min="0.01"
-          inputMode="decimal"
-          required
-          placeholder="0.00"
-          value={line.price}
-          onChange={(event) =>
-            onChange({ price: event.target.value, priceTouched: true })
-          }
-        />
-      </div>
     </div>
   );
 }
 
-export default function BulkRestockForm({ products }: { products: Product[] }) {
+export default function BulkRestockForm({
+  products,
+  categories,
+}: {
+  products: Product[];
+  categories: Category[];
+}) {
   const [state, formAction, isPending] = useActionState(
     bulkRestock,
     initialState
@@ -326,6 +462,9 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
       cost: "",
       price: "",
       priceTouched: false,
+      costTouched: false,
+      categoryId: "",
+      description: "",
     },
   ]);
   // Gates the persist effect below so it never fires before the restore
@@ -334,6 +473,11 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
   // render, before React even gets a chance to restore it.
   const [hydrated, setHydrated] = useState(false);
   const [justRestored, setJustRestored] = useState(false);
+  // Ephemeral UI state, not persisted — an accordion: at most one line is
+  // expanded at a time, everything else collapses to a one-line summary, so
+  // the cart stays short no matter how many items are in it. null means
+  // every line is collapsed.
+  const [expandedKey, setExpandedKey] = useState<string | null>("initial");
 
   // Restore a saved draft on mount. localStorage isn't available during SSR,
   // so this only ever runs client-side, after hydration — a normal post-
@@ -367,6 +511,9 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
             // eslint-disable-next-line react-hooks/set-state-in-effect
             setLines(reconciled);
             setJustRestored(true);
+            // The last line is the most likely one to have been mid-edit
+            // when the draft was saved — everything else starts collapsed.
+            setExpandedKey(reconciled[reconciled.length - 1].key);
           }
         }
       }
@@ -393,11 +540,26 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
 
   function removeLine(key: string) {
     setLines((prev) => prev.filter((line) => line.key !== key));
+    setExpandedKey((prev) => (prev === key ? null : prev));
+  }
+
+  function toggleExpand(key: string) {
+    setExpandedKey((prev) => (prev === key ? null : key));
+  }
+
+  function addLine() {
+    // The new blank line becomes the sole expanded one — everything already
+    // filled in collapses, so the cart doesn't just keep growing taller.
+    const line = emptyLine();
+    setLines((prev) => [...prev, line]);
+    setExpandedKey(line.key);
   }
 
   function clearCart() {
-    setLines([emptyLine()]);
+    const line = emptyLine();
+    setLines([line]);
     setJustRestored(false);
+    setExpandedKey(line.key);
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
@@ -413,10 +575,7 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
     0
   );
 
-  const hasIncompleteLine = lines.some((line) => {
-    if (line.productId === null && !line.newName.trim()) return true;
-    return !line.quantity || !line.cost || !line.price;
-  });
+  const hasIncompleteLine = lines.some((line) => !isLineComplete(line));
 
   return (
     <form
@@ -449,6 +608,8 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
             quantity: line.quantity,
             cost: line.cost,
             price: line.price,
+            category_id: line.productId ? null : line.categoryId || null,
+            description: line.productId ? null : line.description.trim() || null,
           }))
         )}
       />
@@ -470,12 +631,13 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto">
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
         {lines.map((line) => (
           <CartLineCard
             key={line.key}
             line={line}
             products={products}
+            categories={categories}
             otherSelectedIds={
               new Set(
                 lines
@@ -486,6 +648,8 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
             onChange={(patch) => updateLine(line.key, patch)}
             onRemove={() => removeLine(line.key)}
             removable={lines.length > 1}
+            collapsed={line.key !== expandedKey}
+            onToggleCollapse={() => toggleExpand(line.key)}
           />
         ))}
 
@@ -493,7 +657,7 @@ export default function BulkRestockForm({ products }: { products: Product[] }) {
           type="button"
           variant="outline"
           className="self-start"
-          onClick={() => setLines((prev) => [...prev, emptyLine()])}
+          onClick={addLine}
         >
           <PlusIcon data-icon="inline-start" />
           Add another item

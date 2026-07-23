@@ -185,6 +185,7 @@ export type Database = {
           cash_flow: Database["public"]["Enums"]["cash_flow"]
           created_at: string
           default_fee: number | null
+          fee_tiers: Json
           id: string
           is_active: boolean
           name: string
@@ -196,6 +197,7 @@ export type Database = {
           cash_flow?: Database["public"]["Enums"]["cash_flow"]
           created_at?: string
           default_fee?: number | null
+          fee_tiers?: Json
           id?: string
           is_active?: boolean
           name: string
@@ -207,6 +209,7 @@ export type Database = {
           cash_flow?: Database["public"]["Enums"]["cash_flow"]
           created_at?: string
           default_fee?: number | null
+          fee_tiers?: Json
           id?: string
           is_active?: boolean
           name?: string
@@ -383,12 +386,7 @@ export type Database = {
         }
         Returns: string
       }
-      record_bulk_restock: {
-        Args: {
-          p_items: Json
-        }
-        Returns: Json
-      }
+      record_bulk_restock: { Args: { p_items: Json }; Returns: Json }
       record_restock: {
         Args: {
           p_cost: number

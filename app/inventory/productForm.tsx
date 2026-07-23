@@ -10,7 +10,7 @@ import { Select } from "@/components/ui/select";
 import { formatPeso } from "@/lib/format";
 import { sellingPriceFor, toNumber } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
-import { createProduct, updateProduct, type InventoryState } from "./actions";
+import { updateProduct, type InventoryState } from "./actions";
 
 const initialState: InventoryState = { error: null };
 
@@ -18,29 +18,21 @@ export default function ProductForm({
   product,
   categories,
 }: {
-  /** Omit to create a new product. */
-  product?: Product;
+  product: Product;
   categories: Category[];
 }) {
-  const isEdit = Boolean(product);
   const [state, formAction, isPending] = useActionState(
-    isEdit ? updateProduct : createProduct,
+    updateProduct,
     initialState
   );
 
-  const [price, setPrice] = useState(
-    product?.price !== undefined ? String(product.price) : ""
-  );
-  // Only auto-fills for a brand-new item (no existing price to protect) and
-  // only until the user types into Price themselves — restocking an
-  // existing item never auto-fills, since there's already a real price that
-  // shouldn't get silently overwritten while just logging a restock.
-  const [priceTouched, setPriceTouched] = useState(false);
+  const [price, setPrice] = useState(String(product.price));
 
   // Restock & pricing helper. Only restock_qty and restock_cost are
   // submitted — cost per piece and the suggested selling price (cost + 30%)
-  // are also used to auto-fill Price above, for new items only (see
-  // priceTouched).
+  // are shown as a hint only; editing an existing item never auto-fills
+  // Price, since there's already a real price that shouldn't get silently
+  // overwritten while just logging a restock.
   const [batchCost, setBatchCost] = useState("");
   const [restockQty, setRestockQty] = useState("");
 
@@ -50,18 +42,11 @@ export default function ProductForm({
   const costPerPiece = cost > 0 && qty > 0 ? cost / qty : null;
   const sellingPrice =
     costPerPiece !== null ? sellingPriceFor(costPerPiece) : null;
-  const currentStock = product?.stock ?? null;
-
-  function applyAutoPrice(nextBatchCost: string, nextRestockQty: string) {
-    if (isEdit || priceTouched) return;
-    const c = toNumber(nextBatchCost);
-    const q = toNumber(nextRestockQty);
-    if (c > 0 && q > 0) setPrice(String(sellingPriceFor(c / q)));
-  }
+  const currentStock = product.stock;
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
-      {product ? <input type="hidden" name="id" value={product.id} /> : null}
+      <input type="hidden" name="id" value={product.id} />
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="name" className="text-xs">
@@ -71,7 +56,7 @@ export default function ProductForm({
           id="name"
           name="name"
           required
-          defaultValue={product?.name ?? ""}
+          defaultValue={product.name}
           placeholder="e.g. Sardinas"
         />
       </div>
@@ -93,10 +78,7 @@ export default function ProductForm({
               required={qty > 0}
               placeholder="60.00"
               value={batchCost}
-              onChange={(event) => {
-                setBatchCost(event.target.value);
-                applyAutoPrice(event.target.value, restockQty);
-              }}
+              onChange={(event) => setBatchCost(event.target.value)}
             />
           </div>
           <div className="flex flex-col gap-2">
@@ -112,10 +94,7 @@ export default function ProductForm({
               inputMode="numeric"
               placeholder="6"
               value={restockQty}
-              onChange={(event) => {
-                setRestockQty(event.target.value);
-                applyAutoPrice(batchCost, event.target.value);
-              }}
+              onChange={(event) => setRestockQty(event.target.value)}
             />
           </div>
         </div>
@@ -129,12 +108,7 @@ export default function ProductForm({
             <span className="font-medium">{formatPeso(sellingPrice)}</span>
             <span className="text-muted-foreground">
               {" "}
-              at 30% markup
-              {isEdit
-                ? " — set the price above yourself."
-                : priceTouched
-                  ? " — price above is yours to keep."
-                  : " — filled in above, adjust if you like."}
+              at 30% markup — set the price above yourself.
             </span>
           </p>
         ) : (
@@ -157,7 +131,7 @@ export default function ProductForm({
           </p>
         ) : null}
       </div>
-      
+
       <div className="grid grid-cols-2 gap-3">
         <div className="flex flex-col gap-2">
           <Label htmlFor="price" className="text-xs">
@@ -172,10 +146,7 @@ export default function ProductForm({
             required
             inputMode="decimal"
             value={price}
-            onChange={(event) => {
-              setPrice(event.target.value);
-              setPriceTouched(true);
-            }}
+            onChange={(event) => setPrice(event.target.value)}
             placeholder="0.00"
           />
         </div>
@@ -195,7 +166,7 @@ export default function ProductForm({
             type="number"
             step="1"
             inputMode="numeric"
-            defaultValue={product?.stock ?? ""}
+            defaultValue={product.stock ?? ""}
             placeholder="Leave blank"
           />
         </div>
@@ -218,7 +189,7 @@ export default function ProductForm({
         <Select
           id="category_id"
           name="category_id"
-          defaultValue={product?.category_id ?? ""}
+          defaultValue={product.category_id ?? ""}
         >
           <option value="">No category</option>
           {categories.map((category) => (
@@ -237,7 +208,7 @@ export default function ProductForm({
         <Input
           id="description"
           name="description"
-          defaultValue={product?.description ?? ""}
+          defaultValue={product.description ?? ""}
           placeholder="e.g. Sold by scoop from an open sack"
         />
       </div>
@@ -250,7 +221,7 @@ export default function ProductForm({
 
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={isPending}>
-          {isPending ? "Saving…" : isEdit ? "Save changes" : "Add item"}
+          {isPending ? "Saving…" : "Save changes"}
         </Button>
         <Button
           variant="ghost"

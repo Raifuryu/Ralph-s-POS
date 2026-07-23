@@ -79,3 +79,18 @@ export function storeDateFromKey(dateKey: string): Date {
   const [year, month, day] = dateKey.split("-").map(Number);
   return new Date(Date.UTC(year, month - 1, day, 12 - 8, 0, 0));
 }
+
+/**
+ * Absolute UTC instants bounding a store-timezone calendar day — ready to
+ * feed straight into a `.gte()`/`.lte()` query. Manila has no DST, so the
+ * offset is a fixed UTC+8 year-round, unlike storeDateFromKey's noon anchor
+ * (safe for display, not for exact range boundaries).
+ */
+export function storeDayRange(dateKey: string): { fromTs: string; toTs: string } {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const fromTs = new Date(Date.UTC(year, month - 1, day, -8, 0, 0, 0)).toISOString();
+  const toTs = new Date(
+    Date.UTC(year, month - 1, day + 1, -8, 0, 0, 0) - 1
+  ).toISOString();
+  return { fromTs, toTs };
+}
