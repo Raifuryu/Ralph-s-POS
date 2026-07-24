@@ -40,12 +40,17 @@ export default function IncomeBreakdownCard({
   title,
   subtitle,
   store,
+  storeLabel = "Store",
   eService,
   className,
 }: {
   title: string;
   subtitle?: string;
   store: number;
+  /** Callers pass real numbers with different meanings under this same
+      "store" slot (gross revenue vs. cost-aware margin) — the label says
+      which one this is, defaulting to the plain, meaning-agnostic "Store". */
+  storeLabel?: string;
   eService: EServiceFees;
   className?: string;
 }) {
@@ -71,7 +76,7 @@ export default function IncomeBreakdownCard({
   ];
 
   const rows: BreakdownRow[] = [
-    { key: "store", label: "Store", value: store, color: STORE_COLOR },
+    { key: "store", label: storeLabel, value: store, color: STORE_COLOR },
     {
       key: "eservice",
       label: "E-Service",

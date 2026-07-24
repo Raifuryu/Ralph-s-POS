@@ -11,7 +11,7 @@ export default async function CheckoutPage() {
   const { data, error } = await supabase
     .from("products")
     .select(
-      "id, name, price, stock, description, category_id, low_stock_threshold, is_active, created_at, updated_at"
+      "id, name, price, cost, stock, description, category_id, low_stock_threshold, is_active, created_at, updated_at"
     )
     .eq("is_active", true)
     .order("name");

@@ -79,6 +79,7 @@ export type Database = {
       products: {
         Row: {
           category_id: string | null
+          cost: number | null
           created_at: string
           description: string | null
           id: string
@@ -91,6 +92,7 @@ export type Database = {
         }
         Insert: {
           category_id?: string | null
+          cost?: number | null
           created_at?: string
           description?: string | null
           id?: string
@@ -103,6 +105,7 @@ export type Database = {
         }
         Update: {
           category_id?: string | null
+          cost?: number | null
           created_at?: string
           description?: string | null
           id?: string
@@ -229,6 +232,7 @@ export type Database = {
           product_name: string
           quantity: number
           transaction_id: string
+          unit_cost: number | null
           unit_price: number
         }
         Insert: {
@@ -238,6 +242,7 @@ export type Database = {
           product_name: string
           quantity: number
           transaction_id: string
+          unit_cost?: number | null
           unit_price: number
         }
         Update: {
@@ -247,6 +252,7 @@ export type Database = {
           product_name?: string
           quantity?: number
           transaction_id?: string
+          unit_cost?: number | null
           unit_price?: number
         }
         Relationships: [
@@ -434,7 +440,7 @@ export type Database = {
 
 type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
 
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+type DefaultSchema = DatabaseWithoutInternals["public"]
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends

@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { PlusIcon } from "lucide-react";
 
 import { buttonVariants } from "@/components/ui/button";
@@ -22,7 +23,9 @@ import CheckoutForm from "./checkout/checkoutForm";
  * header button from `sm` up, floating bottom-centre pill on phones.
  *
  * The drawer unmounts its contents on close, so quantities and search reset
- * for the next sale without any bookkeeping here.
+ * for the next sale without any bookkeeping here. Controlled (not just
+ * Trigger/Close-driven) so a successful sale can close it automatically
+ * instead of waiting on the Done button.
  */
 export default function NewSaleDrawer({
   products,
@@ -32,8 +35,10 @@ export default function NewSaleDrawer({
   /** Product ids ranked by units sold, best first. */
   topProductIds?: string[];
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <Drawer showSwipeHandle>
+    <Drawer open={open} onOpenChange={setOpen} showSwipeHandle>
       {/* Header placement — tablet and up */}
       <DrawerTrigger className={cn(buttonVariants(), "hidden sm:inline-flex")}>
         New sale
@@ -71,6 +76,7 @@ export default function NewSaleDrawer({
           <CheckoutForm
             products={products}
             topProductIds={topProductIds}
+            onRecorded={() => setOpen(false)}
             doneSlot={
               <DrawerClose
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}

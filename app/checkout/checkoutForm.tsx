@@ -1,11 +1,10 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { MinusIcon, PlusIcon, XIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/emptyState";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { DrawerFooter } from "@/components/ui/drawer";
@@ -19,57 +18,29 @@ import {
   type PaymentMethod,
   type Product,
 } from "@/lib/types";
-import ChangeCalculator, { isShort } from "../changeCalculator";
+import { isShort } from "../changeCalculator";
 import { recordSale, type CheckoutState } from "./actions";
+import ItemPickerDrawer from "./itemPickerDrawer";
 
 const initialState: CheckoutState = { error: null };
 
-function CatalogueRow({
-  product,
-  quantity,
-  onAdd,
-}: {
-  product: Product;
-  quantity: number;
-  onAdd: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={`Add ${product.name}`}
-      onClick={onAdd}
-      className="flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50 active:bg-muted"
-    >
-      <div className="min-w-0">
-        <p className="truncate font-medium">{product.name}</p>
-        <p className="text-sm text-muted-foreground">
-          {formatPeso(Number(product.price))}
-          {/* stock === null means the item isn't counted, so there is no
-              stock figure to show — distinct from 0. */}
-          {product.stock !== null ? ` · ${product.stock} in stock` : null}
-        </p>
-        {product.description ? (
-          <p className="truncate text-xs text-muted-foreground">
-            {product.description}
-          </p>
-        ) : null}
-      </div>
-
-      {quantity > 0 ? (
-        <Badge variant="primary" className="shrink-0">
-          ×{quantity}
-        </Badge>
-      ) : (
-        <PlusIcon className="size-4 shrink-0 text-muted-foreground" />
-      )}
-    </button>
-  );
+/** Same parsing ChangeCalculator uses — duplicated locally rather than
+    exported from there, since this drawer is the only place that needs the
+    "Customer gave" input and its change/short readout positioned apart from
+    each other (beside the payment method tabs vs. down in the footer) rather
+    than stacked together the way ChangeCalculator renders them everywhere
+    else (e.g. the service drawer). */
+function toAmount(value: string): number | null {
+  if (value.trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 export default function CheckoutForm({
   products,
   topProductIds,
   doneSlot,
+  onRecorded,
 }: {
   products: Product[];
   /** Product ids ranked by units sold, best first. Shown as quick picks. */
@@ -79,11 +50,14 @@ export default function CheckoutForm({
    * dashboard; the drawer passes a close button instead.
    */
   doneSlot?: React.ReactNode;
+  /** Called shortly after a successful sale — the drawer closes itself
+      instead of waiting on doneSlot's button. Omitted on the standalone
+      /checkout page, which has no sheet to close. */
+  onRecorded?: () => void;
 }) {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("cash");
   const [tendered, setTendered] = useState("");
-  const [search, setSearch] = useState("");
   // Stock still leaves the shelf, but nothing was sold — no payment method,
   // no change to tender, no income. See app/checkout/actions.ts.
   const [personalTake, setPersonalTake] = useState(false);
@@ -91,6 +65,14 @@ export default function CheckoutForm({
     recordSale,
     initialState
   );
+
+  // Brief delay so "Sale recorded." is actually readable before the sheet
+  // closes — an instant close would make the confirmation flash by unseen.
+  useEffect(() => {
+    if (!state.transactionId || !onRecorded) return;
+    const timer = setTimeout(onRecorded, 700);
+    return () => clearTimeout(timer);
+  }, [state.transactionId, onRecorded]);
 
   // The cart is built from ALL products, not the filtered view — searching
   // must never silently drop items already added.
@@ -101,29 +83,6 @@ export default function CheckoutForm({
         .filter((line) => line.quantity > 0),
     [products, quantities]
   );
-
-  const visible = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return products;
-    return products.filter(
-      (product) =>
-        product.name.toLowerCase().includes(needle) ||
-        (product.description ?? "").toLowerCase().includes(needle)
-    );
-  }, [products, search]);
-
-  // Best sellers as quick picks, in ranking order. Hidden while searching —
-  // the search results are the answer then. Ids referencing deleted or
-  // deactivated products simply drop out.
-  const topProducts = useMemo(() => {
-    if (!topProductIds?.length) return [];
-    const byId = new Map(products.map((product) => [product.id, product]));
-    return topProductIds
-      .map((id) => byId.get(id))
-      .filter((product): product is Product => product !== undefined);
-  }, [products, topProductIds]);
-
-  const isSearching = search.trim().length > 0;
 
   // Lines selling more than the recorded stock. Allowed — the shelf is the
   // source of truth, not the system — but flagged and confirmed, and the
@@ -142,6 +101,7 @@ export default function CheckoutForm({
 
   const insufficient =
     !personalTake && paymentMethod === "cash" && isShort(tendered, previewTotal);
+  const tenderedAmount = toAmount(tendered);
 
   function setQuantity(id: string, next: number) {
     setQuantities((prev) => ({ ...prev, [id]: Math.max(0, next) }));
@@ -199,68 +159,26 @@ export default function CheckoutForm({
         <input type="hidden" name="payment_method" value={paymentMethod} />
       ) : null}
 
-      <Input
-        type="search"
-        aria-label="Search items"
-        placeholder="Search items…"
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        onKeyDown={(event) => {
-          // Enter in the search box must never submit the form — on a POS,
-          // that would record a sale by accident.
-          if (event.key === "Enter") event.preventDefault();
-        }}
+      {/* Opens a separate full-height sheet to browse/add items — keeps
+          catalogue browsing from being squeezed out by the cart, payment
+          method, and change calculator below, which all need their own
+          fixed space regardless of how many lines are in the cart. Tapping
+          an item there adds one; tapping again adds another. Quantities are
+          edited in the "In this sale" section below, not there. */}
+      <ItemPickerDrawer
+        products={products}
+        topProductIds={topProductIds}
+        quantities={quantities}
+        onAdd={(id) => setQuantity(id, (quantities[id] ?? 0) + 1)}
+        pieceCount={pieceCount}
       />
 
-      {/* Catalogue: nothing here is in the sale until tapped. Tapping adds
-          one; tapping again adds another. Quantities are edited in the
-          "In this sale" section below, not here. */}
-      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto">
-        {isSearching ? (
-          visible.length === 0 ? (
-            <EmptyState title={`No items match “${search.trim()}”.`} />
-          ) : (
-            visible.map((product) => (
-              <CatalogueRow
-                key={product.id}
-                product={product}
-                quantity={quantities[product.id] ?? 0}
-                onAdd={() =>
-                  setQuantity(product.id, (quantities[product.id] ?? 0) + 1)
-                }
-              />
-            ))
-          )
+      <div className="flex min-h-0 flex-1 flex-col gap-2 border-t pt-3">
+        <p className="text-sm font-medium">In this sale</p>
+        {cart.length === 0 ? (
+          <EmptyState title="No items yet." subtitle="Tap “Add items” above to get started." />
         ) : (
-          <>
-            {topProducts.length > 0 ? (
-              <>
-                <p className="pt-1 text-xs font-medium text-muted-foreground">
-                  Top items
-                </p>
-                {topProducts.map((product) => (
-                  <CatalogueRow
-                    key={`top-${product.id}`}
-                    product={product}
-                    quantity={quantities[product.id] ?? 0}
-                    onAdd={() =>
-                      setQuantity(
-                        product.id,
-                        (quantities[product.id] ?? 0) + 1
-                      )
-                    }
-                  />
-                ))}
-              </>
-            ) : null}
-          </>
-        )}
-      </div>
-
-      {cart.length > 0 ? (
-        <div className="flex shrink-0 flex-col gap-2 border-t pt-3">
-          <p className="text-sm font-medium">In this sale</p>
-          <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
+          <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
             {cart.map((line) => {
               const oversold =
                 line.product.stock !== null &&
@@ -338,10 +256,10 @@ export default function CheckoutForm({
               );
             })}
           </div>
-        </div>
-      ) : null}
+        )}
+      </div>
 
-      <label className="flex items-start gap-2.5 rounded-lg border p-3 text-sm has-[[data-checked]]:border-ring has-[[data-checked]]:bg-muted/30">
+      <label className="flex items-start gap-1 rounded-lg border p-1 text-xs has-[[data-checked]]:border-ring has-[[data-checked]]:bg-muted/30">
         <Checkbox
           name="personal_take"
           value="on"
@@ -350,17 +268,22 @@ export default function CheckoutForm({
           className="mt-0.5"
         />
         <span>
-          <span className="font-medium">Personal take</span>
-          <span className="block text-xs text-muted-foreground">
-            Stock still leaves the shelf, but nothing is recorded as income —
-            no payment method, no money in the vault.
-          </span>
+          <span className="font-medium">Personal take (Utang)</span>
         </span>
       </label>
 
       {!personalTake ? (
-        <>
-          <div className="flex shrink-0 flex-col gap-2">
+        // 65/35 fr split — payment method gets 65%, Customer gave gets
+        // 35% — rather than content-sized, so the split holds steady
+        // regardless of how wide "GCash"/"Maya" render.
+        <div className="grid grid-cols-[65fr_35fr] items-end gap-3">
+          <div
+            className={
+              paymentMethod === "cash"
+                ? "flex flex-col gap-2"
+                : "col-span-2 flex flex-col gap-2"
+            }
+          >
             <Label className="text-xs">Payment method</Label>
             <Tabs
               value={paymentMethod}
@@ -380,13 +303,24 @@ export default function CheckoutForm({
           {/* Cash only. Unmounting on wallet payments also removes the input
               from the form, so nothing stray is submitted. */}
           {paymentMethod === "cash" ? (
-            <ChangeCalculator
-              due={previewTotal}
-              value={tendered}
-              onChange={setTendered}
-            />
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="tendered" className="text-xs">
+                Customer gave
+              </Label>
+              <Input
+                id="tendered"
+                name="tendered"
+                type="number"
+                step="0.01"
+                min="0"
+                inputMode="decimal"
+                placeholder="Blank if exact"
+                value={tendered}
+                onChange={(event) => setTendered(event.target.value)}
+              />
+            </div>
           ) : null}
-        </>
+        </div>
       ) : null}
 
       {state.error ? (
@@ -418,6 +352,22 @@ export default function CheckoutForm({
             {formatPeso(previewTotal)}
           </p>
         </div>
+        {!personalTake && paymentMethod === "cash" && tenderedAmount !== null ? (
+          <div data-testid="change-line" className="text-right">
+            {tenderedAmount < previewTotal ? (
+              <p className="text-sm font-medium text-destructive">
+                Short {formatPeso(previewTotal - tenderedAmount)}
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-muted-foreground">Change</p>
+                <p className="text-xl font-semibold tabular-nums">
+                  {formatPeso(tenderedAmount - previewTotal)}
+                </p>
+              </>
+            )}
+          </div>
+        ) : null}
         <Button
           type="submit"
           disabled={isPending || cart.length === 0 || insufficient}

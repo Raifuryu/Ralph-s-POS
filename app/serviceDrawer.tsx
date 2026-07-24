@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { WalletIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/emptyState";
@@ -65,12 +65,16 @@ function resolveFee(service: Service, principal: number): number | null {
 function ServiceSaleForm({
   services,
   balances,
+  onRecorded,
 }: {
   services: Service[];
   /** Current vault balance per account — used to warn when a cash-in
       service tied to a wallet (e.g. GCash Load) would draw the wallet
       below zero; the wallet itself can't front money it doesn't have. */
   balances: Map<MoneyAccount, number>;
+  /** Called shortly after a successful record — the drawer closes itself
+      instead of waiting on the Done button. */
+  onRecorded: () => void;
 }) {
   const [selected, setSelected] = useState<Service | null>(null);
   const [principal, setPrincipal] = useState("");
@@ -91,6 +95,15 @@ function ServiceSaleForm({
     recordServiceSale,
     initialState
   );
+
+  // Brief delay so "Service recorded." is actually readable before the
+  // sheet closes — an instant close would make the confirmation flash by
+  // unseen.
+  useEffect(() => {
+    if (!state.recordedId) return;
+    const timer = setTimeout(onRecorded, 700);
+    return () => clearTimeout(timer);
+  }, [state.recordedId, onRecorded]);
 
   const principalNum = toNumber(principal);
   const feeNum = toNumber(fee);
@@ -493,8 +506,10 @@ export default function ServiceDrawer({
   services: Service[];
   balances: Map<MoneyAccount, number>;
 }) {
+  const [open, setOpen] = useState(false);
+
   return (
-    <Drawer showSwipeHandle>
+    <Drawer open={open} onOpenChange={setOpen} showSwipeHandle>
       {/* Header placement — tablet and up */}
       <DrawerTrigger
         className={cn(
@@ -528,7 +543,11 @@ export default function ServiceDrawer({
         </DrawerHeader>
 
         <div className="flex min-h-0 flex-1 flex-col gap-4 p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <ServiceSaleForm services={services} balances={balances} />
+          <ServiceSaleForm
+            services={services}
+            balances={balances}
+            onRecorded={() => setOpen(false)}
+          />
         </div>
       </DrawerContent>
     </Drawer>

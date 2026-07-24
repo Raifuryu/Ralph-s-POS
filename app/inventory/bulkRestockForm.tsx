@@ -17,8 +17,9 @@ import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
-import { costFor, sellingPriceFor, toNumber } from "@/lib/pricing";
+import { costFor, costPerPieceFor, sellingPriceFor, toNumber } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
 
@@ -31,6 +32,13 @@ const initialState: InventoryState = { error: null };
 // they've actually submitted.
 const STORAGE_KEY = "ralph-pos:bulk-restock-cart";
 
+/** "pack" — Cost is the total for the whole batch, matching how a sealed
+    case/pack is usually bought. "individual" — Cost per item is entered
+    directly instead, for loose pieces bought one at a time with no pack
+    total to divide; the total is derived (Cost per item x Qty) rather than
+    typed. */
+type CostMode = "pack" | "individual";
+
 type CartLine = {
   key: string;
   /** null means this line creates a brand-new product. */
@@ -40,7 +48,11 @@ type CartLine = {
   productName: string;
   newName: string;
   quantity: string;
+  costMode: CostMode;
+  /** Total batch cost — used when costMode is "pack". */
   cost: string;
+  /** Cost per single piece — used when costMode is "individual". */
+  costPerItem: string;
   price: string;
   /** Only meaningful for new-item lines (productId === null): whichever of
       Cost/Price the user has typed into directly is a "driver" the
@@ -61,7 +73,9 @@ function emptyLine(): CartLine {
     productName: "",
     newName: "",
     quantity: "",
+    costMode: "pack",
     cost: "",
+    costPerItem: "",
     price: "",
     priceTouched: false,
     costTouched: false,
@@ -94,6 +108,7 @@ function hasAnyContent(line: CartLine): boolean {
     line.newName !== "" ||
     line.quantity !== "" ||
     line.cost !== "" ||
+    line.costPerItem !== "" ||
     line.price !== ""
   );
 }
@@ -103,12 +118,36 @@ function hasAnyContent(line: CartLine): boolean {
 function isLineComplete(line: CartLine): boolean {
   if (line.productId === null && !line.newName.trim()) return false;
   if (!line.price) return false;
+  const costValue = line.costMode === "individual" ? line.costPerItem : line.cost;
   if (line.productId !== null) {
-    return Boolean(line.quantity) && Boolean(line.cost);
+    return Boolean(line.quantity) && Boolean(costValue);
   }
   const hasQty = line.quantity.trim() !== "";
-  const hasCost = line.cost.trim() !== "";
+  const hasCost = costValue.trim() !== "";
   return hasQty === hasCost;
+}
+
+/** Effective total cost for a line regardless of costMode — informational
+    only (cart total, collapsed-card summary), so "0" for an incomplete line
+    is fine here, same as toNumber's existing blank/invalid convention. */
+function totalCostFor(line: CartLine): number {
+  if (line.costMode === "individual") {
+    return Math.round(toNumber(line.costPerItem) * toNumber(line.quantity) * 100) / 100;
+  }
+  return toNumber(line.cost);
+}
+
+/** Total-cost STRING for the submitted cart payload — "" when either input
+    needed to compute it (in the active cost mode) hasn't been filled in yet.
+    Unlike totalCostFor, blank must stay blank here: the server reads a blank
+    quantity + blank cost together as "register this item without stocking
+    it yet," and a stray "0" would break that. */
+function costPayloadFor(line: CartLine): string {
+  if (line.costMode === "individual") {
+    if (line.quantity.trim() === "" || line.costPerItem.trim() === "") return "";
+    return String(totalCostFor(line));
+  }
+  return line.cost;
 }
 
 type PickerOption = { value: string; label: string };
@@ -149,18 +188,28 @@ function CartLineCard({
     NEW_ITEM_OPTION;
 
   const qty = toNumber(line.quantity);
-  const cost = toNumber(line.cost);
-  const costPerPiece = qty > 0 && cost > 0 ? cost / qty : null;
+  // Pack mode: Cost is the batch total, so cost-per-piece is derived by
+  // dividing by Qty. Individual mode: Cost per item IS the per-piece figure
+  // already — no division needed, and it doesn't depend on Qty at all.
+  const costPerPiece =
+    line.costMode === "individual"
+      ? toNumber(line.costPerItem) > 0
+        ? toNumber(line.costPerItem)
+        : null
+      : qty > 0 && toNumber(line.cost) > 0
+        ? toNumber(line.cost) / qty
+        : null;
   const suggested = costPerPiece !== null ? sellingPriceFor(costPerPiece) : null;
 
   if (collapsed) {
     const displayName =
       (line.productId ? line.productName : line.newName.trim()) || "New item";
     const price = toNumber(line.price);
+    const totalCost = totalCostFor(line);
     const summary = !isLineComplete(line)
       ? "Incomplete — tap to finish"
-      : qty > 0 && cost > 0
-        ? `${qty} pc${qty === 1 ? "" : "s"} · ${formatPeso(cost)} → ${formatPeso(price)}`
+      : qty > 0 && totalCost > 0
+        ? `${qty} pc${qty === 1 ? "" : "s"} · ${formatPeso(totalCost)} → ${formatPeso(price)}`
         : `${formatPeso(price)} · not stocked yet`;
 
     return (
@@ -223,10 +272,12 @@ function CartLineCard({
   // New-item lines only: whichever of Cost/Price hasn't been typed into
   // directly gets auto-filled from the markup calculator as the other two
   // fields change. Existing-item lines never auto-fill — restocking
-  // shouldn't silently change a real price.
+  // shouldn't silently change a real price. Individual mode's Cost per item
+  // is quantity-independent (it's already a per-piece figure), so only pack
+  // mode's Cost (a total) needs Qty in the math at all.
   function handleQuantityChange(value: string) {
     const patch: Partial<CartLine> = { quantity: value };
-    if (line.productId === null) {
+    if (line.productId === null && line.costMode === "pack") {
       const q = toNumber(value);
       if (line.priceTouched && !line.costTouched) {
         const p = toNumber(line.price);
@@ -249,14 +300,36 @@ function CartLineCard({
     onChange(patch);
   }
 
+  function handleCostPerItemChange(value: string) {
+    const patch: Partial<CartLine> = { costPerItem: value, costTouched: true };
+    if (line.productId === null && !line.priceTouched) {
+      const c = toNumber(value);
+      if (c > 0) patch.price = String(sellingPriceFor(c));
+    }
+    onChange(patch);
+  }
+
   function handlePriceChange(value: string) {
     const patch: Partial<CartLine> = { price: value, priceTouched: true };
     if (line.productId === null && !line.costTouched) {
       const p = toNumber(value);
       const q = toNumber(line.quantity);
-      if (p > 0 && q > 0) patch.cost = String(costFor(p, q));
+      if (line.costMode === "individual") {
+        if (p > 0) patch.costPerItem = String(costPerPieceFor(p));
+      } else if (p > 0 && q > 0) {
+        patch.cost = String(costFor(p, q));
+      }
     }
     onChange(patch);
+  }
+
+  // Switching modes clears both cost inputs rather than trying to convert
+  // between them — less surprising than a stale pack total silently
+  // reappearing as a per-item figure (or vice versa) if the cashier toggles
+  // back later. costTouched resets too, so the newly active field can
+  // auto-fill the suggested price fresh.
+  function handleCostModeChange(mode: CostMode) {
+    onChange({ costMode: mode, cost: "", costPerItem: "", costTouched: false });
   }
 
   return (
@@ -360,6 +433,20 @@ function CartLineCard({
         </>
       ) : null}
 
+      <div className="flex flex-col gap-1">
+        <Label className="text-xs">Bought as</Label>
+        <Tabs
+          value={line.costMode}
+          onValueChange={(value) => handleCostModeChange(value as CostMode)}
+          className="w-full min-w-0"
+        >
+          <TabsList className="w-full sm:w-fit">
+            <TabsTrigger value="pack">Pack</TabsTrigger>
+            <TabsTrigger value="individual">Individually</TabsTrigger>
+          </TabsList>
+        </Tabs>
+      </div>
+
       <div className="grid grid-cols-3 gap-2">
         <div className="flex flex-col gap-1">
           <Label htmlFor={`qty-${line.key}`} className="text-xs">
@@ -377,22 +464,41 @@ function CartLineCard({
             onChange={(event) => handleQuantityChange(event.target.value)}
           />
         </div>
-        <div className="flex flex-col gap-1">
-          <Label htmlFor={`cost-${line.key}`} className="text-xs">
-            Cost
-          </Label>
-          <Input
-            id={`cost-${line.key}`}
-            type="number"
-            step="0.01"
-            min="0"
-            inputMode="decimal"
-            required={line.productId !== null || qty > 0}
-            placeholder={line.productId === null ? "Optional" : "60.00"}
-            value={line.cost}
-            onChange={(event) => handleCostChange(event.target.value)}
-          />
-        </div>
+        {line.costMode === "individual" ? (
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={`cost-per-item-${line.key}`} className="text-xs">
+              Cost/item
+            </Label>
+            <Input
+              id={`cost-per-item-${line.key}`}
+              type="number"
+              step="0.01"
+              min="0"
+              inputMode="decimal"
+              required={line.productId !== null || qty > 0}
+              placeholder={line.productId === null ? "Optional" : "15.00"}
+              value={line.costPerItem}
+              onChange={(event) => handleCostPerItemChange(event.target.value)}
+            />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={`cost-${line.key}`} className="text-xs">
+              Cost
+            </Label>
+            <Input
+              id={`cost-${line.key}`}
+              type="number"
+              step="0.01"
+              min="0"
+              inputMode="decimal"
+              required={line.productId !== null || qty > 0}
+              placeholder={line.productId === null ? "Optional" : "60.00"}
+              value={line.cost}
+              onChange={(event) => handleCostChange(event.target.value)}
+            />
+          </div>
+        )}
         <div className="flex flex-col gap-1">
           <Label htmlFor={`price-${line.key}`} className="text-xs">
             Price
@@ -459,7 +565,9 @@ export default function BulkRestockForm({
       productName: "",
       newName: "",
       quantity: "",
+      costMode: "pack",
       cost: "",
+      costPerItem: "",
       price: "",
       priceTouched: false,
       costTouched: false,
@@ -488,10 +596,18 @@ export default function BulkRestockForm({
       if (raw) {
         const parsed: unknown = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isValidCartLine)) {
+          // A draft saved before costMode/costPerItem existed won't have
+          // them — default to "pack" (the old field's only prior meaning)
+          // rather than rejecting the whole draft.
+          const normalized: CartLine[] = parsed.map((line) => ({
+            ...line,
+            costMode: line.costMode === "individual" ? "individual" : "pack",
+            costPerItem: typeof line.costPerItem === "string" ? line.costPerItem : "",
+          }));
           // A line's product may have been deleted since the draft was
           // saved — fall back to a "new item" line using the last-known
           // name rather than silently pointing at nothing.
-          const reconciled = parsed.map((line) =>
+          const reconciled = normalized.map((line) =>
             line.productId && !products.some((p) => p.id === line.productId)
               ? {
                   ...line,
@@ -569,7 +685,7 @@ export default function BulkRestockForm({
 
   const hasContent = lines.some(hasAnyContent);
 
-  const total = lines.reduce((sum, line) => sum + toNumber(line.cost), 0);
+  const total = lines.reduce((sum, line) => sum + totalCostFor(line), 0);
   const pieceCount = lines.reduce(
     (sum, line) => sum + toNumber(line.quantity),
     0
@@ -606,7 +722,7 @@ export default function BulkRestockForm({
             product_id: line.productId,
             name: line.productId ? null : line.newName.trim(),
             quantity: line.quantity,
-            cost: line.cost,
+            cost: costPayloadFor(line),
             price: line.price,
             category_id: line.productId ? null : line.categoryId || null,
             description: line.productId ? null : line.description.trim() || null,

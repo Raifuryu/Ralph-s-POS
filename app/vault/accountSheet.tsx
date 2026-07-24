@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -25,8 +25,26 @@ const initialState: VaultMoveState = { error: null };
 
 /** Account travels as a hidden field — the card that opened this sheet
     already fixed it, so there's nothing left to pick. */
-function CashOutForm({ account }: { account: MoneyAccount }) {
+function CashOutForm({
+  account,
+  onRecorded,
+}: {
+  account: MoneyAccount;
+  /** Called shortly after a successful record — the drawer closes itself
+      instead of leaving Cancel as the only way out. */
+  onRecorded: () => void;
+}) {
   const [state, formAction, isPending] = useActionState(cashOut, initialState);
+
+  // Brief delay so "Cash out recorded." is actually readable before the
+  // sheet closes — an instant close would make the confirmation flash by
+  // unseen.
+  useEffect(() => {
+    if (!state.ok) return;
+    const timer = setTimeout(onRecorded, 700);
+    return () => clearTimeout(timer);
+  }, [state.ok, onRecorded]);
+
   return (
     <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
       <input type="hidden" name="account" value={account} />
@@ -80,8 +98,26 @@ function CashOutForm({ account }: { account: MoneyAccount }) {
   );
 }
 
-function CashInForm({ account }: { account: MoneyAccount }) {
+function CashInForm({
+  account,
+  onRecorded,
+}: {
+  account: MoneyAccount;
+  /** Called shortly after a successful record — the drawer closes itself
+      instead of leaving Cancel as the only way out. */
+  onRecorded: () => void;
+}) {
   const [state, formAction, isPending] = useActionState(cashIn, initialState);
+
+  // Brief delay so "Cash in recorded." is actually readable before the
+  // sheet closes — an instant close would make the confirmation flash by
+  // unseen.
+  useEffect(() => {
+    if (!state.ok) return;
+    const timer = setTimeout(onRecorded, 700);
+    return () => clearTimeout(timer);
+  }, [state.ok, onRecorded]);
+
   return (
     <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
       <input type="hidden" name="account" value={account} />
@@ -143,9 +179,10 @@ export default function AccountSheet({
   balance: number;
 }) {
   const label = MONEY_ACCOUNT_LABELS[account];
+  const [open, setOpen] = useState(false);
 
   return (
-    <Drawer showSwipeHandle>
+    <Drawer open={open} onOpenChange={setOpen} showSwipeHandle>
       <DrawerTrigger className="block w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-muted/30">
         <p className="text-sm text-muted-foreground">{label}</p>
         <p className="mt-1 text-2xl font-semibold tabular-nums">
@@ -169,10 +206,10 @@ export default function AccountSheet({
               <TabsTrigger value="in">Cash in</TabsTrigger>
             </TabsList>
             <TabsContent value="out" className="flex min-h-0 flex-col pt-3">
-              <CashOutForm account={account} />
+              <CashOutForm account={account} onRecorded={() => setOpen(false)} />
             </TabsContent>
             <TabsContent value="in" className="flex min-h-0 flex-col pt-3">
-              <CashInForm account={account} />
+              <CashInForm account={account} onRecorded={() => setOpen(false)} />
             </TabsContent>
           </Tabs>
         </div>

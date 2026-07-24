@@ -25,7 +25,7 @@ import TopProductsTable, { type TopProduct } from "./topProductsTable";
 const STATS_TRANSACTION_SELECT = `
   id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
   transaction_items (
-    id, transaction_id, product_id, product_name, unit_price, quantity, line_total
+    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, line_total
   )
 `;
 
@@ -230,6 +230,31 @@ export default async function StatisticsPage({
     .filter((t) => t.is_personal_take)
     .reduce((sum, t) => sum + Number(t.total), 0);
 
+  // Real profit, not gross revenue: a store sale's line only has a known
+  // margin once its product has been restocked through the app at least
+  // once (unit_cost is snapshotted from products.cost at sale time — see
+  // migration 0021). Older sales and products never restocked here have
+  // unit_cost = null, so their revenue is tracked separately and excluded
+  // from the margin math rather than silently assumed to be 100% profit.
+  // E-Service fees have no COGS to subtract — the fee itself is the whole
+  // margin, same as IncomeBreakdownCard already treats it.
+  let storeRevenueWithKnownCost = 0;
+  let storeCogs = 0;
+  let storeRevenueWithUnknownCost = 0;
+  for (const t of salesExcludingPersonal) {
+    for (const item of t.transaction_items) {
+      const lineRevenue = Number(item.line_total);
+      if (item.unit_cost !== null) {
+        storeRevenueWithKnownCost += lineRevenue;
+        storeCogs += Number(item.unit_cost) * item.quantity;
+      } else {
+        storeRevenueWithUnknownCost += lineRevenue;
+      }
+    }
+  }
+  const storeMargin = storeRevenueWithKnownCost - storeCogs;
+  const grossProfit = storeMargin + eServiceTotal;
+
   // E-Service fee income by wallet — same shape/reasoning as the dashboard's
   // IncomeBreakdownCard, just range-scoped instead of daily.
   const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
@@ -365,6 +390,23 @@ export default async function StatisticsPage({
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           <SummaryCard label="Total revenue" value={formatPeso(totalRevenue)} compact />
+          <SummaryCard
+            label="Gross profit"
+            value={formatPeso(grossProfit)}
+            breakdown={[
+              { label: "Store margin", value: formatPeso(storeMargin) },
+              { label: "E-Service fees", value: formatPeso(eServiceTotal) },
+              ...(storeRevenueWithUnknownCost > 0
+                ? [
+                    {
+                      label: "Cost unknown (excluded)",
+                      value: formatPeso(storeRevenueWithUnknownCost),
+                    },
+                  ]
+                : []),
+            ]}
+            compact
+          />
           <SummaryCard label="Transactions" value={String(transactionCount)} compact />
           <SummaryCard label="Average sale" value={formatPeso(avgSale)} compact />
           <SummaryCard label="Items sold" value={String(itemsSold)} compact />
