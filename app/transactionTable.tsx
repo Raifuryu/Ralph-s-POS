@@ -10,6 +10,7 @@ import {
   MONEY_ACCOUNT_LABELS,
   PAYMENT_METHOD_LABELS,
   type SalesEntry,
+  type TransactionItem,
 } from "@/lib/types";
 
 /** An entry plus its 1-based position in the overall (pre-grouping) list —
@@ -19,16 +20,41 @@ type NumberedEntry = { number: number; entry: SalesEntry };
 type DayGroup = {
   key: string;
   label: string;
-  /** Income for the day — a sale's total (unless it's a personal take) plus
-      every service's fee. Never principal: that just passes through. */
+  /** Real income for the day — a sale's profit (never its gross total,
+      and never for a personal take) plus every service's fee. Never
+      principal: that just passes through. */
   total: number;
   entries: NumberedEntry[];
 };
 
-/** Income contributed by one entry — the figure day totals sum. */
+/** Real profit on a sale's line items (price - cost), not gross revenue —
+    same reasoning as the dashboard's "Store profit" card and Statistics'
+    "Gross profit" KPI (see migration 0021). A line only has a known margin
+    once its product has been restocked through the app at least once;
+    revenueWithUnknownCost tracks how much of the sale's total couldn't be
+    included, so callers can tell "no profit" apart from "unknown profit"
+    instead of silently showing ₱0. */
+function saleProfit(items: TransactionItem[]) {
+  let profit = 0;
+  let revenueWithUnknownCost = 0;
+  for (const item of items) {
+    const lineRevenue = Number(item.line_total);
+    if (item.unit_cost !== null) {
+      profit += lineRevenue - Number(item.unit_cost) * item.quantity;
+    } else {
+      revenueWithUnknownCost += lineRevenue;
+    }
+  }
+  return { profit, revenueWithUnknownCost };
+}
+
+/** Income contributed by one entry — the figure day totals sum. Sales count
+    their real profit, not the gross total — matching how a service entry
+    already only counts its fee, never the pass-through principal. */
 function entryIncome(entry: SalesEntry): number {
   if (entry.kind === "sale") {
-    return entry.data.is_personal_take ? 0 : Number(entry.data.total);
+    if (entry.data.is_personal_take) return 0;
+    return saleProfit(entry.data.transaction_items).profit;
   }
   return Number(entry.data.fee);
 }
@@ -78,6 +104,14 @@ function SaleBlock({
 }) {
   const { data } = transaction;
   const tendered = data.tendered !== null ? Number(data.tendered) : null;
+  const total = Number(data.total);
+  const { profit, revenueWithUnknownCost } = saleProfit(data.transaction_items);
+  // Nothing sold on a personal take has a margin — it was never income to
+  // begin with, so the headline stays the value taken, same as always.
+  const allCostUnknown = !data.is_personal_take && revenueWithUnknownCost >= total;
+  const partialCostUnknown =
+    !data.is_personal_take && revenueWithUnknownCost > 0 && !allCostUnknown;
+
   return (
     <div className="-mx-2 flex gap-2 border-b px-2 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50">
       <RowNumber number={number} />
@@ -91,10 +125,30 @@ function SaleBlock({
                 : PAYMENT_METHOD_LABELS[data.payment_method!]}
             </span>
           </p>
-          <p className="text-sm font-semibold tabular-nums">
-            {formatPeso(Number(data.total))}
-          </p>
+          {data.is_personal_take ? (
+            <p className="text-sm font-semibold tabular-nums">
+              {formatPeso(total)}
+            </p>
+          ) : allCostUnknown ? (
+            <p className="text-sm font-medium text-muted-foreground italic">
+              Cost unknown
+            </p>
+          ) : (
+            <p className="text-sm font-semibold tabular-nums">
+              +{formatPeso(profit)}
+              {partialCostUnknown ? "*" : ""}
+            </p>
+          )}
         </div>
+
+        {!data.is_personal_take ? (
+          <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+            {formatPeso(total)} total
+            {partialCostUnknown
+              ? ` · *${formatPeso(revenueWithUnknownCost)} of that has no recorded cost yet`
+              : ""}
+          </p>
+        ) : null}
 
         <div className="mt-1 flex flex-col gap-0.5">
           {data.transaction_items.map((item) => (
