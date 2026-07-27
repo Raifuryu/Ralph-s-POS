@@ -52,6 +52,7 @@ function incomeCardCopy({
 
 const TRANSACTION_SELECT = `
   id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
+  voided_at, voided_by, void_reason,
   transaction_items (
     id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, line_total
   )
@@ -136,7 +137,7 @@ export default async function Home({
   // wallet here rather than in SQL.
   const feeQuery = supabase
     .from("service_transactions")
-    .select("fee, wallet")
+    .select("fee, wallet, voided_at")
     .gte("created_at", fromTs)
     .lte("created_at", toTs);
 
@@ -195,20 +196,28 @@ export default async function Home({
   const pageCount = pageCountFor(merged.length);
   const pageEntries = merged.slice(rangeFrom, rangeTo + 1);
 
-  // Store = real profit (price - cost) on the picked day's product sales,
-  // not gross revenue — matching how E-Service below already only counts
-  // the fee, not the pass-through principal. A line only has a known margin
-  // once its product has been restocked through the app at least once
-  // (unit_cost is snapshotted from products.cost at sale time — see
-  // migration 0021); older/never-restocked lines have no cost recorded, so
-  // they're tracked separately and excluded rather than assumed to be 100%
-  // margin. Personal takes deduct stock but aren't income, so they're
-  // excluded here (and from itemsSold below) the same way they're excluded
-  // everywhere else.
+  // Store = all product sales in the window, regardless of payment method —
+  // a sale is store revenue whether the customer paid cash, GCash, or Maya.
+  // This is the card's headline figure: gross income, not profit. Personal
+  // takes and voided sales are excluded here (and from itemsSold below) the
+  // same way they're excluded everywhere else — a voided sale had its stock
+  // and income both reversed, so it isn't really revenue anymore either.
+  const storeTotal = sales.reduce(
+    (sum, t) => sum + (t.is_personal_take || t.voided_at ? 0 : Number(t.total)),
+    0
+  );
+
+  // storeMargin is real profit (price - cost) on the same sales — shown
+  // separately as "Total profit" below the gross breakdown, not mixed into
+  // the headline above. A line only has a known margin once its product has
+  // been restocked through the app at least once (unit_cost is snapshotted
+  // from products.cost at sale time — see migration 0021); older/never-
+  // restocked lines have no cost recorded, so they're tracked separately
+  // and excluded rather than assumed to be 100% margin.
   let storeMargin = 0;
   let storeRevenueWithUnknownCost = 0;
   for (const t of sales) {
-    if (t.is_personal_take) continue;
+    if (t.is_personal_take || t.voided_at) continue;
     for (const item of t.transaction_items) {
       const lineRevenue = Number(item.line_total);
       if (item.unit_cost !== null) {
@@ -224,6 +233,7 @@ export default async function Home({
   // paid in cash — still fee income, just not tied to a specific e-wallet.
   const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
   for (const row of serviceFees ?? []) {
+    if (row.voided_at) continue;
     const fee = Number(row.fee);
     if (row.wallet === "gcash") eServiceFees.gcash += fee;
     else if (row.wallet === "maya") eServiceFees.maya += fee;
@@ -250,7 +260,7 @@ export default async function Home({
   const itemsSold = sales.reduce(
     (sum, t) =>
       sum +
-      (t.is_personal_take
+      (t.is_personal_take || t.voided_at
         ? 0
         : t.transaction_items.reduce((n, item) => n + item.quantity, 0)),
     0
@@ -287,9 +297,9 @@ export default async function Home({
           <IncomeBreakdownCard
             title={incomeTitle}
             subtitle={incomeSubtitle}
-            store={storeMargin}
-            storeLabel="Store profit"
+            store={storeTotal}
             eService={eServiceFees}
+            storeProfit={storeMargin}
           />
         </div>
 

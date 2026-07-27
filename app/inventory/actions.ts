@@ -5,43 +5,23 @@ import { redirect } from "next/navigation";
 
 import { parseMoney, parseWholeNumber } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
-import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database } from "@/lib/database.types";
 
 export type InventoryState = { error: string | null };
 
 type Parsed = {
   name: string;
   price: number;
+  /** Current per-item cost — drives the profit shown on sales (see migration
+      0021). Blank means "unknown," not zero. Normally kept up to date by
+      restocking; editable here to correct it directly. */
+  cost: number | null;
   stock: number | null;
   description: string | null;
   category_id: string | null;
   /** Blank means "use the store-wide default" (NULL) — a whole-number
       override of when this specific item's row starts reading as "low." */
   low_stock_threshold: number | null;
-  /** Present (> 0) means this submit also restocks — logged via the
-      record_restock RPC (batch qty + cost), run after the plain products
-      update above so it adds to whatever `stock` that update just wrote. */
-  restockQty: number | null;
-  restockCost: number | null;
 };
-
-/** Runs after the products update, so a restock always adds to the just-
-    written stock value rather than a stale pre-edit one. */
-async function applyRestock(
-  supabase: SupabaseClient<Database>,
-  productId: string,
-  parsed: Parsed
-): Promise<{ error: string } | null> {
-  if (parsed.restockQty === null) return null;
-
-  const { error } = await supabase.rpc("record_restock", {
-    p_product_id: productId,
-    p_quantity: parsed.restockQty,
-    p_cost: parsed.restockCost ?? 0,
-  });
-  return error ? { error: error.message } : null;
-}
 
 function parseForm(formData: FormData): Parsed | { error: string } {
   const name = String(formData.get("name") ?? "").trim();
@@ -52,6 +32,11 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     return { error: "Price must be a number with at most 2 decimal places." };
   }
 
+  const cost = parseMoney(formData.get("cost"), { allowBlank: true });
+  if (cost === "bad") {
+    return { error: "Cost must be a number with at most 2 decimal places." };
+  }
+
   // Blank quantity means "not tracked" (NULL) — deliberately distinct from 0
   // ("tracked, none left"). Negative is allowed: overselling drives stock
   // below zero, and the row must stay editable so the owner can recount.
@@ -60,27 +45,6 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   });
   if (counted === "bad") {
     return { error: "Quantity must be a whole number, or left blank." };
-  }
-
-  // Restock: quantity just bought, ADDED to the counted stock rather than
-  // replacing it. A restock on an untracked item starts counting it.
-  const restockQtyRaw = parseWholeNumber(formData.get("restock_qty"));
-  if (restockQtyRaw === "bad") {
-    return { error: "Qty bought must be a whole number." };
-  }
-  const restockQty =
-    restockQtyRaw !== null && restockQtyRaw > 0 ? restockQtyRaw : null;
-
-  const restockCost = parseMoney(formData.get("restock_cost"), {
-    allowBlank: restockQty === null,
-  });
-  if (restockCost === "bad") {
-    return {
-      error: "Price bought must be a number with at most 2 decimal places.",
-    };
-  }
-  if (restockQty !== null && restockCost === null) {
-    return { error: "Price bought is required when restocking." };
   }
 
   const description = String(formData.get("description") ?? "").trim();
@@ -99,12 +63,11 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   return {
     name,
     price,
+    cost,
     stock: counted,
     description: description || null,
     category_id: categoryId || null,
     low_stock_threshold: lowStockThreshold,
-    restockQty,
-    restockCost,
   };
 }
 
@@ -120,14 +83,12 @@ export async function updateProduct(
 
   const supabase = await createClient();
 
-  // Always write the manually-entered stock first — a restock in the same
-  // submit runs its RPC afterward (below) and adds to whatever this write
-  // just wrote, so a correction and a restock in one submit both land.
   const { error } = await supabase
     .from("products")
     .update({
       name: parsed.name,
       price: parsed.price,
+      cost: parsed.cost,
       description: parsed.description,
       category_id: parsed.category_id,
       stock: parsed.stock,
@@ -136,9 +97,6 @@ export async function updateProduct(
     .eq("id", id);
 
   if (error) return { error: error.message };
-
-  const restockError = await applyRestock(supabase, id, parsed);
-  if (restockError) return restockError;
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");

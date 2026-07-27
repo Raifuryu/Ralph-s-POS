@@ -111,9 +111,16 @@ export default function ItemPickerDrawer({
     () => new Set(topProducts.map((product) => product.id)),
     [topProducts]
   );
+  // Top items only get pulled out of this list while browsing (their own
+  // "Top items" section above covers them there). While searching, that
+  // section is hidden — so a top seller has to stay in this list, or
+  // searching for it by name would turn up nothing at all.
   const rest = useMemo(
-    () => visible.filter((product) => !topIds.has(product.id)),
-    [visible, topIds]
+    () =>
+      isSearching
+        ? visible
+        : visible.filter((product) => !topIds.has(product.id)),
+    [visible, topIds, isSearching]
   );
 
   return (

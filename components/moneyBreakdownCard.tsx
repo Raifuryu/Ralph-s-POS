@@ -33,6 +33,7 @@ export function MoneyBreakdownCard({
   subtitle,
   total,
   rows,
+  footer,
   href,
   linkLabel = "View →",
   className,
@@ -41,6 +42,10 @@ export function MoneyBreakdownCard({
   subtitle?: string;
   total: number;
   rows: BreakdownRow[];
+  /** Rendered below the row breakdown, set apart by its own divider —
+      for a derived figure that doesn't belong in the additive rows/bar
+      above (e.g. a profit line next to rows that are all gross amounts). */
+  footer?: React.ReactNode;
   /** If set, a small link to view the full breakdown elsewhere. */
   href?: string;
   linkLabel?: string;
@@ -163,6 +168,10 @@ export function MoneyBreakdownCard({
               </div>
             ))}
           </div>
+
+          {footer ? (
+            <div className="mt-3 border-t pt-2">{footer}</div>
+          ) : null}
         </>
       ) : null}
     </div>

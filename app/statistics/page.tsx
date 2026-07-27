@@ -24,6 +24,7 @@ import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
 const STATS_TRANSACTION_SELECT = `
   id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
+  voided_at, voided_by, void_reason,
   transaction_items (
     id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, line_total
   )
@@ -48,6 +49,7 @@ type ServiceRevenuePoint = {
   wallet: MoneyAccount | null;
   payment_account: MoneyAccount;
   created_at: string;
+  voided_at: string | null;
 };
 
 function LoadError({ message }: { message: string }) {
@@ -91,7 +93,7 @@ function buildRevenueBuckets(
 ): RevenueBucket[] {
   const points = [
     ...sales
-      .filter((t) => !t.is_personal_take)
+      .filter((t) => !t.is_personal_take && !t.voided_at)
       .map((t) => ({
         ts: new Date(t.created_at).getTime(),
         store: Number(t.total),
@@ -167,7 +169,7 @@ export default async function StatisticsPage({
 
   let serviceQuery = supabase
     .from("service_transactions")
-    .select("fee, wallet, payment_account, created_at")
+    .select("fee, wallet, payment_account, created_at, voided_at")
     .order("created_at", { ascending: true });
   if (params.from_ts) serviceQuery = serviceQuery.gte("created_at", params.from_ts);
   if (params.to_ts) serviceQuery = serviceQuery.lte("created_at", params.to_ts);
@@ -207,8 +209,15 @@ export default async function StatisticsPage({
   if (vaultMovementError) return <LoadError message={vaultMovementError.message} />;
 
   const sales = salesData ?? [];
-  const serviceList = serviceData ?? [];
-  const salesExcludingPersonal = sales.filter((t) => !t.is_personal_take);
+  // A voided service transaction had every entry it posted reversed — same
+  // "excluded everywhere" treatment as a voided/personal-take sale.
+  const serviceList = (serviceData ?? []).filter((s) => !s.voided_at);
+  // A voided sale had its stock and any posted income both reversed — it
+  // isn't real revenue, demand, or a "transaction that happened" anymore,
+  // so it's excluded the same way personal takes already are everywhere a
+  // sum/count/average is computed below.
+  const nonVoidedSales = sales.filter((t) => !t.voided_at);
+  const salesExcludingPersonal = nonVoidedSales.filter((t) => !t.is_personal_take);
 
   const storeTotal = salesExcludingPersonal.reduce(
     (sum, t) => sum + Number(t.total),
@@ -216,7 +225,7 @@ export default async function StatisticsPage({
   );
   const eServiceTotal = serviceList.reduce((sum, s) => sum + Number(s.fee), 0);
   const totalRevenue = storeTotal + eServiceTotal;
-  const transactionCount = sales.length + serviceList.length;
+  const transactionCount = nonVoidedSales.length + serviceList.length;
   const avgSale =
     salesExcludingPersonal.length > 0
       ? storeTotal / salesExcludingPersonal.length
@@ -226,7 +235,7 @@ export default async function StatisticsPage({
       sum + t.transaction_items.reduce((n, item) => n + item.quantity, 0),
     0
   );
-  const personalTakesValue = sales
+  const personalTakesValue = nonVoidedSales
     .filter((t) => t.is_personal_take)
     .reduce((sum, t) => sum + Number(t.total), 0);
 

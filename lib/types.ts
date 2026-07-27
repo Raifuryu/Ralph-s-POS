@@ -61,6 +61,7 @@ export const VAULT_ENTRY_TYPE_LABELS: Record<VaultEntryType, string> = {
   deposit: "Cash in",
   withdrawal: "Cash out",
   count: "Count",
+  void: "Void",
 };
 
 /** The three places money lives: the physical box and the two wallets. */

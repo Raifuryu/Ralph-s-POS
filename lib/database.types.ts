@@ -141,6 +141,9 @@ export type Database = {
           service_id: string | null
           service_name: string
           tendered: number | null
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
           wallet: Database["public"]["Enums"]["money_account"] | null
         }
         Insert: {
@@ -157,6 +160,9 @@ export type Database = {
           service_id?: string | null
           service_name: string
           tendered?: number | null
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
           wallet?: Database["public"]["Enums"]["money_account"] | null
         }
         Update: {
@@ -173,6 +179,9 @@ export type Database = {
           service_id?: string | null
           service_name?: string
           tendered?: number | null
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
           wallet?: Database["public"]["Enums"]["money_account"] | null
         }
         Relationships: [
@@ -281,6 +290,9 @@ export type Database = {
           payment_method: Database["public"]["Enums"]["money_account"] | null
           tendered: number | null
           total: number
+          void_reason: string | null
+          voided_at: string | null
+          voided_by: string | null
         }
         Insert: {
           cashier_id?: string
@@ -290,6 +302,9 @@ export type Database = {
           payment_method?: Database["public"]["Enums"]["money_account"] | null
           tendered?: number | null
           total: number
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
         }
         Update: {
           cashier_id?: string
@@ -299,6 +314,9 @@ export type Database = {
           payment_method?: Database["public"]["Enums"]["money_account"] | null
           tendered?: number | null
           total?: number
+          void_reason?: string | null
+          voided_at?: string | null
+          voided_by?: string | null
         }
         Relationships: []
       }
@@ -426,11 +444,25 @@ export type Database = {
         }
         Returns: Json
       }
+      void_service_transaction: {
+        Args: { p_reason?: string; p_service_transaction_id: string }
+        Returns: undefined
+      }
+      void_transaction: {
+        Args: { p_reason?: string; p_transaction_id: string }
+        Returns: undefined
+      }
     }
     Enums: {
       cash_flow: "in" | "out"
       money_account: "cash" | "gcash" | "maya"
-      vault_entry_type: "sale" | "service" | "deposit" | "withdrawal" | "count"
+      vault_entry_type:
+        | "sale"
+        | "service"
+        | "deposit"
+        | "withdrawal"
+        | "count"
+        | "void"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -560,7 +592,14 @@ export const Constants = {
     Enums: {
       cash_flow: ["in", "out"],
       money_account: ["cash", "gcash", "maya"],
-      vault_entry_type: ["sale", "service", "deposit", "withdrawal", "count"],
+      vault_entry_type: [
+        "sale",
+        "service",
+        "deposit",
+        "withdrawal",
+        "count",
+        "void",
+      ],
     },
   },
 } as const

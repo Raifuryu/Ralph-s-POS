@@ -1,3 +1,7 @@
+"use client";
+
+import { useActionState, useEffect } from "react";
+
 import { EmptyState } from "@/components/emptyState";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -12,6 +16,14 @@ import {
   type SalesEntry,
   type TransactionItem,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import {
+  voidServiceTransaction,
+  voidTransaction,
+  type VoidState,
+} from "./transactionActions";
+
+const initialVoidState: VoidState = { error: null };
 
 /** An entry plus its 1-based position in the overall (pre-grouping) list —
     what the row number on the left shows. */
@@ -21,8 +33,8 @@ type DayGroup = {
   key: string;
   label: string;
   /** Real income for the day — a sale's profit (never its gross total,
-      and never for a personal take) plus every service's fee. Never
-      principal: that just passes through. */
+      never for a personal take, and never for a voided sale) plus every
+      service's fee. Never principal: that just passes through. */
   total: number;
   entries: NumberedEntry[];
 };
@@ -50,8 +62,12 @@ function saleProfit(items: TransactionItem[]) {
 
 /** Income contributed by one entry — the figure day totals sum. Sales count
     their real profit, not the gross total — matching how a service entry
-    already only counts its fee, never the pass-through principal. */
+    already only counts its fee, never the pass-through principal. A voided
+    entry (sale or service) contributes nothing: whatever it posted has been
+    reversed, so it's not really income anymore, just a struck-through
+    record of a mistake. */
 function entryIncome(entry: SalesEntry): number {
+  if (entry.data.voided_at) return 0;
   if (entry.kind === "sale") {
     if (entry.data.is_personal_take) return 0;
     return saleProfit(entry.data.transaction_items).profit;
@@ -105,6 +121,7 @@ function SaleBlock({
   const { data } = transaction;
   const tendered = data.tendered !== null ? Number(data.tendered) : null;
   const total = Number(data.total);
+  const isVoided = data.voided_at !== null;
   const { profit, revenueWithUnknownCost } = saleProfit(data.transaction_items);
   // Nothing sold on a personal take has a margin — it was never income to
   // begin with, so the headline stays the value taken, same as always.
@@ -112,8 +129,49 @@ function SaleBlock({
   const partialCostUnknown =
     !data.is_personal_take && revenueWithUnknownCost > 0 && !allCostUnknown;
 
+  const [state, formAction, isPending] = useActionState(
+    voidTransaction,
+    initialVoidState
+  );
+
+  useEffect(() => {
+    if (state.error) alert(state.error);
+  }, [state.error]);
+
+  function handleClick() {
+    if (isVoided || isPending) return;
+    const noun = data.is_personal_take ? "take" : "sale";
+    const consequence = data.is_personal_take
+      ? "Stock will be returned."
+      : "Stock will be returned and the income removed from the vault.";
+    if (!confirm(`Void this ${noun}? ${consequence} This can't be undone.`)) {
+      return;
+    }
+    const fd = new FormData();
+    fd.set("id", data.id);
+    formAction(fd);
+  }
+
   return (
-    <div className="-mx-2 flex gap-2 border-b px-2 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50">
+    <div
+      role="button"
+      tabIndex={isVoided ? -1 : 0}
+      aria-disabled={isVoided || isPending}
+      onClick={handleClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleClick();
+        }
+      }}
+      className={cn(
+        "-mx-2 flex gap-2 border-b border-l-2 px-2 py-2.5 transition-colors last:border-b-0",
+        isVoided
+          ? "cursor-default border-l-destructive bg-destructive/5 opacity-70"
+          : "cursor-pointer border-l-transparent hover:bg-muted/50 active:bg-muted",
+        isPending && "opacity-50"
+      )}
+    >
       <RowNumber number={number} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
@@ -124,8 +182,13 @@ function SaleBlock({
                 ? "Personal take"
                 : PAYMENT_METHOD_LABELS[data.payment_method!]}
             </span>
+            {isVoided ? (
+              <Badge className="ml-2 bg-destructive/10 align-middle text-destructive">
+                Voided
+              </Badge>
+            ) : null}
           </p>
-          {data.is_personal_take ? (
+          {isVoided ? null : data.is_personal_take ? (
             <p className="text-sm font-semibold tabular-nums">
               {formatPeso(total)}
             </p>
@@ -141,7 +204,7 @@ function SaleBlock({
           )}
         </div>
 
-        {!data.is_personal_take ? (
+        {!data.is_personal_take && !isVoided ? (
           <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
             {formatPeso(total)} total
             {partialCostUnknown
@@ -150,7 +213,12 @@ function SaleBlock({
           </p>
         ) : null}
 
-        <div className="mt-1 flex flex-col gap-0.5">
+        <div
+          className={cn(
+            "mt-1 flex flex-col gap-0.5",
+            isVoided && "line-through decoration-destructive/50"
+          )}
+        >
           {data.transaction_items.map((item) => (
             <div
               key={item.id}
@@ -170,7 +238,12 @@ function SaleBlock({
           ))}
         </div>
 
-        {tendered !== null ? (
+        {isVoided ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatPeso(total)} {data.is_personal_take ? "value" : "sale"} reversed
+            {data.void_reason ? ` · ${data.void_reason}` : ""}
+          </p>
+        ) : tendered !== null ? (
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
             Given {formatPeso(tendered)} · change{" "}
             {formatPeso(tendered - Number(data.total))}
@@ -191,8 +264,51 @@ function ServiceBlock({
   const { data } = service;
   const tendered = data.tendered !== null ? Number(data.tendered) : null;
   const due = Number(data.principal) + Number(data.fee);
+  const isVoided = data.voided_at !== null;
+
+  const [state, formAction, isPending] = useActionState(
+    voidServiceTransaction,
+    initialVoidState
+  );
+
+  useEffect(() => {
+    if (state.error) alert(state.error);
+  }, [state.error]);
+
+  function handleClick() {
+    if (isVoided || isPending) return;
+    if (
+      !confirm(
+        "Void this service transaction? The income it posted will be removed from the vault. This can't be undone."
+      )
+    ) {
+      return;
+    }
+    const fd = new FormData();
+    fd.set("id", data.id);
+    formAction(fd);
+  }
+
   return (
-    <div className="-mx-2 flex gap-2 border-b px-2 py-2.5 transition-colors last:border-b-0 hover:bg-muted/50">
+    <div
+      role="button"
+      tabIndex={isVoided ? -1 : 0}
+      aria-disabled={isVoided || isPending}
+      onClick={handleClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          handleClick();
+        }
+      }}
+      className={cn(
+        "-mx-2 flex gap-2 border-b border-l-2 px-2 py-2.5 transition-colors last:border-b-0",
+        isVoided
+          ? "cursor-default border-l-destructive bg-destructive/5 opacity-70"
+          : "cursor-pointer border-l-transparent hover:bg-muted/50 active:bg-muted",
+        isPending && "opacity-50"
+      )}
+    >
       <RowNumber number={number} />
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
@@ -201,13 +317,25 @@ function ServiceBlock({
             <span className="ml-2 font-normal text-muted-foreground">
               {data.service_name}
             </span>
+            {isVoided ? (
+              <Badge className="ml-2 bg-destructive/10 align-middle text-destructive">
+                Voided
+              </Badge>
+            ) : null}
           </p>
-          <p className="shrink-0 text-sm font-semibold tabular-nums">
-            +{formatPeso(Number(data.fee))}
-          </p>
+          {isVoided ? null : (
+            <p className="shrink-0 text-sm font-semibold tabular-nums">
+              +{formatPeso(Number(data.fee))}
+            </p>
+          )}
         </div>
 
-        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+        <p
+          className={cn(
+            "mt-0.5 text-xs text-muted-foreground tabular-nums",
+            isVoided && "line-through decoration-destructive/50"
+          )}
+        >
           {formatPeso(Number(data.principal))} {data.cash_flow === "in" ? "via" : "to"}{" "}
           {MONEY_ACCOUNT_LABELS[data.payment_account]}
           {data.wallet ? ` · ${MONEY_ACCOUNT_LABELS[data.wallet]} wallet` : ""}
@@ -219,7 +347,12 @@ function ServiceBlock({
           </p>
         ) : null}
 
-        {tendered !== null ? (
+        {isVoided ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {formatPeso(due)} reversed
+            {data.void_reason ? ` · ${data.void_reason}` : ""}
+          </p>
+        ) : tendered !== null ? (
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
             Given {formatPeso(tendered)} · change {formatPeso(tendered - due)}
           </p>

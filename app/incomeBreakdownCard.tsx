@@ -1,5 +1,6 @@
 import { MoneyBreakdownCard, type BreakdownRow } from "@/components/moneyBreakdownCard";
 import { ACCOUNT_COLORS } from "@/lib/accountColors";
+import { formatPeso } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS } from "@/lib/types";
 
 /**
@@ -42,6 +43,7 @@ export default function IncomeBreakdownCard({
   store,
   storeLabel = "Store",
   eService,
+  storeProfit,
   className,
 }: {
   title: string;
@@ -52,10 +54,22 @@ export default function IncomeBreakdownCard({
       which one this is, defaulting to the plain, meaning-agnostic "Store". */
   storeLabel?: string;
   eService: EServiceFees;
+  /** Store's real profit (price - cost). When provided, this — not `store`
+      — is what the "Store" row displays (labeled "Store profit"); `store`
+      itself is used only for the headline total, which always stays gross.
+      Also feeds the "Total profit" line below E-Service (+ E-Service fees,
+      already pure profit since the principal is a pass-through). Omit to
+      fall back to plain gross everywhere, and skip the profit line. */
+  storeProfit?: number;
   className?: string;
 }) {
   const eServiceTotal = eService.gcash + eService.maya + eService.other;
+  // Headline stays gross even when storeProfit is supplied — the profit
+  // view lives in the "Store" row label/value and the footer below, not the
+  // big number up top.
   const total = store + eServiceTotal;
+  const totalProfit =
+    storeProfit !== undefined ? storeProfit + eServiceTotal : undefined;
 
   const eServiceSubRows: BreakdownRow[] = [
     {
@@ -76,7 +90,12 @@ export default function IncomeBreakdownCard({
   ];
 
   const rows: BreakdownRow[] = [
-    { key: "store", label: storeLabel, value: store, color: STORE_COLOR },
+    {
+      key: "store",
+      label: storeProfit !== undefined ? "Store profit" : storeLabel,
+      value: storeProfit !== undefined ? storeProfit : store,
+      color: STORE_COLOR,
+    },
     {
       key: "eservice",
       label: "E-Service",
@@ -92,6 +111,18 @@ export default function IncomeBreakdownCard({
       subtitle={subtitle}
       total={total}
       rows={rows}
+      footer={
+        totalProfit !== undefined ? (
+          <p className="flex items-baseline justify-between gap-2 text-xs">
+            <span className="font-medium text-muted-foreground">
+              Total profit
+            </span>
+            <span className="font-semibold tabular-nums">
+              {formatPeso(totalProfit)}
+            </span>
+          </p>
+        ) : undefined
+      }
       className={className}
     />
   );
