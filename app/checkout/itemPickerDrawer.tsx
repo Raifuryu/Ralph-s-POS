@@ -29,12 +29,18 @@ function CatalogueRow({
   quantity: number;
   onAdd: () => void;
 }) {
+  // Untracked (null) stock is never flagged — there's nothing to compare
+  // against. Same "out" threshold as the inventory list's stockStatus().
+  const outOfStock = product.stock !== null && product.stock <= 0;
   return (
     <button
       type="button"
       aria-label={`Add ${product.name}`}
       onClick={onAdd}
-      className="flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50 active:bg-muted"
+      className={cn(
+        "flex items-center justify-between gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50 active:bg-muted",
+        outOfStock && "border-l-4 border-l-destructive bg-destructive/5"
+      )}
     >
       <div className="min-w-0">
         <p className="truncate font-medium">{product.name}</p>
@@ -42,7 +48,14 @@ function CatalogueRow({
           {formatPeso(Number(product.price))}
           {/* stock === null means the item isn't counted, so there is no
               stock figure to show — distinct from 0. */}
-          {product.stock !== null ? ` · ${product.stock} in stock` : null}
+          {product.stock !== null ? (
+            <>
+              {" · "}
+              <span className={outOfStock ? "font-medium text-destructive" : undefined}>
+                {outOfStock ? "out of stock" : `${product.stock} in stock`}
+              </span>
+            </>
+          ) : null}
         </p>
         {product.description ? (
           <p className="truncate text-xs text-muted-foreground">
