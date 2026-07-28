@@ -25,10 +25,13 @@ import CheckoutForm from "./checkout/checkoutForm";
  * migration 0031's record_visit(), which records the whole thing (either
  * kind, or both together) in one atomic transaction.
  *
- * The drawer unmounts its contents on close, so quantities and search reset
- * for the next sale without any bookkeeping here. Controlled (not just
- * Trigger/Close-driven) so a successful sale can close it automatically
- * instead of waiting on the Done button.
+ * The drawer unmounts its contents on close (search/expanded-discount UI
+ * state resets for free), but the in-progress cart and services survive —
+ * CheckoutForm persists them to sessionStorage and restores them on the next
+ * open, so an accidental close (or a phone screen lock) doesn't lose a
+ * half-built sale. CheckoutForm's own "Reset" button is the deliberate way
+ * to clear one. Controlled (not just Trigger/Close-driven) so a successful
+ * sale can close it automatically instead of waiting on the Done button.
  */
 export default function NewSaleDrawer({
   products,

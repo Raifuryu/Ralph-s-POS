@@ -475,9 +475,14 @@ export default async function StatisticsPage({
           />
         </div>
 
-        <TopProductsTable title="Top-selling products" products={topProducts} />
+        <TopProductsTable
+          key={`products-${subtitle}`}
+          title="Top-selling products"
+          products={topProducts}
+        />
 
         <TopProductsTable
+          key={`services-${subtitle}`}
           title="E-Services"
           products={serviceBreakdown}
           itemHeader="Service"

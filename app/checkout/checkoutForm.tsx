@@ -61,6 +61,19 @@ function discountAmountFor(
   return Math.min(pesos, subtotal);
 }
 
+// Versioned so a future change to this shape can't misread an old draft
+// left over from before a deploy.
+const DRAFT_STORAGE_KEY = "ralph-pos:sale-draft:v1";
+
+type SaleDraft = {
+  quantities: Record<string, number>;
+  discountDrafts: Record<string, DiscountDraft>;
+  serviceDrafts: ServiceDraft[];
+  paymentMethod: PaymentMethod;
+  tendered: string;
+  personalTake: boolean;
+};
+
 export default function CheckoutForm({
   products,
   topProductIds,
@@ -106,6 +119,7 @@ export default function CheckoutForm({
   // Stock still leaves the shelf, but nothing was sold — no payment method,
   // no change to tender, no income. See app/checkout/actions.ts.
   const [personalTake, setPersonalTake] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [state, formAction, isPending] = useActionState(
     recordVisit,
     initialState
@@ -118,6 +132,102 @@ export default function CheckoutForm({
     const timer = setTimeout(onRecorded, 700);
     return () => clearTimeout(timer);
   }, [state.visitId, onRecorded]);
+
+  // Restores an in-progress sale after the sheet is closed and reopened (or
+  // the page is refreshed) — sessionStorage survives that; component state
+  // doesn't once NewSaleDrawer unmounts its contents on close. Scoped to the
+  // browser tab's session rather than saved indefinitely, so a draft from a
+  // previous day never resurfaces.
+  //
+  // Deliberately setState-in-effect: sessionStorage doesn't exist during
+  // SSR, so the initial render (server AND the first client render, which
+  // must match it for hydration) always renders the plain default. Reading
+  // the real draft has to happen after hydration completes, in an effect —
+  // reading it any earlier (e.g. a lazy useState initializer) would make the
+  // first client render diverge from the server-rendered HTML.
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+      if (raw) {
+        const draft = JSON.parse(raw) as Partial<SaleDraft>;
+        if (draft.quantities && typeof draft.quantities === "object") {
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setQuantities(draft.quantities);
+        }
+        if (draft.discountDrafts && typeof draft.discountDrafts === "object") {
+          setDiscountDrafts(draft.discountDrafts);
+        }
+        if (Array.isArray(draft.serviceDrafts)) {
+          setServiceDrafts(draft.serviceDrafts);
+        }
+        if (draft.paymentMethod) setPaymentMethod(draft.paymentMethod);
+        if (typeof draft.tendered === "string") setTendered(draft.tendered);
+        if (typeof draft.personalTake === "boolean") {
+          setPersonalTake(draft.personalTake);
+        }
+      }
+    } catch {
+      // Corrupt or inaccessible storage — start with a blank sale rather
+      // than crash the sheet.
+    }
+    setHydrated(true);
+  }, []);
+
+  // Persists once hydration has settled, never before — writing on the very
+  // first render (still showing blank defaults) would stomp a real draft
+  // with emptiness before it's had a chance to load.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      const draft: SaleDraft = {
+        quantities,
+        discountDrafts,
+        serviceDrafts,
+        paymentMethod,
+        tendered,
+        personalTake
+      };
+      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
+    } catch {
+      // Storage full/unavailable — the draft just won't survive a close,
+      // not fatal to the sale itself.
+    }
+  }, [
+    hydrated,
+    quantities,
+    discountDrafts,
+    serviceDrafts,
+    paymentMethod,
+    tendered,
+    personalTake
+  ]);
+
+  // A recorded sale is done being a "draft" — clear it immediately so it
+  // can't resurface on the next mount. In-memory state doesn't need
+  // resetting here: the drawer unmounts on close (see NewSaleDrawer).
+  useEffect(() => {
+    if (!state.visitId) return;
+    try {
+      sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }, [state.visitId]);
+
+  function resetDraft() {
+    setQuantities({});
+    setDiscountDrafts({});
+    setExpandedDiscountId(null);
+    setServiceDrafts([]);
+    setPaymentMethod("cash");
+    setTendered("");
+    setPersonalTake(false);
+    try {
+      sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+  }
 
   function removeServiceDraft(key: string) {
     setServiceDrafts((prev) => prev.filter((draft) => draft.key !== key));
@@ -363,7 +473,24 @@ export default function CheckoutForm({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 border-t pt-3">
-        <p className="text-sm font-medium">In this sale</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm font-medium">In this sale</p>
+          {cart.length > 0 ||
+          serviceDrafts.length > 0 ||
+          personalTake ||
+          tendered !== "" ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                if (confirm("Clear this sale and start over?")) resetDraft();
+              }}
+            >
+              Reset
+            </Button>
+          ) : null}
+        </div>
         {cart.length === 0 && serviceDrafts.length === 0 ? (
           <EmptyState
             title="No items yet."

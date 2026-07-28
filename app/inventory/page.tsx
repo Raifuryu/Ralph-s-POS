@@ -20,13 +20,16 @@ import {
 } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { createClient } from "@/lib/supabase/server";
-import { MONEY_ACCOUNT_LABELS, type Product, type Service } from "@/lib/types";
+import {
+  MONEY_ACCOUNT_LABELS,
+  type MoneyAccount,
+  type Product,
+  type Service,
+} from "@/lib/types";
 import BulkRestockSheet from "./bulkRestockSheet";
+import HistorySheet, { type HistoryEntry } from "./historySheet";
 import ItemsBrowser from "./itemsBrowser";
 import ProductSheet from "./productSheet";
-import RestockHistorySheet, {
-  type RestockHistoryEntry,
-} from "./restockHistorySheet";
 import ServiceDeleteButton from "./serviceDeleteButton";
 import ServiceForm from "./serviceForm";
 
@@ -74,7 +77,7 @@ export default async function InventoryPage({
         "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at"
       )
       .order("name"),
-    // Restock history is independent of the queries above (keyed only by
+    // History is independent of the queries above (keyed only by
     // ?history=), so it rides in the same Promise.all instead of waiting on
     // them to resolve first.
     historyId
@@ -87,10 +90,25 @@ export default async function InventoryPage({
     historyId
       ? supabase
           .from("transaction_items")
-          .select("line_total, transactions(created_at)")
+          .select(
+            "id, quantity, unit_price, discount_amount, line_total, transactions(created_at, is_personal_take, voided_at, void_reason, payment_method)"
+          )
           .eq("product_id", historyId)
           .overrideTypes<
-            { line_total: number; transactions: { created_at: string } | null }[],
+            {
+              id: string;
+              quantity: number;
+              unit_price: number;
+              discount_amount: number;
+              line_total: number;
+              transactions: {
+                created_at: string;
+                is_personal_take: boolean;
+                voided_at: string | null;
+                void_reason: string | null;
+                payment_method: MoneyAccount | null;
+              } | null;
+            }[],
             { merge: false }
           >()
       : Promise.resolve({ data: null, error: null }),
@@ -104,7 +122,7 @@ export default async function InventoryPage({
   if (restocksError) {
     return (
       <PageError
-        title="Could not load restock history"
+        title="Could not load history"
         message={restocksError.message}
       />
     );
@@ -112,7 +130,7 @@ export default async function InventoryPage({
   if (itemsError) {
     return (
       <PageError
-        title="Could not load restock history"
+        title="Could not load history"
         message={itemsError.message}
       />
     );
@@ -145,8 +163,16 @@ export default async function InventoryPage({
   // Sales attributed to a batch = this product's revenue from the batch's
   // created_at onward. An earlier batch's window overlaps a later batch's,
   // so the same sale can count toward both — see the caveat in the sheet.
+  // Voided sales and personal takes are excluded here: neither one actually
+  // put cash toward recovering what the batch cost, even though both still
+  // appear as their own entries in the history list below.
   const sales = (items ?? [])
-    .filter((item) => item.transactions !== null)
+    .filter(
+      (item) =>
+        item.transactions !== null &&
+        !item.transactions.voided_at &&
+        !item.transactions.is_personal_take
+    )
     .map((item) => ({
       lineTotal: Number(item.line_total),
       soldAt: new Date(item.transactions!.created_at).getTime(),
@@ -171,16 +197,35 @@ export default async function InventoryPage({
     recoveredById.set(restock.id, remaining);
   }
 
-  const historyEntries: RestockHistoryEntry[] = (restocks ?? []).map(
-    (restock) => ({
-      id: restock.id,
-      quantity: restock.quantity,
-      cost: Number(restock.cost),
-      note: restock.note,
-      created_at: restock.created_at,
-      recovered: recoveredById.get(restock.id) ?? 0,
-    })
-  );
+  const historyEntries: HistoryEntry[] = [
+    ...(restocks ?? []).map(
+      (restock): HistoryEntry => ({
+        kind: "restock",
+        id: restock.id,
+        quantity: restock.quantity,
+        cost: Number(restock.cost),
+        note: restock.note,
+        created_at: restock.created_at,
+        recovered: recoveredById.get(restock.id) ?? 0,
+      })
+    ),
+    ...(items ?? [])
+      .filter((item) => item.transactions !== null)
+      .map(
+        (item): HistoryEntry => ({
+          kind: "sale",
+          id: item.id,
+          quantity: item.quantity,
+          line_total: Number(item.line_total),
+          discount_amount: Number(item.discount_amount),
+          created_at: item.transactions!.created_at,
+          is_personal_take: item.transactions!.is_personal_take,
+          voided_at: item.transactions!.voided_at,
+          void_reason: item.transactions!.void_reason,
+          payment_method: item.transactions!.payment_method,
+        })
+      ),
+  ].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   return (
     <PageShell>
@@ -295,7 +340,7 @@ export default async function InventoryPage({
           categories={categories ?? []}
         />
 
-        <RestockHistorySheet
+        <HistorySheet
           open={showHistory}
           productName={historyProduct?.name}
           entries={historyEntries}
