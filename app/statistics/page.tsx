@@ -24,9 +24,9 @@ import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
 const STATS_TRANSACTION_SELECT = `
   id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
-  voided_at, voided_by, void_reason,
+  voided_at, voided_by, void_reason, visit_id,
   transaction_items (
-    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, line_total
+    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total
   )
 `;
 
@@ -50,6 +50,9 @@ type ServiceRevenuePoint = {
   payment_account: MoneyAccount;
   created_at: string;
   voided_at: string | null;
+  service_name: string;
+  unit_label: string | null;
+  unit_quantity: number | null;
 };
 
 function LoadError({ message }: { message: string }) {
@@ -169,7 +172,9 @@ export default async function StatisticsPage({
 
   let serviceQuery = supabase
     .from("service_transactions")
-    .select("fee, wallet, payment_account, created_at, voided_at")
+    .select(
+      "fee, wallet, payment_account, created_at, voided_at, service_name, unit_label, unit_quantity"
+    )
     .order("created_at", { ascending: true });
   if (params.from_ts) serviceQuery = serviceQuery.gte("created_at", params.from_ts);
   if (params.to_ts) serviceQuery = serviceQuery.lte("created_at", params.to_ts);
@@ -377,6 +382,28 @@ export default async function StatisticsPage({
     .map(([name, revenue]) => ({ key: name, name, revenue }))
     .sort((a, b) => b.revenue - a.revenue);
 
+  // Same "grouped by what was actually sold" idea as topProducts above, but
+  // for services — a per-unit service breaks out per variant (its unit_label
+  // snapshot), so Xerox's Black & White and Colored show as separate rows.
+  // "Units" for a flat/tiered service (no unit_label) falls back to a plain
+  // transaction count — there's no natural quantity for a GCash load.
+  const serviceAgg = new Map<string, { units: number; revenue: number }>();
+  for (const s of serviceList) {
+    const key = s.unit_label ? `${s.service_name} — ${s.unit_label}` : s.service_name;
+    const existing = serviceAgg.get(key);
+    const units = s.unit_quantity ?? 1;
+    const revenue = Number(s.fee);
+    if (existing) {
+      existing.units += units;
+      existing.revenue += revenue;
+    } else {
+      serviceAgg.set(key, { units, revenue });
+    }
+  }
+  const serviceBreakdown: TopProduct[] = [...serviceAgg.entries()]
+    .map(([name, v]) => ({ key: name, name, units: v.units, revenue: v.revenue }))
+    .sort((a, b) => b.revenue - a.revenue);
+
   const buckets = buildRevenueBuckets(
     sales,
     serviceList,
@@ -449,6 +476,14 @@ export default async function StatisticsPage({
         </div>
 
         <TopProductsTable title="Top-selling products" products={topProducts} />
+
+        <TopProductsTable
+          title="E-Services"
+          products={serviceBreakdown}
+          itemHeader="Service"
+          unitsHeader="Qty"
+          emptyTitle="No e-service transactions in this window yet."
+        />
 
         <CategoryLeaderboard
           title="Sales by category"

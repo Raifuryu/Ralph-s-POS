@@ -21,6 +21,8 @@ type Parsed = {
   /** Blank means "use the store-wide default" (NULL) — a whole-number
       override of when this specific item's row starts reading as "low." */
   low_stock_threshold: number | null;
+  /** "YYYY-MM-DD", or null for items that don't expire. */
+  expiry_date: string | null;
 };
 
 function parseForm(formData: FormData): Parsed | { error: string } {
@@ -60,6 +62,22 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     return { error: "Low stock threshold must be a whole number, or left blank." };
   }
 
+  // "YYYY-MM-DD" from the native date input, or blank for items that don't
+  // expire. Stored as a plain date (no time/timezone) — the inventory list
+  // compares it against the store's own calendar day, same reasoning
+  // day-grouping elsewhere in the app already uses.
+  const expiryDateRaw = String(formData.get("expiry_date") ?? "").trim();
+  let expiryDate: string | null = null;
+  if (expiryDateRaw) {
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(expiryDateRaw) ||
+      Number.isNaN(new Date(expiryDateRaw).getTime())
+    ) {
+      return { error: "Expiry date must be a valid date." };
+    }
+    expiryDate = expiryDateRaw;
+  }
+
   return {
     name,
     price,
@@ -68,6 +86,7 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     description: description || null,
     category_id: categoryId || null,
     low_stock_threshold: lowStockThreshold,
+    expiry_date: expiryDate,
   };
 }
 
@@ -93,6 +112,7 @@ export async function updateProduct(
       category_id: parsed.category_id,
       stock: parsed.stock,
       low_stock_threshold: parsed.low_stock_threshold,
+      expiry_date: parsed.expiry_date,
     })
     .eq("id", id);
 

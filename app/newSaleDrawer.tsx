@@ -14,13 +14,16 @@ import {
   DrawerTrigger,
 } from "@/components/ui/drawer";
 import { cn } from "@/lib/utils";
-import type { Product } from "@/lib/types";
+import type { MoneyAccount, Product, Service } from "@/lib/types";
 import CheckoutForm from "./checkout/checkoutForm";
 
 /**
  * "New sale" opens as a bottom sheet instead of navigating away, so the
  * cashier never loses the dashboard. Two triggers, one drawer:
  * header button from `sm` up, floating bottom-centre pill on phones.
+ * Covers both products and e-services in one cart — see CheckoutForm and
+ * migration 0031's record_visit(), which records the whole thing (either
+ * kind, or both together) in one atomic transaction.
  *
  * The drawer unmounts its contents on close, so quantities and search reset
  * for the next sale without any bookkeeping here. Controlled (not just
@@ -30,10 +33,14 @@ import CheckoutForm from "./checkout/checkoutForm";
 export default function NewSaleDrawer({
   products,
   topProductIds,
+  services,
+  balances,
 }: {
   products: Product[];
   /** Product ids ranked by units sold, best first. */
   topProductIds?: string[];
+  services: Service[];
+  balances: Map<MoneyAccount, number>;
 }) {
   const [open, setOpen] = useState(false);
 
@@ -44,12 +51,11 @@ export default function NewSaleDrawer({
         New sale
       </DrawerTrigger>
 
-      {/* Floating pill on phones, paired with Service: starts just right of
-          the screen's centreline (Service ends just left of it). */}
+      {/* Floating pill on phones, centred now that it's the only one. */}
       <DrawerTrigger
         className={cn(
           buttonVariants(),
-          "fixed left-1/2 z-50 ml-1 sm:hidden",
+          "fixed left-1/2 z-50 -translate-x-1/2 sm:hidden",
           // Sits above AppNav's bottom tab bar (--bottom-nav-h), plus the
           // safe-area inset for notched phones.
           "bottom-[calc(1.5rem+env(safe-area-inset-bottom)+var(--bottom-nav-h))]",
@@ -76,6 +82,8 @@ export default function NewSaleDrawer({
           <CheckoutForm
             products={products}
             topProductIds={topProductIds}
+            services={services}
+            balances={balances}
             onRecorded={() => setOpen(false)}
             doneSlot={
               <DrawerClose

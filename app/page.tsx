@@ -16,7 +16,6 @@ import { signOut } from "./login/actions";
 import DashboardDateFilter from "./dashboardDateFilter";
 import IncomeBreakdownCard, { type EServiceFees } from "./incomeBreakdownCard";
 import NewSaleDrawer from "./newSaleDrawer";
-import ServiceDrawer from "./serviceDrawer";
 import VaultCard from "./vaultCard";
 import TransactionTabs from "./transactionTabs";
 
@@ -52,9 +51,9 @@ function incomeCardCopy({
 
 const TRANSACTION_SELECT = `
   id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
-  voided_at, voided_by, void_reason,
+  voided_at, voided_by, void_reason, visit_id,
   transaction_items (
-    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, line_total
+    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total
   )
 `;
 
@@ -155,7 +154,7 @@ export default async function Home({
     supabase
       .from("products")
       .select(
-        "id, name, price, cost, stock, description, category_id, low_stock_threshold, is_active, created_at, updated_at"
+        "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at"
       )
       .eq("is_active", true)
       .order("name"),
@@ -166,7 +165,7 @@ export default async function Home({
       .limit(5),
     supabase
       .from("services")
-      .select("id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, is_active, created_at, updated_at")
+      .select("id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at")
       .eq("is_active", true)
       .order("name"),
     feeQuery,
@@ -277,8 +276,9 @@ export default async function Home({
               topProductIds={(topSellers ?? [])
                 .map((row) => row.product_id)
                 .filter((id): id is string => id !== null)}
+              services={services ?? []}
+              balances={vault}
             />
-            <ServiceDrawer services={services ?? []} balances={vault} />
             <form action={signOut}>
               <Button type="submit" variant="ghost">
                 Sign out

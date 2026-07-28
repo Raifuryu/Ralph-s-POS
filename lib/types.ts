@@ -53,6 +53,36 @@ export function feeForPrincipal(tiers: FeeTier[], amount: number): number | null
   return null;
 }
 
+/** How a service's fee is worked out at the counter. "flat" — the existing
+    default-fee/tiers model (GCash/Maya). "per_unit" — pick a variant (e.g.
+    Black & White vs Colored) and a quantity; fee = quantity x variant price,
+    principal always 0 (the whole amount is income, no wallet pass-through). */
+export const SERVICE_PRICING_MODES = Constants.public.Enums.service_pricing_mode;
+export type ServicePricingMode = (typeof SERVICE_PRICING_MODES)[number];
+
+/** One selectable variant of a per-unit service — e.g. Black & White @ ₱3.
+    Dynamic and owner-editable (same shape/spirit as FeeTier above), so
+    adding a third print option later is a data change, not a code change. */
+export type UnitPrice = { label: string; price: number };
+
+/** Parses (and silently drops anything malformed from) a service's raw
+    `unit_prices` jsonb column — never throws, same reasoning as
+    parseFeeTiers: a corrupt/unexpected value should just read as "no
+    variants configured" rather than break the page. */
+export function parseUnitPrices(raw: Json): UnitPrice[] {
+  if (!Array.isArray(raw)) return [];
+  const variants: UnitPrice[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const label = (item as Record<string, unknown>).label;
+    const price = Number((item as Record<string, unknown>).price);
+    if (typeof label !== "string" || label.trim() === "") continue;
+    if (!Number.isFinite(price) || price < 0) continue;
+    variants.push({ label, price });
+  }
+  return variants;
+}
+
 export type VaultEntryType = VaultEntry["entry_type"];
 
 export const VAULT_ENTRY_TYPE_LABELS: Record<VaultEntryType, string> = {

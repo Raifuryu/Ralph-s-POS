@@ -61,7 +61,7 @@ export default async function InventoryPage({
     supabase
       .from("products")
       .select(
-        "id, name, price, cost, stock, description, category_id, low_stock_threshold, is_active, created_at, updated_at"
+        "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at"
       )
       .order("name"),
     supabase
@@ -71,7 +71,7 @@ export default async function InventoryPage({
     supabase
       .from("services")
       .select(
-        "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, is_active, created_at, updated_at"
+        "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at"
       )
       .order("name"),
     // Restock history is independent of the queries above (keyed only by

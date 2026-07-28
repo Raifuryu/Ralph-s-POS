@@ -17,25 +17,33 @@ export type TopProduct = {
 };
 
 /** Self-contained card (own border/title), matching MoneyBreakdownCard's
-    recipe so every section on the statistics page reads the same. */
+    recipe so every section on the statistics page reads the same. Reused
+    for both "Top-selling products" and the e-service breakdown — the only
+    thing that differs between them is the column/empty-state wording. */
 export default function TopProductsTable({
   title,
   products,
+  itemHeader = "Product",
+  unitsHeader = "Units",
+  emptyTitle = "No sales in this window yet.",
 }: {
   title: string;
   products: TopProduct[];
+  itemHeader?: string;
+  unitsHeader?: string;
+  emptyTitle?: string;
 }) {
   return (
     <div className="rounded-lg border bg-card p-4">
       <p className="mb-3 text-sm text-muted-foreground">{title}</p>
       {products.length === 0 ? (
-        <EmptyState title="No sales in this window yet." />
+        <EmptyState title={emptyTitle} />
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Product</TableHead>
-              <TableHead className="text-right">Units</TableHead>
+              <TableHead>{itemHeader}</TableHead>
+              <TableHead className="text-right">{unitsHeader}</TableHead>
               <TableHead className="text-right">Revenue</TableHead>
             </TableRow>
           </TableHeader>

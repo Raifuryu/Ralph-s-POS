@@ -8,19 +8,19 @@ import {
   formatPeso,
   formatTime,
   friendlyDayLabel,
-  storeDayKey,
+  storeDayKey
 } from "@/lib/format";
 import {
   MONEY_ACCOUNT_LABELS,
   PAYMENT_METHOD_LABELS,
   type SalesEntry,
-  type TransactionItem,
+  type TransactionItem
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   voidServiceTransaction,
   voidTransaction,
-  type VoidState,
+  type VoidState
 } from "./transactionActions";
 
 const initialVoidState: VoidState = { error: null };
@@ -29,6 +29,15 @@ const initialVoidState: VoidState = { error: null };
     what the row number on the left shows. */
 type NumberedEntry = { number: number; entry: SalesEntry };
 
+/** A single row, or several sub-transactions recorded in the same customer
+    visit — a product sale and a GCash cash-in bought together, or several
+    e-services back to back (see migration 0030) — rendered together under
+    one small header. Each sub-transaction still voids independently;
+    grouping is display-only. */
+type DayRenderItem =
+  | { kind: "single"; entry: NumberedEntry }
+  | { kind: "visit"; visitId: string; entries: NumberedEntry[] };
+
 type DayGroup = {
   key: string;
   label: string;
@@ -36,7 +45,7 @@ type DayGroup = {
       never for a personal take, and never for a voided sale) plus every
       service's fee. Never principal: that just passes through. */
   total: number;
-  entries: NumberedEntry[];
+  items: DayRenderItem[];
 };
 
 /** Real profit on a sale's line items (price - cost), not gross revenue —
@@ -75,31 +84,74 @@ function entryIncome(entry: SalesEntry): number {
   return Number(entry.data.fee);
 }
 
+/** Groups one day's entries into render items — a sale or service only gets
+    wrapped in a "Visit" card when its visit actually has 2+ lines (every
+    sale/service carries a visit id, even a lone one — see migration 0030 —
+    so a solo purchase must not render as a 1-line "visit"). A visit can mix
+    a product sale with an e-service, not just service-to-service. */
+function buildDayItems(numbered: NumberedEntry[]): DayRenderItem[] {
+  const visitCounts = new Map<string, number>();
+  for (const { entry } of numbered) {
+    const id = entry.data.visit_id;
+    if (id) visitCounts.set(id, (visitCounts.get(id) ?? 0) + 1);
+  }
+
+  const items: DayRenderItem[] = [];
+  for (const numberedEntry of numbered) {
+    const visitId = numberedEntry.entry.data.visit_id;
+    if (visitId && (visitCounts.get(visitId) ?? 0) > 1) {
+      const existing = items.find(
+        (item) => item.kind === "visit" && item.visitId === visitId
+      );
+      if (existing && existing.kind === "visit") {
+        existing.entries.push(numberedEntry);
+      } else {
+        items.push({ kind: "visit", visitId, entries: [numberedEntry] });
+      }
+      continue;
+    }
+    items.push({ kind: "single", entry: numberedEntry });
+  }
+  return items;
+}
+
 /**
  * Groups by calendar day in the STORE's timezone — grouping by server-local
  * dates would split days at 8am Manila once deployed on a UTC host.
  * Entries arrive newest-first, so groups come out newest-first too.
  */
 function groupByDay(entries: SalesEntry[]): DayGroup[] {
-  const groups: DayGroup[] = [];
+  const order: string[] = [];
+  const byDay = new Map<
+    string,
+    { label: string; total: number; numbered: NumberedEntry[] }
+  >();
+
   entries.forEach((entry, i) => {
     const key = storeDayKey(entry.data.created_at);
-    const income = entryIncome(entry);
-    const current = groups[groups.length - 1];
-    const numbered: NumberedEntry = { number: i + 1, entry };
-    if (current && current.key === key) {
-      current.entries.push(numbered);
-      current.total += income;
-    } else {
-      groups.push({
-        key,
+    let bucket = byDay.get(key);
+    if (!bucket) {
+      bucket = {
         label: friendlyDayLabel(entry.data.created_at),
-        total: income,
-        entries: [numbered],
-      });
+        total: 0,
+        numbered: []
+      };
+      byDay.set(key, bucket);
+      order.push(key);
     }
+    bucket.total += entryIncome(entry);
+    bucket.numbered.push({ number: i + 1, entry });
   });
-  return groups;
+
+  return order.map((key) => {
+    const bucket = byDay.get(key)!;
+    return {
+      key,
+      label: bucket.label,
+      total: bucket.total,
+      items: buildDayItems(bucket.numbered)
+    };
+  });
 }
 
 /** Row number shown on the left — position in the list, not a database id. */
@@ -113,7 +165,7 @@ function RowNumber({ number }: { number: number }) {
 
 function SaleBlock({
   number,
-  transaction,
+  transaction
 }: {
   number: number;
   transaction: SalesEntry & { kind: "sale" };
@@ -125,7 +177,8 @@ function SaleBlock({
   const { profit, revenueWithUnknownCost } = saleProfit(data.transaction_items);
   // Nothing sold on a personal take has a margin — it was never income to
   // begin with, so the headline stays the value taken, same as always.
-  const allCostUnknown = !data.is_personal_take && revenueWithUnknownCost >= total;
+  const allCostUnknown =
+    !data.is_personal_take && revenueWithUnknownCost >= total;
   const partialCostUnknown =
     !data.is_personal_take && revenueWithUnknownCost > 0 && !allCostUnknown;
 
@@ -219,28 +272,46 @@ function SaleBlock({
             isVoided && "line-through decoration-destructive/50"
           )}
         >
-          {data.transaction_items.map((item) => (
-            <div
-              key={item.id}
-              className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
-            >
-              <span className="min-w-0 truncate">
-                {item.product_name}
-                <span className="tabular-nums">
-                  {" "}
-                  · {item.quantity} × {formatPeso(Number(item.unit_price))}
+          {data.transaction_items.map((item) => {
+            const discount = Number(item.discount_amount);
+            const unitCost =
+              item.unit_cost !== null ? Number(item.unit_cost) : null;
+            const lineTotal = Number(item.line_total);
+            // Same "*" convention as the day total above (see saleProfit) —
+            // this line's margin isn't counted anywhere because its
+            // product has never been restocked through the app.
+            const lineProfit =
+              unitCost !== null ? lineTotal - unitCost * item.quantity : null;
+            return (
+              <div
+                key={item.id}
+                className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
+              >
+                <span className="min-w-0 truncate">
+                  {item.product_name}
+                  {unitCost === null ? "*" : ""}
+                  <span className="tabular-nums">
+                    {" "}
+                    · {item.quantity} × {formatPeso(Number(item.unit_price))}
+                    {discount > 0 ? ` − ${formatPeso(discount)}` : ""}
+                    {unitCost !== null ? ` · cost ${formatPeso(unitCost)}` : ""}
+                  </span>
                 </span>
-              </span>
-              <span className="tabular-nums">
-                {formatPeso(Number(item.line_total))}
-              </span>
-            </div>
-          ))}
+                <span className="shrink-0 text-right tabular-nums">
+                  <div>{formatPeso(lineTotal)}</div>
+                  {lineProfit !== null && !data.is_personal_take ? (
+                    <div>+{formatPeso(lineProfit)}</div>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
         </div>
 
         {isVoided ? (
           <p className="mt-1 text-xs text-muted-foreground">
-            {formatPeso(total)} {data.is_personal_take ? "value" : "sale"} reversed
+            {formatPeso(total)} {data.is_personal_take ? "value" : "sale"}{" "}
+            reversed
             {data.void_reason ? ` · ${data.void_reason}` : ""}
           </p>
         ) : tendered !== null ? (
@@ -256,7 +327,7 @@ function SaleBlock({
 
 function ServiceBlock({
   number,
-  service,
+  service
 }: {
   number: number;
   service: SalesEntry & { kind: "service" };
@@ -336,9 +407,26 @@ function ServiceBlock({
             isVoided && "line-through decoration-destructive/50"
           )}
         >
-          {formatPeso(Number(data.principal))} {data.cash_flow === "in" ? "via" : "to"}{" "}
-          {MONEY_ACCOUNT_LABELS[data.payment_account]}
-          {data.wallet ? ` · ${MONEY_ACCOUNT_LABELS[data.wallet]} wallet` : ""}
+          {data.unit_label ? (
+            <>
+              {data.unit_quantity} × {data.unit_label} @{" "}
+              {formatPeso(Number(data.unit_price))}
+              {Number(data.discount_amount) > 0
+                ? ` − ${formatPeso(Number(data.discount_amount))}`
+                : ""}
+              {" · "}
+              {MONEY_ACCOUNT_LABELS[data.payment_account]}
+            </>
+          ) : (
+            <>
+              {formatPeso(Number(data.principal))}{" "}
+              {data.cash_flow === "in" ? "via" : "to"}{" "}
+              {MONEY_ACCOUNT_LABELS[data.payment_account]}
+              {data.wallet
+                ? ` · ${MONEY_ACCOUNT_LABELS[data.wallet]} wallet`
+                : ""}
+            </>
+          )}
         </p>
 
         {data.reference || data.description ? (
@@ -362,8 +450,40 @@ function ServiceBlock({
   );
 }
 
+/** Several e-service sub-transactions from the same customer visit, shown
+    together under one small header with a combined total. Each line below
+    is still a full ServiceBlock — voiding one doesn't touch the others. */
+function VisitGroup({ entries }: { entries: NumberedEntry[] }) {
+  const total = entries.reduce((sum, { entry }) => sum + entryIncome(entry), 0);
+  return (
+    <div className="border-b py-1.5 last:border-b-0">
+      <div className="flex items-baseline justify-between gap-2 px-1 pb-1">
+        <p className="text-xs font-medium text-muted-foreground">
+          Visit · {entries.length} {entries.length === 1 ? "item" : "items"}
+        </p>
+        <p className="text-xs font-medium text-muted-foreground tabular-nums">
+          +{formatPeso(total)}
+        </p>
+      </div>
+      <div className="flex flex-col rounded-lg border bg-muted/20 px-1">
+        {entries.map(({ number, entry }) =>
+          entry.kind === "sale" ? (
+            <SaleBlock
+              key={entry.data.id}
+              number={number}
+              transaction={entry}
+            />
+          ) : (
+            <ServiceBlock key={entry.data.id} number={number} service={entry} />
+          )
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function TransactionTable({
-  entries,
+  entries
 }: {
   entries: SalesEntry[];
 }) {
@@ -373,32 +493,48 @@ export default function TransactionTable({
 
   return (
     <div className="flex flex-col gap-3">
-      {groupByDay(entries).map((group) => (
-        <section
-          key={group.key}
-          className="rounded-lg border bg-card px-4 py-2"
-        >
-          <div className="flex items-baseline justify-between gap-2 border-b pb-2 pt-1">
-            <h3 className="text-sm font-semibold">
-              {group.label}{" "}
-              <Badge className="ml-1">
-                {group.entries.length}{" "}
-                {group.entries.length === 1 ? "entry" : "entries"}
-              </Badge>
-            </h3>
-            <p className="text-sm font-semibold tabular-nums">
-              {formatPeso(group.total)}
-            </p>
-          </div>
-          {group.entries.map(({ number, entry }) =>
-            entry.kind === "sale" ? (
-              <SaleBlock key={entry.data.id} number={number} transaction={entry} />
-            ) : (
-              <ServiceBlock key={entry.data.id} number={number} service={entry} />
-            )
-          )}
-        </section>
-      ))}
+      {groupByDay(entries).map((group) => {
+        const entryCount = group.items.reduce(
+          (sum, item) =>
+            sum + (item.kind === "single" ? 1 : item.entries.length),
+          0
+        );
+        return (
+          <section
+            key={group.key}
+            className="rounded-lg border bg-card px-4 py-2"
+          >
+            <div className="flex items-baseline justify-between gap-2 border-b pb-2 pt-1">
+              <h3 className="text-sm font-semibold">
+                {group.label}{" "}
+                <Badge className="ml-1">
+                  {entryCount} {entryCount === 1 ? "entry" : "entries"}
+                </Badge>
+              </h3>
+              <p className="text-sm font-semibold tabular-nums">
+                {formatPeso(group.total)}
+              </p>
+            </div>
+            {group.items.map((item) =>
+              item.kind === "visit" ? (
+                <VisitGroup key={item.visitId} entries={item.entries} />
+              ) : item.entry.entry.kind === "sale" ? (
+                <SaleBlock
+                  key={item.entry.entry.data.id}
+                  number={item.entry.number}
+                  transaction={item.entry.entry}
+                />
+              ) : (
+                <ServiceBlock
+                  key={item.entry.entry.data.id}
+                  number={item.entry.number}
+                  service={item.entry.entry}
+                />
+              )
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }

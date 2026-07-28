@@ -138,6 +138,23 @@ export default function ProductForm({
       </div>
 
       <div className="flex flex-col gap-2">
+        <Label htmlFor="expiry_date" className="text-xs">
+          Expiry date{" "}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          id="expiry_date"
+          name="expiry_date"
+          type="date"
+          defaultValue={product.expiry_date ?? ""}
+        />
+        <p className="text-xs text-muted-foreground">
+          Flags this item in the inventory list as it approaches or passes
+          this date. Leave blank for items that don&apos;t expire.
+        </p>
+      </div>
+
+      <div className="flex flex-col gap-2">
         <Label htmlFor="category_id" className="text-xs">
           Category{" "}
           <span className="font-normal text-muted-foreground">(optional)</span>

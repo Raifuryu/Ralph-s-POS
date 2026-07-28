@@ -8,11 +8,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   MONEY_ACCOUNTS,
   MONEY_ACCOUNT_LABELS,
   parseFeeTiers,
+  parseUnitPrices,
   type Service,
+  type ServicePricingMode,
 } from "@/lib/types";
 import {
   createService,
@@ -28,6 +31,12 @@ function emptyTier(): TierDraft {
   return { key: crypto.randomUUID(), min: "", max: "", fee: "" };
 }
 
+type VariantDraft = { key: string; label: string; price: string };
+
+function emptyVariant(): VariantDraft {
+  return { key: crypto.randomUUID(), label: "", price: "" };
+}
+
 export default function ServiceForm({
   service,
 }: {
@@ -40,17 +49,29 @@ export default function ServiceForm({
     initialState
   );
 
-  // Fixed, index-based keys for tiers present on mount (not
+  const [pricingMode, setPricingMode] = useState<ServicePricingMode>(
+    service?.pricing_mode ?? "flat"
+  );
+
+  // Fixed, index-based keys for tiers/variants present on mount (not
   // crypto.randomUUID()) — this initializer runs during SSR too, and a
-  // random key here would mismatch on hydration. Tiers added later via "Add
-  // tier" only ever happen from a client-side click, so those are safe to
-  // key randomly.
+  // random key here would mismatch on hydration. Rows added later via "Add"
+  // only ever happen from a client-side click, so those are safe to key
+  // randomly.
   const [tiers, setTiers] = useState<TierDraft[]>(() =>
     parseFeeTiers(service?.fee_tiers ?? []).map((tier, i) => ({
       key: `initial-${i}`,
       min: String(tier.min),
       max: tier.max === null ? "" : String(tier.max),
       fee: String(tier.fee),
+    }))
+  );
+
+  const [variants, setVariants] = useState<VariantDraft[]>(() =>
+    parseUnitPrices(service?.unit_prices ?? []).map((variant, i) => ({
+      key: `initial-${i}`,
+      label: variant.label,
+      price: String(variant.price),
     }))
   );
 
@@ -62,6 +83,16 @@ export default function ServiceForm({
 
   function removeTier(key: string) {
     setTiers((prev) => prev.filter((tier) => tier.key !== key));
+  }
+
+  function updateVariant(key: string, patch: Partial<VariantDraft>) {
+    setVariants((prev) =>
+      prev.map((variant) => (variant.key === key ? { ...variant, ...patch } : variant))
+    );
+  }
+
+  function removeVariant(key: string) {
+    setVariants((prev) => prev.filter((variant) => variant.key !== key));
   }
 
   return (
@@ -81,7 +112,31 @@ export default function ServiceForm({
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="flex flex-col gap-2">
+        <Label className="text-xs">Pricing</Label>
+        <Tabs
+          value={pricingMode}
+          onValueChange={(value) => setPricingMode(value as ServicePricingMode)}
+          className="w-full min-w-0"
+        >
+          <TabsList className="w-full sm:w-fit">
+            <TabsTrigger value="flat">Flat fee</TabsTrigger>
+            <TabsTrigger value="per_unit">Per item</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <input type="hidden" name="pricing_mode" value={pricingMode} />
+        <p className="text-xs text-muted-foreground">
+          {pricingMode === "flat"
+            ? "A fee typed (or auto-filled) per transaction — GCash/Maya cash-in/out."
+            : "Pick a priced variant and a quantity at the counter; fee = quantity × price — e.g. Xerox: Black & White vs Colored."}
+        </p>
+      </div>
+
+      <div
+        className={
+          pricingMode === "flat" ? "grid grid-cols-2 gap-3" : "flex flex-col gap-2"
+        }
+      >
         <div className="flex flex-col gap-2">
           <Label htmlFor="cash_flow" className="text-xs">
             Cash direction
@@ -96,146 +151,232 @@ export default function ServiceForm({
           </Select>
         </div>
 
-        <div className="flex flex-col gap-2">
-          <Label htmlFor="default_fee" className="text-xs">
-            Usual fee{" "}
-            <span className="font-normal text-muted-foreground">
-              (optional)
-            </span>
-          </Label>
-          <Input
-            id="default_fee"
-            name="default_fee"
-            type="number"
-            step="0.01"
-            min="0"
-            inputMode="decimal"
-            defaultValue={service?.default_fee ?? ""}
-            placeholder="Optional"
-          />
-        </div>
+        {pricingMode === "flat" ? (
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="default_fee" className="text-xs">
+              Usual fee{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </Label>
+            <Input
+              id="default_fee"
+              name="default_fee"
+              type="number"
+              step="0.01"
+              min="0"
+              inputMode="decimal"
+              defaultValue={service?.default_fee ?? ""}
+              placeholder="Optional"
+            />
+          </div>
+        ) : null}
       </div>
 
-      <div className="flex flex-col gap-2">
-        <Label htmlFor="wallet" className="text-xs">
-          Wallet involved{" "}
-          <span className="font-normal text-muted-foreground">(optional)</span>
-        </Label>
-        <Select
-          id="wallet"
-          name="wallet"
-          defaultValue={service?.wallet ?? ""}
-        >
-          <option value="">None — cash only (xerox, printing…)</option>
-          <option value="gcash">GCash</option>
-          <option value="maya">Maya</option>
-        </Select>
-      </div>
+      {pricingMode === "flat" ? (
+        <>
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="wallet" className="text-xs">
+              Wallet involved{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </Label>
+            <Select
+              id="wallet"
+              name="wallet"
+              defaultValue={service?.wallet ?? ""}
+            >
+              <option value="">None — cash only (xerox, printing…)</option>
+              <option value="gcash">GCash</option>
+              <option value="maya">Maya</option>
+            </Select>
+          </div>
 
-      <p className="-mt-2 text-xs text-muted-foreground">
-        The fee is your income and is typed at the counter each time — this
-        default just pre-fills it. If a wallet is set, the vault tracks both
-        sides: a load adds cash to the box and deducts the amount from that
-        wallet; a cash-out does the reverse.
-      </p>
-
-      <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
-        <div>
-          <p className="text-sm font-medium">
-            Fee tiers{" "}
-            <span className="font-normal text-muted-foreground">
-              (optional)
-            </span>
+          <p className="-mt-2 text-xs text-muted-foreground">
+            The fee is your income and is typed at the counter each time —
+            this default just pre-fills it. If a wallet is set, the vault
+            tracks both sides: a load adds cash to the box and deducts the
+            amount from that wallet; a cash-out does the reverse.
           </p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Fee changes with the amount — e.g. ₱100–500 = ₱10, ₱501 and up =
-            ₱12. Leave Max blank for an open-ended top tier. Falls back to
-            the usual fee above for amounts no tier covers.
-          </p>
-        </div>
 
-        {tiers.map((tier) => (
-          <div key={tier.key} className="flex items-end gap-2">
-            <div className="flex flex-1 flex-col gap-1">
-              <Label htmlFor={`tier-min-${tier.key}`} className="text-xs">
-                Min
-              </Label>
-              <Input
-                id={`tier-min-${tier.key}`}
-                type="number"
-                step="0.01"
-                min="0"
-                inputMode="decimal"
-                placeholder="100"
-                value={tier.min}
-                onChange={(event) => updateTier(tier.key, { min: event.target.value })}
-              />
+          <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
+            <div>
+              <p className="text-sm font-medium">
+                Fee tiers{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Fee changes with the amount — e.g. ₱100–500 = ₱10, ₱501 and up
+                = ₱12. Leave Max blank for an open-ended top tier. Falls back
+                to the usual fee above for amounts no tier covers.
+              </p>
             </div>
-            <div className="flex flex-1 flex-col gap-1">
-              <Label htmlFor={`tier-max-${tier.key}`} className="text-xs">
-                Max
-              </Label>
-              <Input
-                id={`tier-max-${tier.key}`}
-                type="number"
-                step="0.01"
-                min="0"
-                inputMode="decimal"
-                placeholder="and up"
-                value={tier.max}
-                onChange={(event) => updateTier(tier.key, { max: event.target.value })}
-              />
-            </div>
-            <div className="flex flex-1 flex-col gap-1">
-              <Label htmlFor={`tier-fee-${tier.key}`} className="text-xs">
-                Fee
-              </Label>
-              <Input
-                id={`tier-fee-${tier.key}`}
-                type="number"
-                step="0.01"
-                min="0"
-                inputMode="decimal"
-                placeholder="10"
-                value={tier.fee}
-                onChange={(event) => updateTier(tier.key, { fee: event.target.value })}
-              />
-            </div>
+
+            {tiers.map((tier) => (
+              <div key={tier.key} className="flex items-end gap-2">
+                <div className="flex flex-1 flex-col gap-1">
+                  <Label htmlFor={`tier-min-${tier.key}`} className="text-xs">
+                    Min
+                  </Label>
+                  <Input
+                    id={`tier-min-${tier.key}`}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    inputMode="decimal"
+                    placeholder="100"
+                    value={tier.min}
+                    onChange={(event) => updateTier(tier.key, { min: event.target.value })}
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1">
+                  <Label htmlFor={`tier-max-${tier.key}`} className="text-xs">
+                    Max
+                  </Label>
+                  <Input
+                    id={`tier-max-${tier.key}`}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    inputMode="decimal"
+                    placeholder="and up"
+                    value={tier.max}
+                    onChange={(event) => updateTier(tier.key, { max: event.target.value })}
+                  />
+                </div>
+                <div className="flex flex-1 flex-col gap-1">
+                  <Label htmlFor={`tier-fee-${tier.key}`} className="text-xs">
+                    Fee
+                  </Label>
+                  <Input
+                    id={`tier-fee-${tier.key}`}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    inputMode="decimal"
+                    placeholder="10"
+                    value={tier.fee}
+                    onChange={(event) => updateTier(tier.key, { fee: event.target.value })}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="Remove this tier"
+                  onClick={() => removeTier(tier.key)}
+                >
+                  <XIcon />
+                </Button>
+              </div>
+            ))}
+
             <Button
               type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Remove this tier"
-              onClick={() => removeTier(tier.key)}
+              variant="outline"
+              size="sm"
+              className="self-start"
+              onClick={() => setTiers((prev) => [...prev, emptyTier()])}
             >
-              <XIcon />
+              <PlusIcon data-icon="inline-start" />
+              Add tier
             </Button>
+
+            <input
+              type="hidden"
+              name="fee_tiers"
+              value={JSON.stringify(
+                tiers.map((tier) => ({
+                  min: tier.min,
+                  max: tier.max,
+                  fee: tier.fee,
+                }))
+              )}
+            />
           </div>
-        ))}
+        </>
+      ) : (
+        <div className="flex flex-col gap-3 rounded-lg border bg-muted/30 p-3">
+          <div>
+            <p className="text-sm font-medium">Price list</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Each variant the cashier can pick at the counter — e.g. Black
+              & White ₱3, Colored ₱5. Add, rename, reprice, or remove
+              variants any time; past sales keep whatever price they were
+              actually rung up at.
+            </p>
+          </div>
 
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="self-start"
-          onClick={() => setTiers((prev) => [...prev, emptyTier()])}
-        >
-          <PlusIcon data-icon="inline-start" />
-          Add tier
-        </Button>
+          {variants.map((variant) => (
+            <div key={variant.key} className="flex items-end gap-2">
+              <div className="flex flex-[2] flex-col gap-1">
+                <Label htmlFor={`variant-label-${variant.key}`} className="text-xs">
+                  Label
+                </Label>
+                <Input
+                  id={`variant-label-${variant.key}`}
+                  placeholder="e.g. Black & White"
+                  value={variant.label}
+                  onChange={(event) =>
+                    updateVariant(variant.key, { label: event.target.value })
+                  }
+                />
+              </div>
+              <div className="flex flex-1 flex-col gap-1">
+                <Label htmlFor={`variant-price-${variant.key}`} className="text-xs">
+                  Price
+                </Label>
+                <Input
+                  id={`variant-price-${variant.key}`}
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  inputMode="decimal"
+                  placeholder="3.00"
+                  value={variant.price}
+                  onChange={(event) =>
+                    updateVariant(variant.key, { price: event.target.value })
+                  }
+                />
+              </div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Remove this variant"
+                onClick={() => removeVariant(variant.key)}
+              >
+                <XIcon />
+              </Button>
+            </div>
+          ))}
 
-        <input
-          type="hidden"
-          name="fee_tiers"
-          value={JSON.stringify(
-            tiers.map((tier) => ({
-              min: tier.min,
-              max: tier.max,
-              fee: tier.fee,
-            }))
-          )}
-        />
-      </div>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="self-start"
+            onClick={() => setVariants((prev) => [...prev, emptyVariant()])}
+          >
+            <PlusIcon data-icon="inline-start" />
+            Add variant
+          </Button>
+
+          <input
+            type="hidden"
+            name="unit_prices"
+            value={JSON.stringify(
+              variants.map((variant) => ({
+                label: variant.label,
+                price: variant.price,
+              }))
+            )}
+          />
+        </div>
+      )}
 
       <div className="flex flex-col gap-2">
         <Label className="text-xs">Accepted payment methods</Label>

@@ -82,6 +82,7 @@ export type Database = {
           cost: number | null
           created_at: string
           description: string | null
+          expiry_date: string | null
           id: string
           is_active: boolean
           low_stock_threshold: number | null
@@ -95,6 +96,7 @@ export type Database = {
           cost?: number | null
           created_at?: string
           description?: string | null
+          expiry_date?: string | null
           id?: string
           is_active?: boolean
           low_stock_threshold?: number | null
@@ -108,6 +110,7 @@ export type Database = {
           cost?: number | null
           created_at?: string
           description?: string | null
+          expiry_date?: string | null
           id?: string
           is_active?: boolean
           low_stock_threshold?: number | null
@@ -133,6 +136,7 @@ export type Database = {
           contact_number: string | null
           created_at: string
           description: string | null
+          discount_amount: number
           fee: number
           id: string
           payment_account: Database["public"]["Enums"]["money_account"]
@@ -141,6 +145,10 @@ export type Database = {
           service_id: string | null
           service_name: string
           tendered: number | null
+          unit_label: string | null
+          unit_price: number | null
+          unit_quantity: number | null
+          visit_id: string | null
           void_reason: string | null
           voided_at: string | null
           voided_by: string | null
@@ -152,6 +160,7 @@ export type Database = {
           contact_number?: string | null
           created_at?: string
           description?: string | null
+          discount_amount?: number
           fee: number
           id?: string
           payment_account: Database["public"]["Enums"]["money_account"]
@@ -160,6 +169,10 @@ export type Database = {
           service_id?: string | null
           service_name: string
           tendered?: number | null
+          unit_label?: string | null
+          unit_price?: number | null
+          unit_quantity?: number | null
+          visit_id?: string | null
           void_reason?: string | null
           voided_at?: string | null
           voided_by?: string | null
@@ -171,6 +184,7 @@ export type Database = {
           contact_number?: string | null
           created_at?: string
           description?: string | null
+          discount_amount?: number
           fee?: number
           id?: string
           payment_account?: Database["public"]["Enums"]["money_account"]
@@ -179,6 +193,10 @@ export type Database = {
           service_id?: string | null
           service_name?: string
           tendered?: number | null
+          unit_label?: string | null
+          unit_price?: number | null
+          unit_quantity?: number | null
+          visit_id?: string | null
           void_reason?: string | null
           voided_at?: string | null
           voided_by?: string | null
@@ -204,6 +222,8 @@ export type Database = {
           id: string
           is_active: boolean
           name: string
+          pricing_mode: Database["public"]["Enums"]["service_pricing_mode"]
+          unit_prices: Json | null
           updated_at: string
           wallet: Database["public"]["Enums"]["money_account"] | null
         }
@@ -216,6 +236,8 @@ export type Database = {
           id?: string
           is_active?: boolean
           name: string
+          pricing_mode?: Database["public"]["Enums"]["service_pricing_mode"]
+          unit_prices?: Json | null
           updated_at?: string
           wallet?: Database["public"]["Enums"]["money_account"] | null
         }
@@ -228,6 +250,8 @@ export type Database = {
           id?: string
           is_active?: boolean
           name?: string
+          pricing_mode?: Database["public"]["Enums"]["service_pricing_mode"]
+          unit_prices?: Json | null
           updated_at?: string
           wallet?: Database["public"]["Enums"]["money_account"] | null
         }
@@ -235,8 +259,9 @@ export type Database = {
       }
       transaction_items: {
         Row: {
+          discount_amount: number
           id: string
-          line_total: number
+          line_total: number | null
           product_id: string | null
           product_name: string
           quantity: number
@@ -245,8 +270,9 @@ export type Database = {
           unit_price: number
         }
         Insert: {
+          discount_amount?: number
           id?: string
-          line_total?: number
+          line_total?: number | null
           product_id?: string | null
           product_name: string
           quantity: number
@@ -255,8 +281,9 @@ export type Database = {
           unit_price: number
         }
         Update: {
+          discount_amount?: number
           id?: string
-          line_total?: number
+          line_total?: number | null
           product_id?: string | null
           product_name?: string
           quantity?: number
@@ -290,6 +317,7 @@ export type Database = {
           payment_method: Database["public"]["Enums"]["money_account"] | null
           tendered: number | null
           total: number
+          visit_id: string | null
           void_reason: string | null
           voided_at: string | null
           voided_by: string | null
@@ -302,6 +330,7 @@ export type Database = {
           payment_method?: Database["public"]["Enums"]["money_account"] | null
           tendered?: number | null
           total: number
+          visit_id?: string | null
           void_reason?: string | null
           voided_at?: string | null
           voided_by?: string | null
@@ -314,6 +343,7 @@ export type Database = {
           payment_method?: Database["public"]["Enums"]["money_account"] | null
           tendered?: number | null
           total?: number
+          visit_id?: string | null
           void_reason?: string | null
           voided_at?: string | null
           voided_by?: string | null
@@ -410,6 +440,7 @@ export type Database = {
           p_payment_method?: Database["public"]["Enums"]["money_account"]
           p_personal_take?: boolean
           p_tendered?: number
+          p_visit_id?: string
         }
         Returns: string
       }
@@ -427,6 +458,7 @@ export type Database = {
         Args: {
           p_contact_number?: string
           p_description?: string
+          p_discount_amount?: number
           p_fee: number
           p_fee_in_wallet?: boolean
           p_payment_account?: Database["public"]["Enums"]["money_account"]
@@ -434,6 +466,10 @@ export type Database = {
           p_reference?: string
           p_service_id: string
           p_tendered?: number
+          p_unit_label?: string
+          p_unit_price?: number
+          p_unit_quantity?: number
+          p_visit_id?: string
         }
         Returns: string
       }
@@ -443,6 +479,16 @@ export type Database = {
           p_counted: number
         }
         Returns: Json
+      }
+      record_visit: {
+        Args: {
+          p_items?: Json
+          p_payment_method?: Database["public"]["Enums"]["money_account"]
+          p_personal_take?: boolean
+          p_services?: Json
+          p_tendered?: number
+        }
+        Returns: string
       }
       void_service_transaction: {
         Args: { p_reason?: string; p_service_transaction_id: string }
@@ -456,6 +502,7 @@ export type Database = {
     Enums: {
       cash_flow: "in" | "out"
       money_account: "cash" | "gcash" | "maya"
+      service_pricing_mode: "flat" | "per_unit"
       vault_entry_type:
         | "sale"
         | "service"
@@ -592,6 +639,7 @@ export const Constants = {
     Enums: {
       cash_flow: ["in", "out"],
       money_account: ["cash", "gcash", "maya"],
+      service_pricing_mode: ["flat", "per_unit"],
       vault_entry_type: [
         "sale",
         "service",

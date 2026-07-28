@@ -5,7 +5,13 @@ import { redirect } from "next/navigation";
 
 import { parseMoney } from "@/lib/money";
 import { createClient } from "@/lib/supabase/server";
-import { isMoneyAccount, type FeeTier, type MoneyAccount } from "@/lib/types";
+import {
+  isMoneyAccount,
+  type FeeTier,
+  type MoneyAccount,
+  type ServicePricingMode,
+  type UnitPrice,
+} from "@/lib/types";
 
 export type ServiceFormState = { error: string | null };
 
@@ -16,6 +22,8 @@ type Parsed = {
   wallet: "gcash" | "maya" | null;
   allowed_payment_accounts: MoneyAccount[];
   fee_tiers: FeeTier[];
+  pricing_mode: ServicePricingMode;
+  unit_prices: UnitPrice[] | null;
 };
 
 /** Never trusts the client-sent tiers JSON blindly — every field is
@@ -63,6 +71,40 @@ function parseFeeTiersInput(raw: string): FeeTier[] | { error: string } {
   return tiers;
 }
 
+/** Same never-trust-the-client posture as parseFeeTiersInput, for a
+    per-unit service's price list. Requires at least one variant — a
+    per-unit service with nothing to sell isn't valid. */
+function parseUnitPricesInput(raw: string): UnitPrice[] | { error: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw || "[]");
+  } catch {
+    return { error: "Could not read the price list." };
+  }
+  if (!Array.isArray(parsed)) return { error: "Could not read the price list." };
+
+  const variants: UnitPrice[] = [];
+  for (const [i, entry] of parsed.entries()) {
+    const rowLabel = `Variant ${i + 1}`;
+    const line = (entry ?? {}) as Record<string, unknown>;
+
+    const label = String(line.label ?? "").trim();
+    if (!label) return { error: `${rowLabel}: enter a label.` };
+
+    const price = parseMoney(String(line.price ?? ""), { requirePositive: true });
+    if (price === "bad" || price === null) {
+      return { error: `${rowLabel}: enter a price greater than 0.` };
+    }
+
+    variants.push({ label, price });
+  }
+
+  if (variants.length === 0) {
+    return { error: "Add at least one priced variant." };
+  }
+  return variants;
+}
+
 function parseForm(formData: FormData): Parsed | { error: string } {
   const name = String(formData.get("name") ?? "").trim();
   if (!name) return { error: "Name is required." };
@@ -72,6 +114,12 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     return { error: "Choose whether cash goes in or out of the box." };
   }
 
+  const pricingModeRaw = String(formData.get("pricing_mode") ?? "flat");
+  if (pricingModeRaw !== "flat" && pricingModeRaw !== "per_unit") {
+    return { error: "Choose a pricing mode." };
+  }
+  const pricing_mode: ServicePricingMode = pricingModeRaw;
+
   const default_fee = parseMoney(formData.get("default_fee"), {
     allowBlank: true,
   });
@@ -79,9 +127,14 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     return { error: "Default fee must be a number with at most 2 decimals." };
   }
 
+  // A per-unit service has no e-wallet to move money through — forced null
+  // here regardless of what was submitted, matching the DB check constraint
+  // that backstops this same rule.
   const walletRaw = String(formData.get("wallet") ?? "");
   const wallet =
-    walletRaw === "gcash" || walletRaw === "maya" ? walletRaw : null;
+    pricing_mode === "flat" && (walletRaw === "gcash" || walletRaw === "maya")
+      ? walletRaw
+      : null;
 
   const allowed_payment_accounts = formData
     .getAll("allowed_payment_accounts")
@@ -94,6 +147,15 @@ function parseForm(formData: FormData): Parsed | { error: string } {
   const fee_tiers = parseFeeTiersInput(String(formData.get("fee_tiers") ?? "[]"));
   if ("error" in fee_tiers) return fee_tiers;
 
+  let unit_prices: UnitPrice[] | null = null;
+  if (pricing_mode === "per_unit") {
+    const parsedVariants = parseUnitPricesInput(
+      String(formData.get("unit_prices") ?? "[]")
+    );
+    if ("error" in parsedVariants) return parsedVariants;
+    unit_prices = parsedVariants;
+  }
+
   return {
     name,
     cash_flow: flow,
@@ -101,6 +163,8 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     wallet,
     allowed_payment_accounts,
     fee_tiers,
+    pricing_mode,
+    unit_prices,
   };
 }
 
