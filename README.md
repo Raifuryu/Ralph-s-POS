@@ -41,11 +41,16 @@ Business logic that used to live in Postgres functions (`checkout`, `record_serv
    ```bash
    docker compose up -d --build
    ```
-5. **Create your login** (same script as local dev, run inside the running `app` container):
+5. **Create your login**, via the `tools` service (a separate, on-demand image — see below):
    ```bash
-   docker compose exec app pnpm seed-user <username> <password>
+   docker compose --profile tools run --rm tools seed-user <username> <password>
    ```
 6. Visit `http://localhost:2999` and sign in.
+
+`app` (what `docker compose up` actually runs) is Next's `output: "standalone"` build — a pruned `node_modules` with no `pnpm`/devDependencies, started via `node server.js` rather than `pnpm start`. That's deliberate: running `pnpm start` in a container hits pnpm's own pre-flight lockfile check, which can misfire on a `node_modules` copied in from an earlier build stage (no TTY to confirm the reinstall it wants to do) and crash-loop. `tools` builds only as far as the `builder` stage, which still has the full `node_modules` (including `tsx`), so `pnpm seed-user`/`pnpm db-query` work the same as local dev — but it's gated behind a Compose profile so it never starts on its own:
+```bash
+docker compose --profile tools run --rm tools db-query "SELECT COUNT(*) FROM products"
+```
 
 ## Getting Started
 
