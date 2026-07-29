@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { signIn, type LoginState } from "./actions";
-import Turnstile from "./turnstile";
 
 const initialState: LoginState = { error: null };
 
@@ -22,12 +21,12 @@ function LoginForm() {
       <input type="hidden" name="next" value={next} />
 
       <div className="flex flex-col gap-2">
-        <Label htmlFor="email">Email</Label>
+        <Label htmlFor="username">Username</Label>
         <Input
-          id="email"
-          name="email"
-          type="email"
-          autoComplete="email"
+          id="username"
+          name="username"
+          type="text"
+          autoComplete="username"
           required
           autoFocus
         />
@@ -43,8 +42,6 @@ function LoginForm() {
           required
         />
       </div>
-
-      <Turnstile resetSignal={state} />
 
       {state.error ? (
         <p role="alert" className="text-sm text-destructive">

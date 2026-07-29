@@ -1,9 +1,11 @@
-import { Constants, type Json, type Tables } from "./database.types";
+import { Constants, type Json, type Tables } from "./db/types";
 
 /**
- * Row types, derived from the live database schema. Regenerate
- * `database.types.ts` after any migration rather than editing these by hand.
+ * Row types, derived from `lib/db/types.ts` — hand-written and kept in sync
+ * with `mariadb/schema.sql` (no type generator for a plain MariaDB
+ * connection, unlike Supabase's old `database.types.ts`).
  */
+export type User = Tables<"users">;
 export type Product = Tables<"products">;
 export type Category = Tables<"categories">;
 export type ProductRestock = Tables<"product_restocks">;

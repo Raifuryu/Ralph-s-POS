@@ -10,8 +10,18 @@ import {
   storeDayRange,
 } from "@/lib/format";
 import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
-import { createClient } from "@/lib/supabase/server";
-import { SALES_FILTERS, type MoneyAccount, type SalesEntry } from "@/lib/types";
+import { queryRows } from "@/lib/mysql/pool";
+import {
+  SALES_FILTERS,
+  type MoneyAccount,
+  type Product,
+  type SalesEntry,
+  type Service,
+  type ServiceTransaction,
+  type Transaction,
+  type TransactionItem,
+  type TransactionWithItems,
+} from "@/lib/types";
 import { signOut } from "./login/actions";
 import DashboardDateFilter from "./dashboardDateFilter";
 import IncomeBreakdownCard, { type EServiceFees } from "./incomeBreakdownCard";
@@ -49,13 +59,14 @@ function incomeCardCopy({
   };
 }
 
-const TRANSACTION_SELECT = `
-  id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
-  voided_at, voided_by, void_reason, visit_id,
-  transaction_items (
-    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total
-  )
-`;
+const TRANSACTION_COLUMNS =
+  "id, payment_method, cashier_id, total, tendered, created_at, is_personal_take, voided_at, voided_by, void_reason, visit_id";
+const TRANSACTION_ITEM_COLUMNS =
+  "id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total";
+const PRODUCT_COLUMNS =
+  "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at";
+const SERVICE_COLUMNS =
+  "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at";
 
 /** Newest-first merge of both money-in event kinds into one feed. */
 function sortByCreatedAtDesc(entries: SalesEntry[]): SalesEntry[] {
@@ -79,8 +90,8 @@ function LoadError({ message }: { message: string }) {
       message={message}
       hint={
         <>
-          If this says a table is missing, a migration in{" "}
-          <code className="text-xs">supabase/migrations/</code> has not been
+          If this says a table is missing, the schema in{" "}
+          <code className="text-xs">mariadb/schema.sql</code> has not been
           applied yet.
         </>
       }
@@ -94,7 +105,6 @@ export default async function Home({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
-  const supabase = await createClient();
 
   // The dashboard is a day-at-a-time view — one calendar day, picked via
   // DashboardDateFilter, defaulting to today. Ranges/all-time live on
@@ -113,81 +123,67 @@ export default async function Home({
 
   const { fromTs, toTs } = storeDayRange(dateKey);
 
-  // Sales list: every transaction on the picked day, unpaginated —
-  // pagination happens in JS below, after merging with service_transactions
-  // into one chronological feed. This also doubles as the source for
-  // storeMargin/itemsSold, replacing what used to be a second "totals" query.
-  const salesQuery = supabase
-    .from("transactions")
-    .select(TRANSACTION_SELECT)
-    .gte("created_at", fromTs)
-    .lte("created_at", toTs)
-    .order("created_at", { ascending: false });
+  let transactions: Transaction[];
+  let serviceList: ServiceTransaction[];
+  let products: Product[];
+  let topSellers: { product_id: string; units_sold: number }[];
+  let services: Service[];
+  let vaultRows: { account: MoneyAccount; balance: number }[];
+  let sales: TransactionWithItems[];
 
-  // Same idea, the e-service side of the merged feed.
-  const serviceListQuery = supabase
-    .from("service_transactions")
-    .select("*")
-    .gte("created_at", fromTs)
-    .lte("created_at", toTs)
-    .order("created_at", { ascending: false });
+  try {
+    [transactions, serviceList, products, topSellers, services, vaultRows] =
+      await Promise.all([
+        // Sales list: every transaction on the picked day, unpaginated —
+        // pagination happens in JS below, after merging with
+        // service_transactions into one chronological feed.
+        queryRows<Transaction>(
+          `SELECT ${TRANSACTION_COLUMNS} FROM transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC`,
+          [fromTs, toTs]
+        ),
+        queryRows<ServiceTransaction>(
+          "SELECT * FROM service_transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC",
+          [fromTs, toTs]
+        ),
+        queryRows<Product>(
+          `SELECT ${PRODUCT_COLUMNS} FROM products WHERE is_active = 1 ORDER BY name`
+        ),
+        queryRows<{ product_id: string; units_sold: number }>(
+          "SELECT product_id, units_sold FROM product_sales_totals ORDER BY units_sold DESC LIMIT 5"
+        ),
+        queryRows<Service>(
+          `SELECT ${SERVICE_COLUMNS} FROM services WHERE is_active = 1 ORDER BY name`
+        ),
+        queryRows<{ account: MoneyAccount; balance: number }>(
+          "SELECT account, balance FROM vault_balance"
+        ),
+      ]);
 
-  // PostgREST aggregates are disabled, so fees are fetched and grouped by
-  // wallet here rather than in SQL.
-  const feeQuery = supabase
-    .from("service_transactions")
-    .select("fee, wallet, voided_at")
-    .gte("created_at", fromTs)
-    .lte("created_at", toTs);
-
-  const [
-    { data: salesData, error: salesError },
-    { data: serviceListData, error: serviceListError },
-    { data: products },
-    { data: topSellers },
-    { data: services },
-    { data: serviceFees },
-    { data: vaultRows, error: vaultError },
-  ] = await Promise.all([
-    salesQuery,
-    serviceListQuery,
-    supabase
-      .from("products")
-      .select(
-        "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at"
-      )
-      .eq("is_active", true)
-      .order("name"),
-    supabase
-      .from("product_sales_totals")
-      .select("product_id, units_sold")
-      .order("units_sold", { ascending: false })
-      .limit(5),
-    supabase
-      .from("services")
-      .select("id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at")
-      .eq("is_active", true)
-      .order("name"),
-    feeQuery,
-    supabase.from("vault_balance").select("account, balance"),
-  ]);
-
-  if (salesError) {
-    return <LoadError message={salesError.message} />;
+    // transaction_items are a separate query (no PostgREST-style nested
+    // select in plain SQL), grouped back onto their parent transaction below.
+    const itemsByTxnId = new Map<string, TransactionItem[]>();
+    if (transactions.length > 0) {
+      const items = await queryRows<TransactionItem>(
+        `SELECT ${TRANSACTION_ITEM_COLUMNS} FROM transaction_items WHERE transaction_id IN (${transactions.map(() => "?").join(",")})`,
+        transactions.map((t) => t.id)
+      );
+      for (const item of items) {
+        const list = itemsByTxnId.get(item.transaction_id);
+        if (list) list.push(item);
+        else itemsByTxnId.set(item.transaction_id, [item]);
+      }
+    }
+    sales = transactions.map((t) => ({
+      ...t,
+      transaction_items: itemsByTxnId.get(t.id) ?? [],
+    }));
+  } catch (err) {
+    return <LoadError message={(err as Error).message} />;
   }
-  if (serviceListError) {
-    return <LoadError message={serviceListError.message} />;
-  }
-  if (vaultError) {
-    return <LoadError message={vaultError.message} />;
-  }
-
-  const sales = salesData ?? [];
-  const serviceList = serviceListData ?? [];
 
   // One chronological feed, newest first, then paginated in JS — the two
-  // source tables can't share a single DB-level .range() the way one table
-  // could, so both are fetched in full for the window and sliced here.
+  // source tables can't share a single DB-level LIMIT/OFFSET the way one
+  // table could, so both are fetched in full for the window and sliced here.
   const merged = sortByCreatedAtDesc([
     ...sales.map((t) => ({ kind: "sale" as const, data: t })),
     ...serviceList.map((s) => ({ kind: "service" as const, data: s })),
@@ -210,9 +206,9 @@ export default async function Home({
   // separately as "Total profit" below the gross breakdown, not mixed into
   // the headline above. A line only has a known margin once its product has
   // been restocked through the app at least once (unit_cost is snapshotted
-  // from products.cost at sale time — see migration 0021); older/never-
-  // restocked lines have no cost recorded, so they're tracked separately
-  // and excluded rather than assumed to be 100% margin.
+  // from products.cost at sale time). Older/never-restocked lines have no
+  // cost recorded, so they're tracked separately and excluded rather than
+  // assumed to be 100% margin.
   let storeMargin = 0;
   let storeRevenueWithUnknownCost = 0;
   for (const t of sales) {
@@ -230,8 +226,10 @@ export default async function Home({
   // E-Service = service fee income, further split by which wallet the
   // service touches. "Other" catches wallet-less services (e.g. printing)
   // paid in cash — still fee income, just not tied to a specific e-wallet.
+  // Derived from serviceList (already fetched, same date range) rather than
+  // a second query for the same table/window.
   const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
-  for (const row of serviceFees ?? []) {
+  for (const row of serviceList) {
     if (row.voided_at) continue;
     const fee = Number(row.fee);
     if (row.wallet === "gcash") eServiceFees.gcash += fee;
@@ -250,7 +248,7 @@ export default async function Home({
   // Live money on hand, straight from the vault ledger (all-time balances —
   // the date filters deliberately do not apply to a balance).
   const vault = new Map<MoneyAccount, number>();
-  for (const row of vaultRows ?? []) {
+  for (const row of vaultRows) {
     if (row.account) vault.set(row.account, Number(row.balance ?? 0));
   }
 
@@ -272,11 +270,11 @@ export default async function Home({
           <h1 className="text-xl font-semibold">Sales</h1>
           <div className="flex flex-wrap items-center gap-2">
             <NewSaleDrawer
-              products={products ?? []}
-              topProductIds={(topSellers ?? [])
+              products={products}
+              topProductIds={topSellers
                 .map((row) => row.product_id)
                 .filter((id): id is string => id !== null)}
-              services={services ?? []}
+              services={services}
               balances={vault}
             />
             <form action={signOut}>

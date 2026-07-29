@@ -1,14 +1,17 @@
 import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
-import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
+import { PAGE_SIZE, pageCountFor, pageRange, parsePage } from "@/lib/pagination";
+import { queryRows } from "@/lib/mysql/pool";
 import { escapeLike } from "@/lib/search";
-import { createClient } from "@/lib/supabase/server";
-import { type MoneyAccount } from "@/lib/types";
+import { type MoneyAccount, type VaultEntry } from "@/lib/types";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
 import Ledger, { type LedgerEntry } from "./ledger";
 
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
+
+type VaultBalanceRow = { account: MoneyAccount; balance: number };
+type LedgerJoinRow = VaultEntry & { service_name: string | null };
 
 type SearchParams = {
   q?: string;
@@ -26,68 +29,85 @@ export default async function VaultPage({
 }) {
   const params = await searchParams;
   const q = params.q?.trim() ?? "";
-  const supabase = await createClient();
-
-  // Search matches either the note text or, for service entries, the
-  // service's own name — a separate lookup for the latter, same pattern the
-  // dashboard uses for item-name search across nested transaction_items.
-  let matchedServiceTxnIds: string[] = [];
-  if (q) {
-    const { data: matches, error: matchError } = await supabase
-      .from("service_transactions")
-      .select("id")
-      .ilike("service_name", `%${escapeLike(q)}%`);
-
-    if (matchError) {
-      return <PageError title="Could not load the vault" message={matchError.message} />;
-    }
-    matchedServiceTxnIds = (matches ?? []).map((row) => row.id);
-  }
-
   const page = parsePage(params.page);
-  const { rangeFrom, rangeTo } = pageRange(page);
+  const { rangeFrom } = pageRange(page);
 
-  let entriesQuery = supabase
-    .from("vault_entries")
-    .select("*, service_transactions(service_name)", { count: "exact" })
-    .order("seq", { ascending: false })
-    .range(rangeFrom, rangeTo);
+  let balanceRows: VaultBalanceRow[];
+  let joinedRows: LedgerJoinRow[];
+  let count: number;
 
-  if (params.from_ts) entriesQuery = entriesQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) entriesQuery = entriesQuery.lte("created_at", params.to_ts);
-  if (q) {
-    const orParts = [`note.ilike.%${escapeLike(q)}%`];
-    if (matchedServiceTxnIds.length > 0) {
-      orParts.push(`service_transaction_id.in.(${matchedServiceTxnIds.join(",")})`);
+  try {
+    // Search matches either the note text or, for service entries, the
+    // service's own name — a separate lookup for the latter, same pattern
+    // the dashboard uses for item-name search across transaction_items.
+    let matchedServiceTxnIds: string[] = [];
+    if (q) {
+      const matches = await queryRows<{ id: string }>(
+        "SELECT id FROM service_transactions WHERE service_name LIKE ?",
+        [`%${escapeLike(q)}%`]
+      );
+      matchedServiceTxnIds = matches.map((row) => row.id);
     }
-    entriesQuery = entriesQuery.or(orParts.join(","));
-  }
 
-  // The three account balances come from vault_balance — an all-time view,
-  // independent of this page's date/search filters and pagination.
-  const [
-    { data: balanceRows, error: balanceError },
-    { data: entries, error: entriesError, count },
-  ] = await Promise.all([
-    supabase.from("vault_balance").select("account, balance"),
-    entriesQuery.overrideTypes<LedgerEntry[], { merge: false }>(),
-  ]);
+    const conditions: string[] = [];
+    const filterParams: unknown[] = [];
+    if (params.from_ts) {
+      conditions.push("ve.created_at >= ?");
+      filterParams.push(params.from_ts);
+    }
+    if (params.to_ts) {
+      conditions.push("ve.created_at <= ?");
+      filterParams.push(params.to_ts);
+    }
+    if (q) {
+      if (matchedServiceTxnIds.length > 0) {
+        conditions.push(
+          `(ve.note LIKE ? OR ve.service_transaction_id IN (${matchedServiceTxnIds.map(() => "?").join(",")}))`
+        );
+        filterParams.push(`%${escapeLike(q)}%`, ...matchedServiceTxnIds);
+      } else {
+        conditions.push("ve.note LIKE ?");
+        filterParams.push(`%${escapeLike(q)}%`);
+      }
+    }
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
-  const error = balanceError ?? entriesError;
-  if (error) {
-    return <PageError title="Could not load the vault" message={error.message} />;
+    // The three account balances come from vault_balance — an all-time view,
+    // independent of this page's date/search filters and pagination.
+    let countRows: { count: number }[];
+    [balanceRows, countRows, joinedRows] = await Promise.all([
+      queryRows<VaultBalanceRow>("SELECT account, balance FROM vault_balance"),
+      queryRows<{ count: number }>(
+        `SELECT COUNT(*) AS count FROM vault_entries ve ${whereClause}`,
+        filterParams
+      ),
+      queryRows<LedgerJoinRow>(
+        `SELECT ve.*, st.service_name AS service_name
+         FROM vault_entries ve
+         LEFT JOIN service_transactions st ON st.id = ve.service_transaction_id
+         ${whereClause}
+         ORDER BY ve.seq DESC
+         LIMIT ? OFFSET ?`,
+        [...filterParams, PAGE_SIZE, rangeFrom]
+      ),
+    ]);
+    count = countRows[0]?.count ?? 0;
+  } catch (err) {
+    return <PageError title="Could not load the vault" message={(err as Error).message} />;
   }
 
   const pageCount = pageCountFor(count);
 
   const balances = new Map(
-    (balanceRows ?? [])
-      .filter(
-        (row): row is typeof row & { account: MoneyAccount } =>
-          row.account !== null
-      )
+    balanceRows
+      .filter((row): row is typeof row & { account: MoneyAccount } => row.account !== null)
       .map((row) => [row.account, Number(row.balance ?? 0)])
   );
+
+  const entries: LedgerEntry[] = joinedRows.map(({ service_name, ...entry }) => ({
+    ...entry,
+    service_transactions: service_name !== null ? { service_name } : null,
+  }));
 
   return (
     <PageShell>
@@ -112,7 +132,7 @@ export default async function VaultPage({
       />
 
       <Ledger
-        entries={entries ?? []}
+        entries={entries}
         filtered={Boolean(q || params.from_ts || params.to_ts)}
       />
 

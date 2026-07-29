@@ -19,9 +19,10 @@ import {
   TabsTrigger,
 } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
-import { createClient } from "@/lib/supabase/server";
+import { queryRows } from "@/lib/mysql/pool";
 import {
   MONEY_ACCOUNT_LABELS,
+  type Category,
   type MoneyAccount,
   type Product,
   type Service,
@@ -32,6 +33,36 @@ import ItemsBrowser from "./itemsBrowser";
 import ProductSheet from "./productSheet";
 import ServiceDeleteButton from "./serviceDeleteButton";
 import ServiceForm from "./serviceForm";
+
+const PRODUCT_COLUMNS =
+  "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at";
+const SERVICE_COLUMNS =
+  "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at";
+
+type RestockRow = {
+  id: string;
+  quantity: number;
+  cost: number;
+  note: string | null;
+  created_at: string;
+};
+
+/** Flattened join of transaction_items + its parent transaction — replaces
+    the PostgREST nested `transactions(...)` embed. INNER JOIN is safe here:
+    transaction_id is NOT NULL with ON DELETE CASCADE, so every line item
+    always has exactly one parent row. */
+type ProductSaleRow = {
+  id: string;
+  quantity: number;
+  unit_price: number;
+  discount_amount: number;
+  line_total: number;
+  created_at: string;
+  is_personal_take: boolean;
+  voided_at: string | null;
+  void_reason: string | null;
+  payment_method: MoneyAccount | null;
+};
 
 type SearchParams = {
   edit?: string;
@@ -48,96 +79,49 @@ export default async function InventoryPage({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
-  const supabase = await createClient();
 
   // Empty string and undefined both mean "no history sheet" — one value
   // drives both the open state and the fetch below, so they can't disagree.
   const historyId = params.history || undefined;
 
-  const [
-    { data, error },
-    { data: categories },
-    { data: services },
-    { data: restocks, error: restocksError },
-    { data: items, error: itemsError },
-  ] = await Promise.all([
-    supabase
-      .from("products")
-      .select(
-        "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at"
-      )
-      .order("name"),
-    supabase
-      .from("categories")
-      .select("id, name, sort_order, created_at")
-      .order("sort_order"),
-    supabase
-      .from("services")
-      .select(
-        "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at"
-      )
-      .order("name"),
-    // History is independent of the queries above (keyed only by
-    // ?history=), so it rides in the same Promise.all instead of waiting on
-    // them to resolve first.
-    historyId
-      ? supabase
-          .from("product_restocks")
-          .select("id, quantity, cost, note, created_at")
-          .eq("product_id", historyId)
-          .order("created_at", { ascending: false })
-      : Promise.resolve({ data: null, error: null }),
-    historyId
-      ? supabase
-          .from("transaction_items")
-          .select(
-            "id, quantity, unit_price, discount_amount, line_total, transactions(created_at, is_personal_take, voided_at, void_reason, payment_method)"
+  let products: Product[];
+  let categories: Category[];
+  let serviceList: Service[];
+  let restocks: RestockRow[];
+  let items: ProductSaleRow[];
+
+  try {
+    [products, categories, serviceList, restocks, items] = await Promise.all([
+      queryRows<Product>(`SELECT ${PRODUCT_COLUMNS} FROM products ORDER BY name`),
+      queryRows<Category>(
+        "SELECT id, name, sort_order, created_at FROM categories ORDER BY sort_order"
+      ),
+      queryRows<Service>(`SELECT ${SERVICE_COLUMNS} FROM services ORDER BY name`),
+      // History is independent of the queries above (keyed only by
+      // ?history=), so it rides in the same Promise.all instead of waiting
+      // on them to resolve first.
+      historyId
+        ? queryRows<RestockRow>(
+            "SELECT id, quantity, cost, note, created_at FROM product_restocks WHERE product_id = ? ORDER BY created_at DESC",
+            [historyId]
           )
-          .eq("product_id", historyId)
-          .overrideTypes<
-            {
-              id: string;
-              quantity: number;
-              unit_price: number;
-              discount_amount: number;
-              line_total: number;
-              transactions: {
-                created_at: string;
-                is_personal_take: boolean;
-                voided_at: string | null;
-                void_reason: string | null;
-                payment_method: MoneyAccount | null;
-              } | null;
-            }[],
-            { merge: false }
-          >()
-      : Promise.resolve({ data: null, error: null }),
-  ]);
-
-  if (error) {
+        : Promise.resolve([]),
+      historyId
+        ? queryRows<ProductSaleRow>(
+            `SELECT ti.id, ti.quantity, ti.unit_price, ti.discount_amount, ti.line_total,
+                    t.created_at, t.is_personal_take, t.voided_at, t.void_reason, t.payment_method
+             FROM transaction_items ti
+             JOIN transactions t ON t.id = ti.transaction_id
+             WHERE ti.product_id = ?`,
+            [historyId]
+          )
+        : Promise.resolve([]),
+    ]);
+  } catch (err) {
     return (
-      <PageError title="Could not load inventory" message={error.message} />
+      <PageError title="Could not load inventory" message={(err as Error).message} />
     );
   }
-  if (restocksError) {
-    return (
-      <PageError
-        title="Could not load history"
-        message={restocksError.message}
-      />
-    );
-  }
-  if (itemsError) {
-    return (
-      <PageError
-        title="Could not load history"
-        message={itemsError.message}
-      />
-    );
-  }
-
-  const products: Product[] = data ?? [];
-  const serviceList: Service[] = services ?? [];
 
   const editing = params.edit
     ? products.find((p) => p.id === params.edit)
@@ -166,23 +150,18 @@ export default async function InventoryPage({
   // Voided sales and personal takes are excluded here: neither one actually
   // put cash toward recovering what the batch cost, even though both still
   // appear as their own entries in the history list below.
-  const sales = (items ?? [])
-    .filter(
-      (item) =>
-        item.transactions !== null &&
-        !item.transactions.voided_at &&
-        !item.transactions.is_personal_take
-    )
+  const sales = items
+    .filter((item) => !item.voided_at && !item.is_personal_take)
     .map((item) => ({
       lineTotal: Number(item.line_total),
-      soldAt: new Date(item.transactions!.created_at).getTime(),
+      soldAt: new Date(item.created_at).getTime(),
     }))
     .sort((a, b) => a.soldAt - b.soldAt);
 
   // Recovered-per-batch via one sweep over batches oldest-first: start from
   // the sum of every sale and subtract sales as they fall behind each
   // batch's cutoff, rather than re-scanning all sales per batch.
-  const restocksAsc = [...(restocks ?? [])].sort((a, b) =>
+  const restocksAsc = [...restocks].sort((a, b) =>
     a.created_at.localeCompare(b.created_at)
   );
   let remaining = sales.reduce((sum, sale) => sum + sale.lineTotal, 0);
@@ -198,7 +177,7 @@ export default async function InventoryPage({
   }
 
   const historyEntries: HistoryEntry[] = [
-    ...(restocks ?? []).map(
+    ...restocks.map(
       (restock): HistoryEntry => ({
         kind: "restock",
         id: restock.id,
@@ -209,22 +188,20 @@ export default async function InventoryPage({
         recovered: recoveredById.get(restock.id) ?? 0,
       })
     ),
-    ...(items ?? [])
-      .filter((item) => item.transactions !== null)
-      .map(
-        (item): HistoryEntry => ({
-          kind: "sale",
-          id: item.id,
-          quantity: item.quantity,
-          line_total: Number(item.line_total),
-          discount_amount: Number(item.discount_amount),
-          created_at: item.transactions!.created_at,
-          is_personal_take: item.transactions!.is_personal_take,
-          voided_at: item.transactions!.voided_at,
-          void_reason: item.transactions!.void_reason,
-          payment_method: item.transactions!.payment_method,
-        })
-      ),
+    ...items.map(
+      (item): HistoryEntry => ({
+        kind: "sale",
+        id: item.id,
+        quantity: item.quantity,
+        line_total: Number(item.line_total),
+        discount_amount: Number(item.discount_amount),
+        created_at: item.created_at,
+        is_personal_take: item.is_personal_take,
+        voided_at: item.voided_at,
+        void_reason: item.void_reason,
+        payment_method: item.payment_method,
+      })
+    ),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
   return (
@@ -247,7 +224,7 @@ export default async function InventoryPage({
               Bulk restock
             </Button>
 
-            <ItemsBrowser products={products} categories={categories ?? []} />
+            <ItemsBrowser products={products} categories={categories} />
           </TabsContent>
 
           <TabsContent
@@ -337,7 +314,7 @@ export default async function InventoryPage({
         <ProductSheet
           open={showProductForm}
           product={editing}
-          categories={categories ?? []}
+          categories={categories}
         />
 
         <HistorySheet
@@ -349,7 +326,7 @@ export default async function InventoryPage({
         <BulkRestockSheet
           open={showBulkRestock}
           products={products}
-          categories={categories ?? []}
+          categories={categories}
         />
       </>
     </PageShell>

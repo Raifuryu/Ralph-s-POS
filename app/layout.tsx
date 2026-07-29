@@ -1,7 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist_Mono, Inter } from "next/font/google";
-import { SpeedInsights } from "@vercel/speed-insights/next";
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 
@@ -12,12 +12,12 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-sans" });
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  subsets: ["latin"]
 });
 
 export const metadata: Metadata = {
   title: "Sari-Sari Store POS",
-  description: "Ralph's Sari-Sari Store POS System",
+  description: "Ralph's Sari-Sari Store POS System"
 };
 
 // Without viewport-fit=cover, every env(safe-area-inset-*) used across the
@@ -27,11 +27,11 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  viewportFit: "cover",
+  viewportFit: "cover"
 };
 
 export default function RootLayout({
-  children,
+  children
 }: Readonly<{
   children: React.ReactNode;
 }>) {
@@ -43,7 +43,7 @@ export default function RootLayout({
         "antialiased",
         "font-sans",
         inter.variable,
-        geistMono.variable,
+        geistMono.variable
       )}
     >
       <body className="min-h-full flex flex-col">

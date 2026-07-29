@@ -1,48 +1,22 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { SESSION_COOKIE_NAME, verifySessionCookieValue } from "@/lib/auth/session";
 
 /**
  * Next.js 16 renamed `middleware.ts` to `proxy.ts` (same capabilities;
  * `middleware()`/`config` became `proxy()`/`proxyConfig`).
  *
- * This runs before every matched request. It refreshes the auth token and
- * writes the rotated cookies back onto the response — without it you get
- * random logouts and hard-to-debug session bugs.
+ * Sole gate for "is anyone logged in": verifies the signed session cookie
+ * (HMAC signature + expiry, no DB round trip — same "verify the signature,
+ * don't trust unsigned data" principle the old Supabase `getClaims()` check
+ * used) and redirects accordingly. Unlike the old Supabase session, this
+ * cookie has a fixed expiry and isn't rotated per request, so there's no
+ * cookie-rewrite plumbing needed here — just read, verify, redirect or pass
+ * through.
  */
 export async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet, headers) {
-          for (const { name, value } of cookiesToSet) {
-            request.cookies.set(name, value);
-          }
-          response = NextResponse.next({ request });
-          for (const { name, value, options } of cookiesToSet) {
-            response.cookies.set(name, value, options);
-          }
-          // Cache-Control/Expires/Pragma. A CDN caching a response that carries
-          // auth cookies would serve one user's session token to another.
-          for (const [key, value] of Object.entries(headers)) {
-            response.headers.set(key, value);
-          }
-        },
-      },
-    }
-  );
-
-  // getClaims() verifies the JWT signature against the project's published
-  // public keys. getSession() must not be trusted in server code — it reads
-  // storage without revalidating.
-  const { data } = await supabase.auth.getClaims();
-  const isSignedIn = Boolean(data?.claims);
+  const cookieValue = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  const user = await verifySessionCookieValue(cookieValue);
+  const isSignedIn = user !== null;
 
   const { pathname } = request.nextUrl;
   const isAuthRoute = pathname.startsWith("/login");
@@ -61,7 +35,7 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 // Must be named `config`, even in proxy.ts — Next 16.2.10 reads the export
@@ -70,8 +44,7 @@ export async function proxy(request: NextRequest) {
 export const config = {
   matcher: [
     /*
-     * Everything except static assets and images. Auth cookies must still be
-     * refreshed on most requests, so keep this broad. `_vercel` is excluded so
+     * Everything except static assets and images. `_vercel` is excluded so
      * Speed Insights beacons (/_vercel/speed-insights/*) aren't redirected to
      * /login, which would silently drop all metrics.
      */

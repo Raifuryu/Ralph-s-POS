@@ -1,10 +1,11 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
 import { parseMoney } from "@/lib/money";
-import { createClient } from "@/lib/supabase/server";
+import { pool } from "@/lib/mysql/pool";
 import {
   isMoneyAccount,
   type FeeTier,
@@ -175,9 +176,22 @@ export async function createService(
   const parsed = parseForm(formData);
   if ("error" in parsed) return { error: parsed.error };
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("services").insert(parsed);
-  if (error) return { error: error.message };
+  await pool.query(
+    `INSERT INTO services
+      (id, name, cash_flow, default_fee, wallet, allowed_payment_accounts, fee_tiers, pricing_mode, unit_prices)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      randomUUID(),
+      parsed.name,
+      parsed.cash_flow,
+      parsed.default_fee,
+      parsed.wallet,
+      JSON.stringify(parsed.allowed_payment_accounts),
+      JSON.stringify(parsed.fee_tiers),
+      parsed.pricing_mode,
+      parsed.unit_prices !== null ? JSON.stringify(parsed.unit_prices) : null,
+    ]
+  );
 
   revalidatePath("/inventory");
   revalidatePath("/");
@@ -194,9 +208,23 @@ export async function updateService(
   const parsed = parseForm(formData);
   if ("error" in parsed) return { error: parsed.error };
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("services").update(parsed).eq("id", id);
-  if (error) return { error: error.message };
+  await pool.query(
+    `UPDATE services
+     SET name = ?, cash_flow = ?, default_fee = ?, wallet = ?, allowed_payment_accounts = ?,
+         fee_tiers = ?, pricing_mode = ?, unit_prices = ?
+     WHERE id = ?`,
+    [
+      parsed.name,
+      parsed.cash_flow,
+      parsed.default_fee,
+      parsed.wallet,
+      JSON.stringify(parsed.allowed_payment_accounts),
+      JSON.stringify(parsed.fee_tiers),
+      parsed.pricing_mode,
+      parsed.unit_prices !== null ? JSON.stringify(parsed.unit_prices) : null,
+      id,
+    ]
+  );
 
   revalidatePath("/inventory");
   revalidatePath("/");
@@ -210,12 +238,10 @@ export async function deleteService(
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing service id." };
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("services").delete().eq("id", id);
-  if (error) return { error: error.message };
-
   // History is safe: service_transactions snapshots name/direction, and its
   // service_id is ON DELETE SET NULL.
+  await pool.query("DELETE FROM services WHERE id = ?", [id]);
+
   revalidatePath("/inventory");
   revalidatePath("/");
   return { error: null };

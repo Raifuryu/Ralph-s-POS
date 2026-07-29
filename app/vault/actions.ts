@@ -1,9 +1,12 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 
+import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney } from "@/lib/money";
-import { createClient } from "@/lib/supabase/server";
+import { pool } from "@/lib/mysql/pool";
+import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
 import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
 
 export type VaultMoveState = { error: string | null; ok?: boolean };
@@ -39,15 +42,11 @@ export async function cashOut(
   const note = String(formData.get("note") ?? "").trim();
   if (!note) return { error: "Say what the money was taken for." };
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("vault_entries").insert({
-    entry_type: "withdrawal",
-    account,
-    amount: -amount,
-    note,
-  });
-
-  if (error) return { error: error.message };
+  const user = await requireCurrentUser();
+  await pool.query(
+    "INSERT INTO vault_entries (id, entry_type, account, amount, note, created_by) VALUES (?, 'withdrawal', ?, ?, ?, ?)",
+    [randomUUID(), account, -amount, note, user.id]
+  );
 
   revalidatePath("/vault");
   revalidatePath("/");
@@ -67,17 +66,13 @@ export async function cashIn(
     return { error: "Enter an amount above zero." };
   }
 
-  const note = String(formData.get("note") ?? "").trim();
+  const note = String(formData.get("note") ?? "").trim() || null;
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("vault_entries").insert({
-    entry_type: "deposit",
-    account,
-    amount,
-    note: note || null,
-  });
-
-  if (error) return { error: error.message };
+  const user = await requireCurrentUser();
+  await pool.query(
+    "INSERT INTO vault_entries (id, entry_type, account, amount, note, created_by) VALUES (?, 'deposit', ?, ?, ?, ?)",
+    [randomUUID(), account, amount, note, user.id]
+  );
 
   revalidatePath("/vault");
   revalidatePath("/");
@@ -86,7 +81,7 @@ export async function cashIn(
 
 /**
  * Daily physical count. The expected balance is captured server-side inside
- * the DB function, so it can't go stale between page-load and submit.
+ * recordVaultCount, so it can't go stale between page-load and submit.
  */
 export async function recordCount(
   _prev: VaultCountState,
@@ -100,23 +95,22 @@ export async function recordCount(
   const account = parseAccount(formData.get("account"));
   if (!account) return { error: "Pick which account you counted." };
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.rpc("record_vault_count", {
-    p_account: account,
-    p_counted: counted,
-  });
+  try {
+    const user = await requireCurrentUser();
+    const result = await recordVaultCount({ account, counted }, user.id);
 
-  if (error) return { error: error.message };
-
-  revalidatePath("/vault");
-  revalidatePath("/");
-  return {
-    error: null,
-    result: data as {
-      account: MoneyAccount;
-      counted: number;
-      expected: number;
-      over_short: number;
-    },
-  };
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return {
+      error: null,
+      result: {
+        account: result.account,
+        counted: result.counted,
+        expected: result.expected,
+        over_short: result.overShort,
+      },
+    };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }

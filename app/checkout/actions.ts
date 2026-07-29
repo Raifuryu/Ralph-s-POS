@@ -2,8 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 
+import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney } from "@/lib/money";
-import { createClient } from "@/lib/supabase/server";
+import { queryRows } from "@/lib/mysql/pool";
+import { recordVisit as recordVisitOperation } from "@/lib/mysql/operations/recordVisit";
 import { isMoneyAccount } from "@/lib/types";
 
 export type VisitState = { error: string | null; visitId?: string };
@@ -13,8 +15,7 @@ type ServiceLinePayload = {
   principal?: number;
   fee?: number;
   /** Per-unit lines only — the sheet already nets this out of `fee`, sent
-      separately just so it's recorded (see migration 0032). Always 0 for a
-      flat/tiered line. */
+      separately just so it's recorded. Always 0 for a flat/tiered line. */
   discount_amount?: number;
   payment_account?: string;
   deduct_fee?: boolean;
@@ -29,7 +30,7 @@ type ServiceLinePayload = {
 
 /**
  * Records a whole visit atomically: a product cart, any number of
- * e-service lines, or both together (see migration 0031's record_visit(),
+ * e-service lines, or both together (see lib/mysql/operations/recordVisit.ts,
  * which composes checkout() and record_service() in one transaction — if
  * any line fails, nothing commits).
  *
@@ -156,26 +157,18 @@ export async function recordVisit(
     }
   }
 
-  const supabase = await createClient();
-
   // Cash-in only: some customers ask for the fee to come out of the load
   // instead of paying extra cash for it — looked up per service (not
   // trusted from the client alone), same defense-in-depth the old
   // standalone flow applied.
   let cashFlowByService = new Map<string, "in" | "out">();
   if (rawServices.length > 0) {
-    const { data: serviceRows, error: serviceError } = await supabase
-      .from("services")
-      .select("id, cash_flow")
-      .in("id", [
-        ...new Set(rawServices.map((line) => line.service_id as string))
-      ]);
-    if (serviceError) {
-      return { error: serviceError.message };
-    }
-    cashFlowByService = new Map(
-      (serviceRows ?? []).map((row) => [row.id, row.cash_flow])
+    const serviceIds = [...new Set(rawServices.map((line) => line.service_id as string))];
+    const serviceRows = await queryRows<{ id: string; cash_flow: "in" | "out" }>(
+      `SELECT id, cash_flow FROM services WHERE id IN (${serviceIds.map(() => "?").join(",")})`,
+      serviceIds
     );
+    cashFlowByService = new Map(serviceRows.map((row) => [row.id, row.cash_flow]));
   }
 
   // Non-null assertions below are safe: the validation loop above returns
@@ -188,38 +181,50 @@ export async function recordVisit(
     const principal =
       cashFlow === "in" && line.deduct_fee ? rawPrincipal - fee : rawPrincipal;
     return {
-      service_id: line.service_id,
+      serviceId: line.service_id as string,
       principal: Math.max(0, principal),
       fee,
-      discount_amount: line.discount_amount ?? 0,
-      payment_account: line.payment_account,
-      fee_in_wallet: line.fee_in_wallet ?? false,
-      unit_label: line.unit_label ?? null,
-      unit_quantity: line.unit_quantity ?? null,
-      unit_price: line.unit_price ?? null,
-      contact_number: line.contact_number || undefined,
+      discountAmount: line.discount_amount ?? 0,
+      paymentAccount: line.payment_account as "cash" | "gcash" | "maya",
+      feeInWallet: line.fee_in_wallet ?? false,
+      unitLabel: line.unit_label ?? null,
+      unitQuantity: line.unit_quantity ?? null,
+      unitPrice: line.unit_price ?? null,
+      contactNumber: line.contact_number || undefined,
       reference: line.reference || undefined,
       description: line.description || undefined
     };
   });
 
-  const { data, error } = await supabase.rpc("record_visit", {
-    ...(items.length > 0 ? { p_items: items } : {}),
-    p_personal_take: personalTake,
-    // Validated above (isMoneyAccount) whenever items.length > 0 and this
-    // isn't a personal take — the only cases this actually gets sent.
-    ...(items.length > 0 && paymentMethod
-      ? { p_payment_method: paymentMethod as "cash" | "gcash" | "maya" }
-      : {}),
-    ...(tendered !== null ? { p_tendered: tendered } : {}),
-    ...(services.length > 0 ? { p_services: services } : {})
-  });
+  try {
+    const user = await requireCurrentUser();
+    const visitId = await recordVisitOperation(
+      {
+        items:
+          items.length > 0
+            ? items.map((line) => ({
+                productId: line.product_id,
+                quantity: line.quantity,
+                discountAmount: line.discount_amount
+              }))
+            : undefined,
+        personalTake,
+        // Validated above (isMoneyAccount) whenever items.length > 0 and this
+        // isn't a personal take — the only case this actually gets sent.
+        paymentMethod:
+          items.length > 0 && paymentMethod
+            ? (paymentMethod as "cash" | "gcash" | "maya")
+            : undefined,
+        tendered: tendered !== null ? tendered : undefined,
+        services: services.length > 0 ? services : undefined
+      },
+      user.id
+    );
 
-  if (error) {
-    return { error: error.message };
+    revalidatePath("/");
+    revalidatePath("/vault");
+    return { error: null, visitId };
+  } catch (err) {
+    return { error: (err as Error).message };
   }
-
-  revalidatePath("/");
-  revalidatePath("/vault");
-  return { error: null, visitId: data as string };
 }

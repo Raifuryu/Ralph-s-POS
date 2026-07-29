@@ -3,17 +3,19 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
+import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney, parseWholeNumber } from "@/lib/money";
-import { createClient } from "@/lib/supabase/server";
+import { pool } from "@/lib/mysql/pool";
+import { recordBulkRestock, type BulkRestockLine } from "@/lib/mysql/operations/recordBulkRestock";
 
 export type InventoryState = { error: string | null };
 
 type Parsed = {
   name: string;
   price: number;
-  /** Current per-item cost — drives the profit shown on sales (see migration
-      0021). Blank means "unknown," not zero. Normally kept up to date by
-      restocking; editable here to correct it directly. */
+  /** Current per-item cost — drives the profit shown on sales. Blank means
+      "unknown," not zero. Normally kept up to date by restocking; editable
+      here to correct it directly. */
   cost: number | null;
   stock: number | null;
   description: string | null;
@@ -100,46 +102,35 @@ export async function updateProduct(
   const parsed = parseForm(formData);
   if ("error" in parsed) return { error: parsed.error };
 
-  const supabase = await createClient();
-
-  const { error } = await supabase
-    .from("products")
-    .update({
-      name: parsed.name,
-      price: parsed.price,
-      cost: parsed.cost,
-      description: parsed.description,
-      category_id: parsed.category_id,
-      stock: parsed.stock,
-      low_stock_threshold: parsed.low_stock_threshold,
-      expiry_date: parsed.expiry_date,
-    })
-    .eq("id", id);
-
-  if (error) return { error: error.message };
+  await pool.query(
+    `UPDATE products
+     SET name = ?, price = ?, cost = ?, description = ?, category_id = ?, stock = ?, low_stock_threshold = ?, expiry_date = ?
+     WHERE id = ?`,
+    [
+      parsed.name,
+      parsed.price,
+      parsed.cost,
+      parsed.description,
+      parsed.category_id,
+      parsed.stock,
+      parsed.low_stock_threshold,
+      parsed.expiry_date,
+      id,
+    ]
+  );
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
   redirect("/inventory");
 }
 
-type BulkRestockItem = {
-  product_id: string | null;
-  name: string | null;
-  quantity: number | null;
-  cost: number | null;
-  price: number;
-  category_id: string | null;
-  description: string | null;
-};
-
-/** Logs a whole supplier receipt at once via record_bulk_restock — every
-    line either restocks + re-prices an existing product, or creates a new
-    one (optionally restocking it too — a new item can also be registered
-    with no quantity/cost, same as leaving Quantity blank on the old
-    single-item form), atomically. Never trusts the client-sent cart JSON
-    blindly: every field is re-parsed with the same helpers every other form
-    in this file uses. */
+/** Logs a whole supplier receipt at once via recordBulkRestock — every line
+    either restocks + re-prices an existing product, or creates a new one
+    (optionally restocking it too — a new item can also be registered with
+    no quantity/cost, same as leaving Quantity blank on the old single-item
+    form), atomically. Never trusts the client-sent cart JSON blindly: every
+    field is re-parsed with the same helpers every other form in this file
+    uses. */
 export async function bulkRestock(
   _prev: InventoryState,
   formData: FormData
@@ -154,7 +145,7 @@ export async function bulkRestock(
     return { error: "Add at least one item before submitting." };
   }
 
-  const items: BulkRestockItem[] = [];
+  const items: BulkRestockLine[] = [];
   const seen = new Set<string>();
 
   for (const [i, entry] of raw.entries()) {
@@ -229,21 +220,22 @@ export async function bulkRestock(
         : null;
 
     items.push({
-      product_id: productId,
+      productId,
       name: productId ? null : name,
       quantity,
       cost,
       price,
-      category_id: productId ? null : categoryId,
+      categoryId: productId ? null : categoryId,
       description: productId ? null : description,
     });
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("record_bulk_restock", {
-    p_items: items,
-  });
-  if (error) return { error: error.message };
+  try {
+    const user = await requireCurrentUser();
+    await recordBulkRestock({ items }, user.id);
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
@@ -257,13 +249,10 @@ export async function deleteProduct(
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing product id." };
 
-  const supabase = await createClient();
-  const { error } = await supabase.from("products").delete().eq("id", id);
+  // Past sales are unaffected: transaction_items snapshots the name and
+  // price, and its product_id is ON DELETE SET NULL.
+  await pool.query("DELETE FROM products WHERE id = ?", [id]);
 
-  if (error) return { error: error.message };
-
-  // Past sales are unaffected: transaction_items snapshots the name and price,
-  // and its product_id is ON DELETE SET NULL.
   revalidatePath("/inventory");
   revalidatePath("/checkout");
   return { error: null };

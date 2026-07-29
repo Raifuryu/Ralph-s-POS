@@ -1,0 +1,139 @@
+import { randomUUID } from "node:crypto";
+import type { PoolConnection } from "mysql2/promise";
+
+import type { MoneyAccount } from "@/lib/types";
+import { placeholders, queryConn, roundMoney } from "./helpers";
+
+type CartLine = { productId: string; quantity: number; discountAmount?: number };
+
+/**
+ * Port of checkout(). Never trusts client-submitted prices — the total and
+ * every line's unit_price/unit_cost are re-derived here from the locked
+ * products row, exactly like the original SQL joined against `products`
+ * rather than accepting a price in `p_items`.
+ */
+export async function checkout(
+  conn: PoolConnection,
+  params: {
+    items: CartLine[];
+    paymentMethod: MoneyAccount | null;
+    tendered: number | null;
+    personalTake: boolean;
+    visitId: string | null;
+  },
+  cashierId: string
+): Promise<string> {
+  const { items, paymentMethod, tendered, personalTake, visitId } = params;
+
+  if (!items || items.length === 0) {
+    throw new Error("Cart is empty");
+  }
+
+  if (personalTake) {
+    if (paymentMethod !== null || tendered !== null) {
+      throw new Error("A personal take has no payment method and nothing tendered");
+    }
+  } else if (paymentMethod === null) {
+    throw new Error("Payment method is required");
+  }
+
+  // Collapse duplicate product ids — same `group by product_id` the SQL did.
+  const collapsed = new Map<string, { quantity: number; discountAmount: number }>();
+  for (const item of items) {
+    const discount = item.discountAmount ?? 0;
+    const existing = collapsed.get(item.productId);
+    if (existing) {
+      existing.quantity += item.quantity;
+      existing.discountAmount += discount;
+    } else {
+      collapsed.set(item.productId, { quantity: item.quantity, discountAmount: discount });
+    }
+  }
+  const cart = [...collapsed.entries()].map(([productId, v]) => ({ productId, ...v }));
+
+  for (const line of cart) {
+    if (
+      !line.productId ||
+      !Number.isInteger(line.quantity) ||
+      line.quantity <= 0 ||
+      !Number.isFinite(line.discountAmount) ||
+      line.discountAmount < 0
+    ) {
+      throw new Error(
+        "Each cart line needs a product_id, a quantity of at least 1, and a non-negative discount"
+      );
+    }
+  }
+
+  // Lock every referenced product, in a stable order, before any write —
+  // avoids deadlocks when two concurrent sales share products.
+  const productIds = [...cart.map((l) => l.productId)].sort();
+  const products = await queryConn<{ id: string; name: string; price: number; cost: number | null }>(
+    conn,
+    `SELECT id, name, price, cost FROM products WHERE id IN (${placeholders(productIds.length)}) ORDER BY id FOR UPDATE`,
+    productIds
+  );
+
+  if (products.length !== cart.length) {
+    throw new Error("One or more products in the cart do not exist");
+  }
+  const productById = new Map(products.map((p) => [p.id, p]));
+
+  let total = 0;
+  const lines = cart.map((line) => {
+    const product = productById.get(line.productId)!;
+    const subtotal = roundMoney(product.price * line.quantity);
+    const discount = Math.min(line.discountAmount, subtotal);
+    total += subtotal - discount;
+    return { ...line, product, discount };
+  });
+  total = roundMoney(total);
+
+  if (tendered !== null) {
+    if (paymentMethod !== "cash") {
+      throw new Error("Amount received only applies to cash payments");
+    }
+    if (tendered < total) {
+      throw new Error(`Amount received (${tendered}) is less than the total (${total})`);
+    }
+  }
+
+  const transactionId = randomUUID();
+  await conn.query(
+    "INSERT INTO transactions (id, payment_method, cashier_id, total, tendered, is_personal_take, visit_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [transactionId, paymentMethod, cashierId, total, tendered, personalTake, visitId]
+  );
+
+  for (const line of lines) {
+    await conn.query(
+      "INSERT INTO transaction_items (id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      [
+        randomUUID(),
+        transactionId,
+        line.product.id,
+        line.product.name,
+        line.product.price,
+        line.product.cost,
+        line.quantity,
+        line.discount,
+      ]
+    );
+    await conn.query("UPDATE products SET stock = stock - ? WHERE id = ?", [
+      line.quantity,
+      line.productId,
+    ]);
+  }
+
+  // Personal takes deduct stock like any sale, but post no income: nothing
+  // was sold, so nothing enters the vault. A fully-discounted sale (total =
+  // 0) posts nothing either — vault_entries' own CHECK requires amount > 0
+  // for a 'sale' row.
+  if (!personalTake && total > 0) {
+    await conn.query(
+      "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, created_by) VALUES (?, 'sale', ?, ?, ?, ?)",
+      [randomUUID(), total, transactionId, paymentMethod, cashierId]
+    );
+  }
+
+  return transactionId;
+}

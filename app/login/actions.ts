@@ -2,39 +2,45 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { RowDataPacket } from "mysql2";
 
-import { createClient } from "@/lib/supabase/server";
+import { verifyPassword } from "@/lib/auth/password";
+import { createSession, destroySession } from "@/lib/auth/session";
+import { pool } from "@/lib/mysql/pool";
 
 export type LoginState = { error: string | null };
+
+interface UserRow extends RowDataPacket {
+  id: string;
+  username: string;
+  password_hash: string;
+}
 
 export async function signIn(
   _prevState: LoginState,
   formData: FormData
 ): Promise<LoginState> {
-  const email = String(formData.get("email") ?? "").trim();
+  const username = String(formData.get("username") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const next = String(formData.get("next") ?? "/");
-  // Injected by the Turnstile widget itself.
-  const captchaToken = String(formData.get("cf-turnstile-response") ?? "");
 
-  if (!email || !password) {
-    return { error: "Enter your email and password." };
+  if (!username || !password) {
+    return { error: "Enter your username and password." };
   }
 
-  const supabase = await createClient();
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-    // Ignored by Supabase unless CAPTCHA protection is enabled in the
-    // dashboard with the matching secret key.
-    ...(captchaToken ? { options: { captchaToken } } : {}),
-  });
+  const [rows] = await pool.query<UserRow[]>(
+    "SELECT id, username, password_hash FROM users WHERE username = ? LIMIT 1",
+    [username]
+  );
+  const user = rows[0];
 
-  if (error) {
-    // Deliberately vague: distinguishing "wrong password" from "no such user"
-    // tells an attacker which emails are registered.
-    return { error: "Incorrect email or password." };
+  // Deliberately vague: distinguishing "wrong password" from "no such
+  // username" tells an attacker which accounts exist.
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return { error: "Incorrect username or password." };
   }
+
+  await createSession({ id: user.id, username: user.username });
 
   revalidatePath("/", "layout");
   // Only allow relative paths — an absolute URL here would be an open redirect.
@@ -42,8 +48,7 @@ export async function signIn(
 }
 
 export async function signOut() {
-  const supabase = await createClient();
-  await supabase.auth.signOut();
+  await destroySession();
   revalidatePath("/", "layout");
   redirect("/login");
 }

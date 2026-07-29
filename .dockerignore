@@ -1,0 +1,14 @@
+node_modules
+.next
+.git
+.env*
+!.env*.example
+*.md
+.claude
+.agents
+.mcp.json
+skills-lock.json
+*.tsbuildinfo
+.DS_Store
+supabase
+mariadb/*.sql

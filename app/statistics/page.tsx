@@ -9,10 +9,12 @@ import {
   storeDateFromKey,
   storeDayKey,
 } from "@/lib/format";
-import { createClient } from "@/lib/supabase/server";
+import { queryRows } from "@/lib/mysql/pool";
 import {
   MONEY_ACCOUNT_LABELS,
   type MoneyAccount,
+  type Transaction,
+  type TransactionItem,
   type TransactionWithItems,
 } from "@/lib/types";
 import IncomeBreakdownCard, { type EServiceFees } from "@/app/incomeBreakdownCard";
@@ -22,13 +24,10 @@ import PaymentBreakdownCard from "./paymentBreakdownCard";
 import RevenueTrendChart, { type RevenueBucket } from "./revenueTrendChart";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
-const STATS_TRANSACTION_SELECT = `
-  id, payment_method, cashier_id, total, tendered, created_at, is_personal_take,
-  voided_at, voided_by, void_reason, visit_id,
-  transaction_items (
-    id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total
-  )
-`;
+const TRANSACTION_COLUMNS =
+  "id, payment_method, cashier_id, total, tendered, created_at, is_personal_take, voided_at, voided_by, void_reason, visit_id";
+const TRANSACTION_ITEM_COLUMNS =
+  "id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 /** Caps the trend chart at roughly this many bars — beyond it, buckets widen
@@ -62,8 +61,8 @@ function LoadError({ message }: { message: string }) {
       message={message}
       hint={
         <>
-          If this says a table is missing, a migration in{" "}
-          <code className="text-xs">supabase/migrations/</code> has not been
+          If this says a table is missing, the schema in{" "}
+          <code className="text-xs">mariadb/schema.sql</code> has not been
           applied yet.
         </>
       }
@@ -161,62 +160,89 @@ export default async function StatisticsPage({
   searchParams: Promise<SearchParams>;
 }) {
   const params = await searchParams;
-  const supabase = await createClient();
 
-  let salesQuery = supabase
-    .from("transactions")
-    .select(STATS_TRANSACTION_SELECT)
-    .order("created_at", { ascending: true });
-  if (params.from_ts) salesQuery = salesQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) salesQuery = salesQuery.lte("created_at", params.to_ts);
+  const dateConditions: string[] = [];
+  const dateParams: string[] = [];
+  if (params.from_ts) {
+    dateConditions.push("created_at >= ?");
+    dateParams.push(params.from_ts);
+  }
+  if (params.to_ts) {
+    dateConditions.push("created_at <= ?");
+    dateParams.push(params.to_ts);
+  }
+  const dateWhere = dateConditions.length > 0 ? `WHERE ${dateConditions.join(" AND ")}` : "";
 
-  let serviceQuery = supabase
-    .from("service_transactions")
-    .select(
-      "fee, wallet, payment_account, created_at, voided_at, service_name, unit_label, unit_quantity"
-    )
-    .order("created_at", { ascending: true });
-  if (params.from_ts) serviceQuery = serviceQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) serviceQuery = serviceQuery.lte("created_at", params.to_ts);
+  let sales: TransactionWithItems[];
+  let serviceData: ServiceRevenuePoint[];
+  let restockData: { cost: number; quantity: number; created_at: string }[];
+  let vaultMovementData: {
+    amount: number;
+    account: MoneyAccount;
+    entry_type: "deposit" | "withdrawal";
+    created_at: string;
+  }[];
+  let productsData: { id: string; category_id: string | null }[];
+  let categoriesData: { id: string; name: string }[];
 
-  let restockQuery = supabase.from("product_restocks").select("cost, quantity, created_at");
-  if (params.from_ts) restockQuery = restockQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) restockQuery = restockQuery.lte("created_at", params.to_ts);
+  try {
+    let transactions: Transaction[];
+    [transactions, serviceData, restockData, vaultMovementData, productsData, categoriesData] =
+      await Promise.all([
+        queryRows<Transaction>(
+          `SELECT ${TRANSACTION_COLUMNS} FROM transactions ${dateWhere} ORDER BY created_at ASC`,
+          dateParams
+        ),
+        queryRows<ServiceRevenuePoint>(
+          `SELECT fee, wallet, payment_account, created_at, voided_at, service_name, unit_label, unit_quantity
+           FROM service_transactions ${dateWhere} ORDER BY created_at ASC`,
+          dateParams
+        ),
+        queryRows<{ cost: number; quantity: number; created_at: string }>(
+          `SELECT cost, quantity, created_at FROM product_restocks ${dateWhere}`,
+          dateParams
+        ),
+        queryRows<{
+          amount: number;
+          account: MoneyAccount;
+          entry_type: "deposit" | "withdrawal";
+          created_at: string;
+        }>(
+          `SELECT amount, account, entry_type, created_at FROM vault_entries
+           ${dateWhere ? `${dateWhere} AND` : "WHERE"} entry_type IN ('deposit', 'withdrawal')`,
+          dateParams
+        ),
+        // Unfiltered by is_active: a sale of a since-deactivated product should
+        // still attribute correctly to its category.
+        queryRows<{ id: string; category_id: string | null }>(
+          "SELECT id, category_id FROM products"
+        ),
+        queryRows<{ id: string; name: string }>("SELECT id, name FROM categories"),
+      ]);
 
-  let vaultMovementQuery = supabase
-    .from("vault_entries")
-    .select("amount, account, entry_type, created_at")
-    .in("entry_type", ["deposit", "withdrawal"]);
-  if (params.from_ts) vaultMovementQuery = vaultMovementQuery.gte("created_at", params.from_ts);
-  if (params.to_ts) vaultMovementQuery = vaultMovementQuery.lte("created_at", params.to_ts);
+    const itemsByTxnId = new Map<string, TransactionItem[]>();
+    if (transactions.length > 0) {
+      const items = await queryRows<TransactionItem>(
+        `SELECT ${TRANSACTION_ITEM_COLUMNS} FROM transaction_items WHERE transaction_id IN (${transactions.map(() => "?").join(",")})`,
+        transactions.map((t) => t.id)
+      );
+      for (const item of items) {
+        const list = itemsByTxnId.get(item.transaction_id);
+        if (list) list.push(item);
+        else itemsByTxnId.set(item.transaction_id, [item]);
+      }
+    }
+    sales = transactions.map((t) => ({
+      ...t,
+      transaction_items: itemsByTxnId.get(t.id) ?? [],
+    }));
+  } catch (err) {
+    return <LoadError message={(err as Error).message} />;
+  }
 
-  const [
-    { data: salesData, error: salesError },
-    { data: serviceData, error: serviceError },
-    { data: restockData, error: restockError },
-    { data: vaultMovementData, error: vaultMovementError },
-    { data: productsData },
-    { data: categoriesData },
-  ] = await Promise.all([
-    salesQuery,
-    serviceQuery,
-    restockQuery,
-    vaultMovementQuery,
-    // Unfiltered by is_active: a sale of a since-deactivated product should
-    // still attribute correctly to its category.
-    supabase.from("products").select("id, category_id"),
-    supabase.from("categories").select("id, name"),
-  ]);
-
-  if (salesError) return <LoadError message={salesError.message} />;
-  if (serviceError) return <LoadError message={serviceError.message} />;
-  if (restockError) return <LoadError message={restockError.message} />;
-  if (vaultMovementError) return <LoadError message={vaultMovementError.message} />;
-
-  const sales = salesData ?? [];
   // A voided service transaction had every entry it posted reversed — same
   // "excluded everywhere" treatment as a voided/personal-take sale.
-  const serviceList = (serviceData ?? []).filter((s) => !s.voided_at);
+  const serviceList = serviceData.filter((s) => !s.voided_at);
   // A voided sale had its stock and any posted income both reversed — it
   // isn't real revenue, demand, or a "transaction that happened" anymore,
   // so it's excluded the same way personal takes already are everywhere a
@@ -297,11 +323,11 @@ export default async function StatisticsPage({
     );
   }
 
-  const restockSpend = (restockData ?? []).reduce(
+  const restockSpend = restockData.reduce(
     (sum, r) => sum + Number(r.cost),
     0
   );
-  const restockUnits = (restockData ?? []).reduce(
+  const restockUnits = restockData.reduce(
     (sum, r) => sum + r.quantity,
     0
   );
@@ -314,7 +340,7 @@ export default async function StatisticsPage({
   let withdrawalsTotal = 0;
   const depositsByAccount = new Map<MoneyAccount, number>();
   const withdrawalsByAccount = new Map<MoneyAccount, number>();
-  for (const entry of vaultMovementData ?? []) {
+  for (const entry of vaultMovementData) {
     const amount = Number(entry.amount);
     if (entry.entry_type === "deposit") {
       depositsTotal += amount;
@@ -334,10 +360,10 @@ export default async function StatisticsPage({
   // Category attribution reflects each product's CURRENT category, not its
   // category at time of sale — products don't snapshot that history.
   const categoryNameById = new Map(
-    (categoriesData ?? []).map((c) => [c.id, c.name])
+    categoriesData.map((c) => [c.id, c.name])
   );
   const categoryIdByProductId = new Map(
-    (productsData ?? []).map((p) => [p.id, p.category_id])
+    productsData.map((p) => [p.id, p.category_id])
   );
 
   const productAgg = new Map<string, { name: string; units: number; revenue: number }>();

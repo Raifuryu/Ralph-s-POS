@@ -2,13 +2,15 @@
 
 import { revalidatePath } from "next/cache";
 
-import { createClient } from "@/lib/supabase/server";
+import { requireCurrentUser } from "@/lib/auth/session";
+import { voidTransaction as voidTransactionOperation } from "@/lib/mysql/operations/voidTransaction";
+import { voidServiceTransaction as voidServiceTransactionOperation } from "@/lib/mysql/operations/voidServiceTransaction";
 
 export type VoidState = { error: string | null };
 
 /** Voids a mistaken sale or personal take: stock is returned and (for a
     real sale) a reversing entry nets the vault back down — see
-    void_transaction() and migration 0023 for the actual reversal logic.
+    lib/mysql/operations/voidTransaction.ts for the actual reversal logic.
     Never deletes or edits the original transaction; voided_at just flags
     it, so it stays visible in the list as a struck-through, red record. */
 export async function voidTransaction(
@@ -18,11 +20,12 @@ export async function voidTransaction(
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing transaction id." };
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("void_transaction", {
-    p_transaction_id: id,
-  });
-  if (error) return { error: error.message };
+  try {
+    const user = await requireCurrentUser();
+    await voidTransactionOperation({ transactionId: id }, user.id);
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 
   revalidatePath("/");
   revalidatePath("/checkout");
@@ -33,7 +36,7 @@ export async function voidTransaction(
 
 /** Voids a mistaken e-service transaction: every vault_entries row it
     originally posted (2 or 3, depending on flow) gets a reversing entry —
-    see void_service_transaction() and migration 0025. No stock is touched;
+    see lib/mysql/operations/voidServiceTransaction.ts. No stock is touched;
     services never affect inventory. Same "flag, never edit" approach as
     voidTransaction above. */
 export async function voidServiceTransaction(
@@ -43,11 +46,12 @@ export async function voidServiceTransaction(
   const id = String(formData.get("id") ?? "");
   if (!id) return { error: "Missing service transaction id." };
 
-  const supabase = await createClient();
-  const { error } = await supabase.rpc("void_service_transaction", {
-    p_service_transaction_id: id,
-  });
-  if (error) return { error: error.message };
+  try {
+    const user = await requireCurrentUser();
+    await voidServiceTransactionOperation({ serviceTransactionId: id }, user.id);
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 
   revalidatePath("/");
   revalidatePath("/statistics");
