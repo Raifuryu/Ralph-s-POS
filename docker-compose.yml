@@ -1,22 +1,42 @@
+x-app-env: &app-env
+  env_file: .env.local
+  environment:
+    # Overrides .env.local's MARIADB_HOST (127.0.0.1, for `pnpm dev` run
+    # directly on the host) — from inside a container, 127.0.0.1 means the
+    # container itself, not your host machine. host.docker.internal is
+    # Docker's special DNS name for reaching the host's own network, which
+    # is where your existing MariaDB instance is listening.
+    # If your MariaDB actually lives on a different machine instead, change
+    # this to that machine's real hostname/IP.
+    MARIADB_HOST: host.docker.internal
+  extra_hosts:
+    # host.docker.internal is automatic on Docker Desktop (Mac/Windows);
+    # this makes it resolve on Linux too.
+    - "host.docker.internal:host-gateway"
+
 services:
   app:
-    build: .
+    build:
+      context: .
+      target: runner
     restart: unless-stopped
-    env_file: .env.local
+    <<: *app-env
     environment:
-      # Overrides .env.local's MARIADB_HOST (127.0.0.1, for `pnpm dev` run
-      # directly on the host) — from inside the container, 127.0.0.1 means
-      # the container itself, not your host machine. host.docker.internal
-      # is Docker's special DNS name for reaching the host's own network,
-      # which is where your existing MariaDB instance is listening.
-      # If your MariaDB actually lives on a different machine instead,
-      # change this to that machine's real hostname/IP.
       MARIADB_HOST: host.docker.internal
       NODE_ENV: production
       PORT: "2999"
-    extra_hosts:
-      # host.docker.internal is automatic on Docker Desktop (Mac/Windows);
-      # this makes it resolve on Linux too.
-      - "host.docker.internal:host-gateway"
     ports:
       - "2999:2999"
+
+  # One-off admin scripts (pnpm seed-user / pnpm db-query), which need tsx —
+  # a devDependency the lean `runner` image above deliberately doesn't have.
+  # Not started by `docker compose up`; run on demand, e.g.:
+  #   docker compose run --rm tools seed-user <username> <password>
+  #   docker compose run --rm tools db-query "SELECT COUNT(*) FROM products"
+  tools:
+    build:
+      context: .
+      target: builder
+    profiles: ["tools"]
+    <<: *app-env
+    entrypoint: ["pnpm"]

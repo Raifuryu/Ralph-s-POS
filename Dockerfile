@@ -1,7 +1,10 @@
-# Full node_modules (not `output: "standalone"`) is kept deliberately: it
-# means `pnpm seed-user` / `pnpm db-query` work inside the running container
-# exactly like they do in local dev (they need `tsx`, a devDependency, which
-# a pruned standalone build wouldn't include).
+# `builder` (full node_modules, incl. devDependencies like tsx) doubles as
+# the image for one-off admin scripts (`pnpm seed-user`/`pnpm db-query`) via
+# docker-compose.yml's `tools` service. `runner` below is the lean
+# `output: "standalone"` runtime the `app` service actually runs — it never
+# invokes pnpm at runtime, which avoids pnpm's own pre-flight lockfile check
+# misfiring (no TTY to confirm a reinstall) on node_modules copied in from
+# an earlier build stage.
 
 FROM node:22-alpine AS base
 RUN apk add --no-cache libc6-compat
@@ -19,17 +22,14 @@ RUN pnpm build
 
 FROM base AS runner
 ENV NODE_ENV=production
+ENV PORT=2999
+ENV HOSTNAME=0.0.0.0
 RUN addgroup -g 1001 -S nodejs && adduser -S nextjs -u 1001
-# --chown matters here: without it everything stays root-owned, and
-# `pnpm start`'s pre-flight lockfile-sync check (which writes a small temp
-# file into /app) fails with EACCES once we drop to the nextjs user below.
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=nextjs:nodejs /app/next.config.ts ./next.config.ts
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/scripts ./scripts
+COPY --from=builder /app/public ./public
+RUN mkdir .next && chown nextjs:nodejs .next
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 USER nextjs
 
 EXPOSE 2999
-CMD ["pnpm", "start"]
+CMD ["node", "server.js"]
