@@ -25,23 +25,27 @@ Business logic that used to live in Postgres functions (`checkout`, `record_serv
 
 ## Running in Docker
 
-`docker-compose.yml` runs the app and a MariaDB container together — no local MariaDB install needed. `mariadb/schema.sql` and `mariadb/seed-data.sql` are mounted into the `db` container and applied automatically on its first boot (the official MariaDB image runs everything in `/docker-entrypoint-initdb.d/` once, when its data volume is empty).
+`docker-compose.yml` only containerizes the **app** — it connects out to a MariaDB instance you already have running (not a container Compose manages). `.env.local` is the single source of truth for both `pnpm dev` and Docker (`env_file: .env.local`); the only override is `MARIADB_HOST`, forced to `host.docker.internal` (Docker's special DNS name for reaching the host machine) since `127.0.0.1` inside a container means the container itself, not your host. If your MariaDB instance actually lives on a different machine, change that override in `docker-compose.yml` to its real hostname/IP instead.
 
-`.env.local` is the single source of truth for both `pnpm dev` and Docker — Compose loads it directly (`env_file: .env.local` in `docker-compose.yml`). The only override is `MARIADB_HOST`, forced to `db` (the Compose service name) inside containers, since `127.0.0.1` wouldn't reach the `db` container from `app`.
-
-1. **Fill in `.env.local`** (copy `.env.local.example` if you don't have one yet) — same steps as local dev above, plus one Docker-only var: `MARIADB_ROOT_PASSWORD`, used to bootstrap the containerized database's root account. If `MARIADB_USER` is `root`, read the caveat in `.env.local.example` — you'll likely want a non-root `MARIADB_USER` instead.
-2. **Build and start**:
+1. **Apply the schema + seed data** to your existing MariaDB instance, if you haven't already (same commands as local dev above):
+   ```bash
+   mariadb -h $MARIADB_HOST -P $MARIADB_PORT -u $MARIADB_USER -p $MARIADB_DATABASE < mariadb/schema.sql
+   mariadb -h $MARIADB_HOST -P $MARIADB_PORT -u $MARIADB_USER -p $MARIADB_DATABASE < mariadb/seed-data.sql   # optional
+   ```
+2. **Make sure MariaDB actually accepts connections from the container**, not just `localhost` — this is the most common thing to trip on here:
+   - `bind-address` in your MariaDB config (`my.cnf`) needs to allow more than `127.0.0.1` (e.g. `0.0.0.0`, or scoped to the Docker bridge subnet).
+   - Your `MARIADB_USER` account's grant needs a host that covers Docker's bridge network, not just `'user'@'localhost'` — e.g. `'user'@'%'`, or run `GRANT ALL ON ralph_pos.* TO 'user'@'%' IDENTIFIED BY '...';` for that user.
+   - A local firewall (e.g. `ufw`) needs to allow the `MARIADB_PORT` from Docker's bridge subnet.
+3. **Fill in `.env.local`** (copy `.env.local.example` if you don't have one yet) — same vars as local dev.
+4. **Build and start**:
    ```bash
    docker compose up -d --build
    ```
-   First boot takes a bit longer while the `db` container imports the schema + seed data.
-3. **Create your login** (same script as local dev, run inside the running `app` container):
+5. **Create your login** (same script as local dev, run inside the running `app` container):
    ```bash
    docker compose exec app pnpm seed-user <username> <password>
    ```
-4. Visit `http://localhost:3000` and sign in.
-
-To reseed from scratch (e.g. after editing `mariadb/seed-data.sql`), the init scripts only run on an empty data directory: `docker compose down -v` removes the `db_data` volume, then `docker compose up -d --build` re-imports everything. This deletes all data in the containerized database — never run it against a volume holding real data you haven't backed up.
+6. Visit `http://localhost:2999` and sign in.
 
 ## Getting Started
 

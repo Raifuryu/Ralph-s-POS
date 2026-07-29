@@ -1,40 +1,22 @@
 services:
-  db:
-    image: mariadb:11
-    restart: unless-stopped
-    # .env.local is the single source of truth for both `pnpm dev` and
-    # Docker — its MARIADB_* var names already match what this image reads
-    # (MARIADB_ROOT_PASSWORD/MARIADB_DATABASE/MARIADB_USER/MARIADB_PASSWORD).
-    env_file: .env.local
-    volumes:
-      - db_data:/var/lib/mysql
-      # Official mariadb image runs every *.sql in here, in filename order,
-      # but only the very first time (when the data directory is empty).
-      # Delete the db_data volume if you need to reseed from scratch.
-      - ./mariadb/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
-      - ./mariadb/seed-data.sql:/docker-entrypoint-initdb.d/02-seed-data.sql:ro
-    healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
   app:
     build: .
     restart: unless-stopped
-    depends_on:
-      db:
-        condition: service_healthy
     env_file: .env.local
     environment:
-      # Overrides .env.local's MARIADB_HOST (127.0.0.1, for `pnpm dev`
-      # against your host MariaDB) — inside Compose's network the db
-      # container is reachable at its service name, not localhost.
-      MARIADB_HOST: db
+      # Overrides .env.local's MARIADB_HOST (127.0.0.1, for `pnpm dev` run
+      # directly on the host) — from inside the container, 127.0.0.1 means
+      # the container itself, not your host machine. host.docker.internal
+      # is Docker's special DNS name for reaching the host's own network,
+      # which is where your existing MariaDB instance is listening.
+      # If your MariaDB actually lives on a different machine instead,
+      # change this to that machine's real hostname/IP.
+      MARIADB_HOST: host.docker.internal
       NODE_ENV: production
+      PORT: "2999"
+    extra_hosts:
+      # host.docker.internal is automatic on Docker Desktop (Mac/Windows);
+      # this makes it resolve on Linux too.
+      - "host.docker.internal:host-gateway"
     ports:
-      - "3000:3000"
-
-volumes:
-  db_data:
+      - "2999:2999"

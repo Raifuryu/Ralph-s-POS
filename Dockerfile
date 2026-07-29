@@ -28,5 +28,5 @@ COPY --from=builder /app/public ./public
 COPY --from=builder /app/scripts ./scripts
 USER nextjs
 
-EXPOSE 3000
+EXPOSE 2999
 CMD ["pnpm", "start"]
