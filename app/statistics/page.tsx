@@ -3,11 +3,13 @@ import { SummaryCard } from "@/components/summaryCard";
 import { ACCOUNT_ORDER } from "@/lib/accountColors";
 import {
   formatDate,
+  formatHourLabel,
   formatPeso,
   formatShortDate,
   friendlyDayLabel,
   storeDateFromKey,
   storeDayKey,
+  storeHour,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import {
@@ -20,6 +22,7 @@ import {
 import IncomeBreakdownCard, { type EServiceFees } from "@/app/incomeBreakdownCard";
 import TransactionFilters from "@/app/transactionFilters";
 import CategoryLeaderboard, { type CategoryRevenue } from "./categoryLeaderboard";
+import HourlyTrafficChart, { type HourlyBucket } from "./hourlyTrafficChart";
 import PaymentBreakdownCard from "./paymentBreakdownCard";
 import RevenueTrendChart, { type RevenueBucket } from "./revenueTrendChart";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
@@ -366,25 +369,66 @@ export default async function StatisticsPage({
     productsData.map((p) => [p.id, p.category_id])
   );
 
-  const productAgg = new Map<string, { name: string; units: number; revenue: number }>();
+  // costKnownRevenue/cost mirror the storeRevenueWithKnownCost/storeCogs
+  // split above, but per product — a line only contributes to profit once
+  // its unit_cost is known (see the comment on that split for why).
+  type ProductAggEntry = {
+    name: string;
+    units: number;
+    revenue: number;
+    costKnownRevenue: number;
+    cost: number;
+  };
+  function bumpProductAgg(
+    map: Map<string, ProductAggEntry>,
+    key: string,
+    name: string,
+    quantity: number,
+    revenue: number,
+    unitCost: number | null
+  ) {
+    const entry = map.get(key) ?? {
+      name,
+      units: 0,
+      revenue: 0,
+      costKnownRevenue: 0,
+      cost: 0,
+    };
+    entry.units += quantity;
+    entry.revenue += revenue;
+    if (unitCost !== null) {
+      entry.costKnownRevenue += revenue;
+      entry.cost += unitCost * quantity;
+    }
+    map.set(key, entry);
+  }
+  function productProfit(entry: ProductAggEntry): number | null {
+    return entry.costKnownRevenue > 0
+      ? entry.costKnownRevenue - entry.cost
+      : null;
+  }
+
+  const productAgg = new Map<string, ProductAggEntry>();
   const categoryRevenue = new Map<string, number>();
+  // Same per-product aggregation as productAgg above, but scoped per
+  // category — powers the click-to-expand item breakdown under each row in
+  // CategoryLeaderboard.
+  const categoryProductAgg = new Map<string, Map<string, ProductAggEntry>>();
 
   for (const t of salesExcludingPersonal) {
     for (const item of t.transaction_items) {
       const revenue = Number(item.line_total);
-
+      const unitCost = item.unit_cost !== null ? Number(item.unit_cost) : null;
       const productKey = item.product_id ?? `name:${item.product_name}`;
-      const existing = productAgg.get(productKey);
-      if (existing) {
-        existing.units += item.quantity;
-        existing.revenue += revenue;
-      } else {
-        productAgg.set(productKey, {
-          name: item.product_name,
-          units: item.quantity,
-          revenue,
-        });
-      }
+
+      bumpProductAgg(
+        productAgg,
+        productKey,
+        item.product_name,
+        item.quantity,
+        revenue,
+        unitCost
+      );
 
       const categoryId = item.product_id
         ? categoryIdByProductId.get(item.product_id)
@@ -396,16 +440,49 @@ export default async function StatisticsPage({
         categoryName,
         (categoryRevenue.get(categoryName) ?? 0) + revenue
       );
+
+      let categoryProducts = categoryProductAgg.get(categoryName);
+      if (!categoryProducts) {
+        categoryProducts = new Map();
+        categoryProductAgg.set(categoryName, categoryProducts);
+      }
+      bumpProductAgg(
+        categoryProducts,
+        productKey,
+        item.product_name,
+        item.quantity,
+        revenue,
+        unitCost
+      );
     }
   }
 
   const topProducts: TopProduct[] = [...productAgg.entries()]
-    .map(([key, v]) => ({ key, name: v.name, units: v.units, revenue: v.revenue }))
+    .map(([key, v]) => ({
+      key,
+      name: v.name,
+      units: v.units,
+      revenue: v.revenue,
+      profit: productProfit(v),
+    }))
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 10);
 
   const categoryRows: CategoryRevenue[] = [...categoryRevenue.entries()]
-    .map(([name, revenue]) => ({ key: name, name, revenue }))
+    .map(([name, revenue]) => ({
+      key: name,
+      name,
+      revenue,
+      items: [...(categoryProductAgg.get(name)?.entries() ?? [])]
+        .map(([key, v]) => ({
+          key,
+          name: v.name,
+          units: v.units,
+          revenue: v.revenue,
+          profit: productProfit(v),
+        }))
+        .sort((a, b) => b.revenue - a.revenue),
+    }))
     .sort((a, b) => b.revenue - a.revenue);
 
   // Same "grouped by what was actually sold" idea as topProducts above, but
@@ -436,6 +513,31 @@ export default async function StatisticsPage({
     params.from_ts,
     params.to_ts
   );
+
+  // "Customers" ≈ each individual sale/service action, same units already
+  // summed into the Transactions summary card above — just bucketed by hour
+  // of day (store timezone) instead of totalled across the whole window, to
+  // surface when the store is actually busiest.
+  const hourlyTraffic: HourlyBucket[] = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    label: formatHourLabel(hour),
+    store: 0,
+    eService: 0,
+  }));
+  for (const t of salesExcludingPersonal) {
+    hourlyTraffic[storeHour(t.created_at)].store += 1;
+  }
+  for (const s of serviceList) {
+    hourlyTraffic[storeHour(s.created_at)].eService += 1;
+  }
+  const peakHour = hourlyTraffic.reduce((best, b) =>
+    b.store + b.eService > best.store + best.eService ? b : best
+  );
+  const peakHourTotal = peakHour.store + peakHour.eService;
+  const peakHourSubtitle =
+    peakHourTotal > 0
+      ? `Busiest: ${peakHour.label}–${formatHourLabel((peakHour.hour + 1) % 24)}, ${peakHourTotal} customer${peakHourTotal === 1 ? "" : "s"}`
+      : undefined;
 
   const subtitle = rangeSubtitle(params.from, params.to);
 
@@ -486,6 +588,12 @@ export default async function StatisticsPage({
         </div>
 
         <RevenueTrendChart title="Revenue trend" subtitle={subtitle} buckets={buckets} />
+
+        <HourlyTrafficChart
+          title="Busiest times of day"
+          subtitle={peakHourSubtitle}
+          buckets={hourlyTraffic}
+        />
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <IncomeBreakdownCard

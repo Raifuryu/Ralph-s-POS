@@ -7,7 +7,12 @@
 # an earlier build stage.
 
 FROM node:22-alpine AS base
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat tzdata
+# The store is in the Philippines — every displayed date/time already pins
+# Asia/Manila explicitly (lib/format.ts), but mysql2's default date parsing
+# (see lib/mysql/pool.ts) reads the Node process's own local timezone, so
+# this needs to actually be Asia/Manila for that to line up.
+ENV TZ=Asia/Manila
 ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 RUN corepack enable
 WORKDIR /app

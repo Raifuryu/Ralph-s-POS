@@ -106,3 +106,26 @@ export function storeDayRange(dateKey: string): { fromTs: string; toTs: string }
   ).toISOString();
   return { fromTs, toTs };
 }
+
+// hourCycle: "h23" pins the output to 0–23 — plain hour12:false is a known
+// footgun in some Intl implementations, which render midnight as "24".
+const hourFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: STORE_TIME_ZONE,
+  hour: "numeric",
+  hourCycle: "h23",
+});
+
+/** Hour of day (0–23) in the store's timezone — for bucketing timestamps by
+    time-of-day. Same Intl-with-explicit-timeZone approach as the rest of
+    this file, not `Date#getHours()`, since that reads the SERVER's own
+    timezone rather than the store's. */
+export function storeHour(value: string | Date): number {
+  return Number(hourFormat.format(new Date(value)));
+}
+
+/** "2 AM" / "2 PM" style label for an hour-of-day bucket (0–23). */
+export function formatHourLabel(hour: number): string {
+  const period = hour < 12 ? "AM" : "PM";
+  const twelveHour = hour % 12 === 0 ? 12 : hour % 12;
+  return `${twelveHour} ${period}`;
+}

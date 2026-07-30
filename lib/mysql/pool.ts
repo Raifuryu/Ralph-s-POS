@@ -9,7 +9,7 @@ declare global {
 }
 
 function createPool(): mysql.Pool {
-  return mysql.createPool({
+  const pool = mysql.createPool({
     host: process.env.MARIADB_HOST,
     port: Number(process.env.MARIADB_PORT ?? 3306),
     user: process.env.MARIADB_USER,
@@ -39,6 +39,21 @@ function createPool(): mysql.Pool {
       return next();
     },
   });
+
+  // The store is in the Philippines. This pins every connection's SESSION
+  // time_zone to Manila regardless of whatever this MariaDB server's own
+  // default happens to be — without it, CURRENT_TIMESTAMP defaults and
+  // NOW()-based view logic (product_sales_totals' "last 3 days") would
+  // compute against the server's default zone instead of the store's
+  // actual calendar day. mysql2's own DATETIME/TIMESTAMP parsing (how the
+  // app reads these values back into JS Date objects) separately relies on
+  // the Node process's own TZ env var — see the Dockerfile/package.json
+  // scripts, both set to Asia/Manila too, so both ends agree.
+  pool.on("connection", (connection) => {
+    connection.query("SET time_zone = '+08:00'");
+  });
+
+  return pool;
 }
 
 export const pool: mysql.Pool = globalThis.__ralphPosPool ?? createPool();

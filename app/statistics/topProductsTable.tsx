@@ -21,6 +21,11 @@ export type TopProduct = {
   name: string;
   units: number;
   revenue: number;
+  /** Net profit for this product/service across the window — null when no
+      line contributing to it has a known unit_cost (see the margin comment
+      in app/statistics/page.tsx), undefined for rows with no cost concept
+      at all (e.g. e-service fees, where the fee itself is the margin). */
+  profit?: number | null;
 };
 
 /** Self-contained card (own border/title), matching MoneyBreakdownCard's
@@ -71,6 +76,12 @@ export default function TopProductsTable({
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {formatPeso(product.revenue)}
+                    {product.profit != null ? (
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        ({product.profit >= 0 ? "+" : "-"}
+                        {formatPeso(Math.abs(product.profit))})
+                      </span>
+                    ) : null}
                   </TableCell>
                 </TableRow>
               ))}
