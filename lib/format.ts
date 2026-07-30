@@ -93,18 +93,23 @@ export function storeDateFromKey(dateKey: string): Date {
 }
 
 /**
- * Absolute UTC instants bounding a store-timezone calendar day — ready to
- * feed straight into a `.gte()`/`.lte()` query. Manila has no DST, so the
- * offset is a fixed UTC+8 year-round, unlike storeDateFromKey's noon anchor
- * (safe for display, not for exact range boundaries).
+ * Wall-clock bounds (store timezone) of a calendar day, as naive
+ * "YYYY-MM-DD HH:MM:SS" literals ready to bind against a TIMESTAMP column.
+ *
+ * Deliberately NOT UTC instants (this function used to build them via
+ * `Date.UTC(...).toISOString()`). mysql2 sends a plain JS string parameter
+ * to MariaDB completely unmodified — no timezone conversion, the trailing
+ * 'Z' means nothing there — and every pooled connection pins its SESSION
+ * time_zone to '+08:00' (see lib/mysql/pool.ts). So a real UTC instant
+ * string got silently re-interpreted by MariaDB as if it were already
+ * Manila wall-clock time, shifting the whole window 8 hours off and making
+ * "today" actually cover ~4pm yesterday through ~4pm today. Emitting naive
+ * local literals directly sidesteps the mismatch entirely: MariaDB applies
+ * the (correct) session offset itself. Manila has no DST, so this is exact
+ * year-round.
  */
 export function storeDayRange(dateKey: string): { fromTs: string; toTs: string } {
-  const [year, month, day] = dateKey.split("-").map(Number);
-  const fromTs = new Date(Date.UTC(year, month - 1, day, -8, 0, 0, 0)).toISOString();
-  const toTs = new Date(
-    Date.UTC(year, month - 1, day + 1, -8, 0, 0, 0) - 1
-  ).toISOString();
-  return { fromTs, toTs };
+  return { fromTs: `${dateKey} 00:00:00`, toTs: `${dateKey} 23:59:59` };
 }
 
 // hourCycle: "h23" pins the output to 0–23 — plain hour12:false is a known
