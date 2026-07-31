@@ -79,9 +79,24 @@ export async function checkout(
   }
   const productById = new Map(products.map((p) => [p.id, p]));
 
+  // A personal take has no sale price and no discount to speak of — nothing
+  // was sold, so it's valued at what it actually cost the store to stock,
+  // not what it would have sold for (see checkout()'s own vault-entry
+  // comment below: "no income"). A line whose product has never been
+  // restocked through the app (cost unknown) is left out of the total
+  // rather than guessed at via price, same "don't assume 100%" rule every
+  // other cost-based figure in the app already follows — its unit_cost is
+  // still stored as null on the line below, so the gap stays visible rather
+  // than silently rounding down to a complete-looking number.
   let total = 0;
   const lines = cart.map((line) => {
     const product = productById.get(line.productId)!;
+    if (personalTake) {
+      if (product.cost !== null) {
+        total += roundMoney(product.cost * line.quantity);
+      }
+      return { ...line, product, discount: 0 };
+    }
     const subtotal = roundMoney(product.price * line.quantity);
     const discount = Math.min(line.discountAmount, subtotal);
     total += subtotal - discount;

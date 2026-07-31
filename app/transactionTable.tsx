@@ -177,13 +177,22 @@ function SaleBlock({
   const tendered = data.tendered !== null ? Number(data.tendered) : null;
   const total = Number(data.total);
   const isVoided = data.voided_at !== null;
+  // A real sale's `total` is gross revenue — `profit` (price - cost margin)
+  // is the separate figure that can be cost-incomplete. A personal take's
+  // `total` IS a cost figure already (see checkout()), so there's no
+  // separate margin to compute — it's the total itself that can be
+  // incomplete, whenever some item in it has never been restocked through
+  // the app (unit_cost null on that line).
   const { profit, revenueWithUnknownCost } = saleProfit(data.transaction_items);
-  // Nothing sold on a personal take has a margin — it was never income to
-  // begin with, so the headline stays the value taken, same as always.
-  const allCostUnknown =
-    !data.is_personal_take && revenueWithUnknownCost >= total;
-  const partialCostUnknown =
-    !data.is_personal_take && revenueWithUnknownCost > 0 && !allCostUnknown;
+  const hasUnknownCostLine = data.transaction_items.some(
+    (item) => item.unit_cost === null
+  );
+  const allCostUnknown = data.is_personal_take
+    ? hasUnknownCostLine && total === 0
+    : revenueWithUnknownCost >= total;
+  const partialCostUnknown = data.is_personal_take
+    ? hasUnknownCostLine && total > 0
+    : revenueWithUnknownCost > 0 && !allCostUnknown;
 
   const [state, formAction, isPending] = useActionState(
     voidTransaction,
@@ -244,13 +253,14 @@ function SaleBlock({
               </Badge>
             ) : null}
           </p>
-          {isVoided ? null : data.is_personal_take ? (
-            <p className="text-sm font-semibold tabular-nums">
-              {formatPeso(total)}
-            </p>
-          ) : allCostUnknown ? (
+          {isVoided ? null : allCostUnknown ? (
             <p className="text-sm font-medium text-muted-foreground italic">
               Cost unknown
+            </p>
+          ) : data.is_personal_take ? (
+            <p className="text-sm font-semibold tabular-nums">
+              {formatPeso(total)}
+              {partialCostUnknown ? "*" : ""}
             </p>
           ) : (
             <p className="text-sm font-semibold tabular-nums">
@@ -259,6 +269,13 @@ function SaleBlock({
             </p>
           )}
         </div>
+
+        {!isVoided && data.is_personal_take && partialCostUnknown ? (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            * one or more items here have no recorded cost yet, excluded
+            from the total above
+          </p>
+        ) : null}
 
         {!data.is_personal_take && !isVoided ? (
           <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
@@ -488,18 +505,19 @@ function VisitGroup({ entries }: { entries: NumberedEntry[] }) {
 export default function TransactionTable({
   entries,
   resetKey,
-  searchActive = false
+  filtersActive = false
 }: {
   entries: SalesEntry[];
-  /** Resets "load more" back to the top page whenever the picked day or the
-      search term changes — a plain useState wouldn't, since either one
-      re-renders this component in place rather than remounting it (see
-      HistorySheet for the same reset-during-render pattern). Composed by
-      the caller (TransactionTabs) from the date key and the search needle. */
+  /** Resets "load more" back to the top page whenever the picked day, the
+      search term, or any chip filter changes — a plain useState wouldn't,
+      since any of those re-renders this component in place rather than
+      remounting it (see HistorySheet for the same reset-during-render
+      pattern). Composed by the caller (TransactionTabs). */
   resetKey: string;
-  /** Picks the right empty-state copy — an empty result from typing a
-      search is a different situation than a genuinely quiet day/category. */
-  searchActive?: boolean;
+  /** Picks the right empty-state copy — an empty result from a search or a
+      chip filter (void/personal take) is a different situation than a
+      genuinely quiet day/category. */
+  filtersActive?: boolean;
 }) {
   const [visible, setVisible] = useState({ key: resetKey, count: PAGE_SIZE });
   if (visible.key !== resetKey) {
@@ -511,8 +529,8 @@ export default function TransactionTable({
     return (
       <EmptyState
         title={
-          searchActive
-            ? "No transactions match your search."
+          filtersActive
+            ? "No transactions match these filters."
             : "No transactions recorded yet."
         }
       />

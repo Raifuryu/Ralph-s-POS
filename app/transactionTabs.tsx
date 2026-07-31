@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { FilterChip } from "@/components/filterChip";
 import { Input } from "@/components/ui/input";
 import {
   Tabs,
@@ -68,17 +69,49 @@ export default function TransactionTabs({
 }) {
   const router = useRouter();
   const [search, setSearch] = useState("");
+  const [voidFilter, setVoidFilter] = useState<"all" | "voided">("all");
+  const [personalTakeFilter, setPersonalTakeFilter] = useState<
+    "all" | "personal"
+  >("all");
 
   // Client-side only — the whole day's entries are already in memory (see
   // app/page.tsx), so there's no server round trip to debounce and every
   // keystroke can filter instantly, same as ItemsBrowser's search.
   const needle = search.trim().toLowerCase();
+
+  // Chip counts come from the full (pre-filter) entries list, so the row
+  // never offers a chip whose count is stale relative to what's typed/
+  // toggled — same reasoning ItemsBrowser's stock/expiry/cost counts follow.
+  const voidCount = useMemo(
+    () => entries.filter((entry) => entry.data.voided_at !== null).length,
+    [entries]
+  );
+  const personalTakeCount = useMemo(
+    () =>
+      entries.filter(
+        (entry) => entry.kind === "sale" && entry.data.is_personal_take
+      ).length,
+    [entries]
+  );
+
   const searched = useMemo(
     () =>
-      needle === ""
-        ? entries
-        : entries.filter((entry) => searchableText(entry).includes(needle)),
-    [entries, needle]
+      entries.filter((entry) => {
+        if (needle !== "" && !searchableText(entry).includes(needle)) {
+          return false;
+        }
+        if (voidFilter === "voided" && entry.data.voided_at === null) {
+          return false;
+        }
+        if (
+          personalTakeFilter === "personal" &&
+          !(entry.kind === "sale" && entry.data.is_personal_take)
+        ) {
+          return false;
+        }
+        return true;
+      }),
+    [entries, needle, voidFilter, personalTakeFilter]
   );
 
   const byFilter = useMemo(
@@ -112,6 +145,43 @@ export default function TransactionTabs({
         onChange={(event) => setSearch(event.target.value)}
       />
 
+      {voidCount > 0 ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <FilterChip
+            label="All"
+            active={voidFilter === "all"}
+            onClick={() => setVoidFilter("all")}
+          />
+          <FilterChip
+            label={`Voided (${voidCount})`}
+            active={voidFilter === "voided"}
+            tone="destructive"
+            onClick={() =>
+              setVoidFilter((prev) => (prev === "voided" ? "all" : "voided"))
+            }
+          />
+        </div>
+      ) : null}
+
+      {personalTakeCount > 0 ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <FilterChip
+            label="All"
+            active={personalTakeFilter === "all"}
+            onClick={() => setPersonalTakeFilter("all")}
+          />
+          <FilterChip
+            label={`Personal take (${personalTakeCount})`}
+            active={personalTakeFilter === "personal"}
+            onClick={() =>
+              setPersonalTakeFilter((prev) =>
+                prev === "personal" ? "all" : "personal"
+              )
+            }
+          />
+        </div>
+      ) : null}
+
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
@@ -129,8 +199,12 @@ export default function TransactionTabs({
           <TabsContent key={filter} value={filter} className="min-w-0">
             <TransactionTable
               entries={byFilter[filter]}
-              resetKey={`${dateKey}|${needle}`}
-              searchActive={needle !== ""}
+              resetKey={`${dateKey}|${needle}|${voidFilter}|${personalTakeFilter}`}
+              filtersActive={
+                needle !== "" ||
+                voidFilter === "voided" ||
+                personalTakeFilter === "personal"
+              }
             />
           </TabsContent>
         ))}
