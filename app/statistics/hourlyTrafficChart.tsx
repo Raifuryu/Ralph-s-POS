@@ -62,30 +62,56 @@ export default function HourlyTrafficChart({
         <div className="mt-4 flex h-36 gap-1">
           {buckets.map((bucket) => {
             const total = bucket.store + bucket.eService;
+            // Where the figure sits inside the track, as a % from the top —
+            // right at the top edge of this bar's own fill, not the track's
+            // full height, so it reads as "on the bar" for short bars too.
+            // Clamped to 85% so the pill never runs past the bottom edge.
+            const showFigure = bucket.hour % 3 === 0 && total > 0;
+            const figureTop = Math.min(
+              85,
+              Math.max(0, (1 - total / maxTotal) * 100)
+            );
             return (
               <div
                 key={bucket.hour}
                 className="flex min-w-0 flex-1 flex-col items-center gap-1"
               >
                 <div
-                  className="flex w-full min-h-0 flex-1 flex-col-reverse overflow-hidden rounded-sm bg-muted/40"
+                  className="relative w-full min-h-0 flex-1 overflow-visible rounded-sm bg-muted/40"
                   title={`${bucket.label}: ${total} customer${total === 1 ? "" : "s"}`}
                 >
-                  {bucket.store > 0 ? (
-                    <div
-                      style={{
-                        height: `${(bucket.store / maxTotal) * 100}%`,
-                        backgroundColor: STORE_COLOR,
-                      }}
-                    />
-                  ) : null}
-                  {bucket.eService > 0 ? (
-                    <div
-                      style={{
-                        height: `${(bucket.eService / maxTotal) * 100}%`,
-                        backgroundColor: ESERVICE_COLOR,
-                      }}
-                    />
+                  <div className="absolute inset-0 overflow-hidden rounded-sm">
+                    {bucket.store > 0 ? (
+                      <div
+                        className="absolute inset-x-0 bottom-0"
+                        style={{
+                          height: `${(bucket.store / maxTotal) * 100}%`,
+                          backgroundColor: STORE_COLOR,
+                        }}
+                      />
+                    ) : null}
+                    {bucket.eService > 0 ? (
+                      <div
+                        className="absolute inset-x-0"
+                        style={{
+                          bottom: `${(bucket.store / maxTotal) * 100}%`,
+                          height: `${(bucket.eService / maxTotal) * 100}%`,
+                          backgroundColor: ESERVICE_COLOR,
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                  {/* Same thinning as the hour label below — a figure over
+                      every one of the 24 bars would overlap on mobile. */}
+                  {showFigure ? (
+                    <span
+                      className="pointer-events-none absolute inset-x-0 flex justify-center"
+                      style={{ top: `${figureTop}%` }}
+                    >
+                      <span className="rounded-sm bg-background px-1 text-[0.6rem] leading-tight font-medium whitespace-nowrap text-foreground shadow">
+                        {total}
+                      </span>
+                    </span>
                   ) : null}
                 </div>
                 {/* Every 3rd hour (8 of the 24 bars) so labels never overlap. */}
