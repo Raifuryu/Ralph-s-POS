@@ -1,6 +1,11 @@
+"use client";
+
+import { useState } from "react";
+
 import { ESERVICE_COLOR, STORE_COLOR } from "@/app/incomeBreakdownCard";
 import { EmptyState } from "@/components/emptyState";
 import { formatPeso } from "@/lib/format";
+import { SeriesLegend, toggleSeries, type Series } from "./seriesLegend";
 
 export type ProfitBucket = {
   key: string;
@@ -38,8 +43,9 @@ function formatPesoCompact(value: number): string {
     E-Service on top, using the same STORE_COLOR/ESERVICE_COLOR as
     IncomeBreakdownCard so the meaning stays consistent across the app — the
     stacking is itself the store/e-service breakdown, not a separate table.
-    No hover interactivity beyond the native `title` tooltip — this is a
-    Server Component, kept that way deliberately. */
+    The legend doubles as a filter (see SeriesLegend) — that's the only
+    interactivity here, everything else is still just the native `title`
+    tooltip. */
 export default function ProfitTrendChart({
   title,
   subtitle,
@@ -49,7 +55,16 @@ export default function ProfitTrendChart({
   subtitle?: string;
   buckets: ProfitBucket[];
 }) {
-  const maxTotal = buckets.reduce((m, b) => Math.max(m, b.store + b.eService), 0);
+  const [visible, setVisible] = useState<Set<Series>>(
+    () => new Set(["store", "eService"])
+  );
+  const showStore = visible.has("store");
+  const showEService = visible.has("eService");
+  const maxTotal = buckets.reduce(
+    (m, b) =>
+      Math.max(m, (showStore ? b.store : 0) + (showEService ? b.eService : 0)),
+    0
+  );
 
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -60,29 +75,21 @@ export default function ProfitTrendChart({
             <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
           ) : null}
         </div>
-        <div className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
-          <span className="flex items-center gap-1">
-            <span
-              aria-hidden
-              className="size-2 rounded-full"
-              style={{ backgroundColor: STORE_COLOR }}
-            />
-            Store
-          </span>
-          <span className="flex items-center gap-1">
-            <span
-              aria-hidden
-              className="size-2 rounded-full"
-              style={{ backgroundColor: ESERVICE_COLOR }}
-            />
-            E-Service
-          </span>
-        </div>
+        <SeriesLegend
+          visible={visible}
+          onToggle={(series) => setVisible((prev) => toggleSeries(prev, series))}
+        />
       </div>
 
       {maxTotal === 0 ? (
         <div className="mt-3">
-          <EmptyState title="No profit in this window yet." />
+          <EmptyState
+            title={
+              !showStore && !showEService
+                ? "Store and E-Service are both hidden — tap the legend to show one."
+                : "No profit in this window yet."
+            }
+          />
         </div>
       ) : (
         <div className="mt-4 -mx-4 overflow-x-auto px-4">
@@ -91,7 +98,9 @@ export default function ProfitTrendChart({
             style={{ minWidth: `${buckets.length * BAR_WIDTH_PX}px` }}
           >
             {buckets.map((bucket) => {
-              const total = bucket.store + bucket.eService;
+              const storeValue = showStore ? bucket.store : 0;
+              const eServiceValue = showEService ? bucket.eService : 0;
+              const total = storeValue + eServiceValue;
               // Where the figure sits inside the track, as a % from the top
               // — right at the top edge of this bar's own fill, not the
               // track's full height, so it reads as "on the bar" for short
@@ -112,21 +121,21 @@ export default function ProfitTrendChart({
                     title={`${bucket.label}: ${formatPeso(total)}`}
                   >
                     <div className="absolute inset-0 overflow-hidden rounded-sm">
-                      {bucket.store > 0 ? (
+                      {storeValue > 0 ? (
                         <div
                           className="absolute inset-x-0 bottom-0"
                           style={{
-                            height: `${(bucket.store / maxTotal) * 100}%`,
+                            height: `${(storeValue / maxTotal) * 100}%`,
                             backgroundColor: STORE_COLOR,
                           }}
                         />
                       ) : null}
-                      {bucket.eService > 0 ? (
+                      {eServiceValue > 0 ? (
                         <div
                           className="absolute inset-x-0"
                           style={{
-                            bottom: `${(bucket.store / maxTotal) * 100}%`,
-                            height: `${(bucket.eService / maxTotal) * 100}%`,
+                            bottom: `${(storeValue / maxTotal) * 100}%`,
+                            height: `${(eServiceValue / maxTotal) * 100}%`,
                             backgroundColor: ESERVICE_COLOR,
                           }}
                         />
