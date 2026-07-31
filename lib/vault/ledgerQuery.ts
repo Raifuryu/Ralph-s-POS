@@ -2,17 +2,7 @@ import { queryRows } from "@/lib/mysql/pool";
 import { escapeLike } from "@/lib/search";
 import { type VaultEntry } from "@/lib/types";
 import type { LedgerEntry } from "@/app/vault/ledger";
-
-/** Page size for one vault ledger "load more" batch — the table grows
-    unbounded over the store's lifetime, so unlike the sales dashboard's
-    single-day window this can't be fetched in full up front. */
-export const VAULT_LEDGER_PAGE_SIZE = 20;
-
-export type VaultLedgerFilters = {
-  q: string;
-  fromTs?: string;
-  toTs?: string;
-};
+import { VAULT_LEDGER_PAGE_SIZE, type VaultLedgerFilters } from "./ledgerFilters";
 
 type LedgerJoinRow = VaultEntry & { service_name: string | null };
 

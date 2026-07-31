@@ -7,7 +7,8 @@ import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney } from "@/lib/money";
 import { pool } from "@/lib/mysql/pool";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
-import { fetchVaultLedgerPage, type VaultLedgerFilters } from "@/lib/vault/ledgerQuery";
+import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
+import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
 import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
 import type { LedgerEntry } from "./ledger";
 

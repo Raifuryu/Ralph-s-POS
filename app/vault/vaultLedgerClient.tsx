@@ -3,7 +3,7 @@
 import { useState, useTransition } from "react";
 
 import { Button } from "@/components/ui/button";
-import { VAULT_LEDGER_PAGE_SIZE, type VaultLedgerFilters } from "@/lib/vault/ledgerQuery";
+import { VAULT_LEDGER_PAGE_SIZE, type VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
 import { loadMoreVaultEntries } from "./actions";
 import Ledger, { type LedgerEntry } from "./ledger";
 
