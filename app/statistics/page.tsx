@@ -621,7 +621,6 @@ export default async function StatisticsPage({
             title="By payment method"
             subtitle={subtitle}
             revenue={paymentRevenue}
-            personalTake={personalTakesValue}
           />
         </div>
 
