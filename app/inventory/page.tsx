@@ -205,16 +205,16 @@ export default async function InventoryPage({
     ),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  // Money currently tied up in stock, and what it'd bring in if every unit
-  // on the shelf sold at its current price — active, currently-stocked
-  // items only (null stock means "never counted," negative means "oversold,
-  // needs a recount," and a deactivated product isn't real inventory
-  // anymore). A product only has a known cost once it's been restocked
-  // through the app at least once; unknownCostValue tracks how much of the
-  // potential income that gap leaves out of Total invested, same "cost
-  // unknown" convention Statistics already uses for Gross profit.
+  // Money currently tied up in stock, and the profit (not gross revenue) if
+  // every unit on the shelf sold at its current price — active,
+  // currently-stocked items only (null stock means "never counted,"
+  // negative means "oversold, needs a recount," and a deactivated product
+  // isn't real inventory anymore). A product only has a known cost once
+  // it's been restocked through the app at least once; unknownCost* tracks
+  // how much that gap leaves out of both figures, same "cost unknown"
+  // convention Statistics already uses for Gross profit.
   let totalInvested = 0;
-  let potentialIncome = 0;
+  let potentialRevenue = 0;
   let unknownCostValue = 0;
   let unknownCostItems = 0;
   let trackedItems = 0;
@@ -224,7 +224,7 @@ export default async function InventoryPage({
     }
     trackedItems++;
     const lineValue = Number(product.price) * product.stock;
-    potentialIncome += lineValue;
+    potentialRevenue += lineValue;
     if (product.cost !== null) {
       totalInvested += Number(product.cost) * product.stock;
     } else {
@@ -232,6 +232,10 @@ export default async function InventoryPage({
       unknownCostValue += lineValue;
     }
   }
+  // Profit only over the cost-known portion — the unknown-cost slice of
+  // potentialRevenue has no matching cost to subtract, so it's excluded
+  // rather than assumed to be 100% margin.
+  const potentialProfit = potentialRevenue - unknownCostValue - totalInvested;
 
   return (
     <PageShell>
@@ -262,12 +266,17 @@ export default async function InventoryPage({
                   }
                 />
                 <SummaryCard
-                  label="Potential income"
-                  value={formatPeso(potentialIncome)}
+                  label="Potential profit"
+                  value={formatPeso(potentialProfit)}
                   breakdown={[
                     { label: "If every item in stock sold", value: `${trackedItems} item${trackedItems === 1 ? "" : "s"}` },
-                    ...(unknownCostValue > 0
-                      ? [{ label: "Of that, cost unknown", value: formatPeso(unknownCostValue) }]
+                    ...(unknownCostItems > 0
+                      ? [
+                          {
+                            label: "Cost unknown (excluded)",
+                            value: `${unknownCostItems} item${unknownCostItems === 1 ? "" : "s"}`,
+                          },
+                        ]
                       : []),
                   ]}
                 />

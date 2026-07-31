@@ -143,6 +143,11 @@ function ItemRow({
             <ExpiryLabel value={product.expiry_date} status={expiry} />
           </p>
         ) : null}
+        {product.cost === null ? (
+          <p className="text-xs text-muted-foreground">
+            Cost not recorded — restock it to set one
+          </p>
+        ) : null}
         {product.description ? (
           <p className="truncate text-xs text-muted-foreground">
             {product.description}
@@ -185,6 +190,12 @@ const EXPIRY_FILTER_LABELS: Record<Exclude<ExpiryFilter, "all">, string> = {
   expiring: "Expiring soon",
   expired: "Expired",
 };
+
+/** An item only gets a recorded cost once it's been restocked through the
+    app at least once — until then it can't contribute to Total invested /
+    Potential profit on this page, so this filter is how the owner finds
+    which items still need a restock to fix that. */
+type CostFilter = "all" | "missing";
 
 function FilterChip({
   label,
@@ -236,9 +247,16 @@ export default function ItemsBrowser({
   categories: Category[];
 }) {
   const [search, setSearch] = useState("");
-  const [activeCategory, setActiveCategory] = useState<string>("all");
+  // Empty set means "all" — no category filter active. A product only has
+  // one category (category_id is a single FK, no schema for more), but
+  // browsing "Food" and "Drinks" together is a common enough ask that the
+  // filter itself allows picking several at once.
+  const [activeCategories, setActiveCategories] = useState<Set<string>>(
+    () => new Set()
+  );
   const [activeStockFilter, setActiveStockFilter] = useState<StockFilter>("all");
   const [activeExpiryFilter, setActiveExpiryFilter] = useState<ExpiryFilter>("all");
+  const [activeCostFilter, setActiveCostFilter] = useState<CostFilter>("all");
 
   const needle = search.trim().toLowerCase();
 
@@ -255,7 +273,7 @@ export default function ItemsBrowser({
   // whatever was scrolled to under the previous filter. Adjusted during
   // render (React's recommended pattern for "reset state when an input
   // changes") rather than an effect, which would cost an extra render pass.
-  const filterKey = `${needle} ${activeCategory} ${activeStockFilter} ${activeExpiryFilter}`;
+  const filterKey = `${needle} ${[...activeCategories].sort().join(",")} ${activeStockFilter} ${activeExpiryFilter} ${activeCostFilter}`;
   const [visible, setVisible] = useState({ key: filterKey, count: PAGE_SIZE });
   if (visible.key !== filterKey) {
     setVisible({ key: filterKey, count: PAGE_SIZE });
@@ -276,9 +294,9 @@ export default function ItemsBrowser({
   const filtered = useMemo(
     () =>
       searched.filter((product) => {
-        if (activeCategory !== "all") {
+        if (activeCategories.size > 0) {
           const key = product.category_id ?? UNCATEGORIZED;
-          if (key !== activeCategory) return false;
+          if (!activeCategories.has(key)) return false;
         }
         if (activeStockFilter !== "all") {
           if (stockStatus(product) !== activeStockFilter) return false;
@@ -288,9 +306,20 @@ export default function ItemsBrowser({
             return false;
           }
         }
+        if (activeCostFilter === "missing" && product.cost !== null) {
+          return false;
+        }
         return true;
       }),
-    [searched, activeCategory, activeStockFilter, activeExpiryFilter, todayKey, soonKey]
+    [
+      searched,
+      activeCategories,
+      activeStockFilter,
+      activeExpiryFilter,
+      activeCostFilter,
+      todayKey,
+      soonKey,
+    ]
   );
 
   // Chip counts come from the full (pre-search) product list, so the filter
@@ -325,8 +354,12 @@ export default function ItemsBrowser({
     return counts;
   }, [products, todayKey, soonKey]);
 
+  const missingCostCount = useMemo(
+    () => products.filter((product) => product.cost === null).length,
+    [products]
+  );
+
   const categoryChips: { key: string; label: string }[] = [
-    { key: "all", label: `All (${products.length})` },
     ...categories
       .filter((category) => categoryCounts.has(category.id))
       .map((category) => ({
@@ -357,13 +390,23 @@ export default function ItemsBrowser({
       />
 
       <div className="flex gap-1.5 overflow-x-auto pb-1">
+        <FilterChip
+          label={`All (${products.length})`}
+          active={activeCategories.size === 0}
+          onClick={() => setActiveCategories(new Set())}
+        />
         {categoryChips.map((chip) => (
           <FilterChip
             key={chip.key}
             label={chip.label}
-            active={activeCategory === chip.key}
+            active={activeCategories.has(chip.key)}
             onClick={() =>
-              setActiveCategory((prev) => (prev === chip.key ? "all" : chip.key))
+              setActiveCategories((prev) => {
+                const next = new Set(prev);
+                if (next.has(chip.key)) next.delete(chip.key);
+                else next.add(chip.key);
+                return next;
+              })
             }
           />
         ))}
@@ -430,6 +473,24 @@ export default function ItemsBrowser({
               }
             />
           ) : null}
+        </div>
+      ) : null}
+
+      {missingCostCount > 0 ? (
+        <div className="flex gap-1.5 overflow-x-auto pb-1">
+          <FilterChip
+            label="All cost"
+            active={activeCostFilter === "all"}
+            onClick={() => setActiveCostFilter("all")}
+          />
+          <FilterChip
+            label={`No cost recorded (${missingCostCount})`}
+            active={activeCostFilter === "missing"}
+            tone="warning"
+            onClick={() =>
+              setActiveCostFilter((prev) => (prev === "missing" ? "all" : "missing"))
+            }
+          />
         </div>
       ) : null}
 

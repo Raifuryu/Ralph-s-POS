@@ -9,6 +9,27 @@ export type RevenueBucket = {
   eService: number;
 };
 
+// Fixed per-bar width rather than squeezing every bucket into the card's
+// width — a 30-day range at "1/30th of the screen" per bar left no room for
+// a label or figure on most bars, and which ones got skipped depended on
+// how buckets.length happened to divide, which read as arbitrary. A fixed
+// width plus horizontal scroll means every bar always gets its label and
+// figure, and swiping through a month is an ordinary phone gesture. Wide
+// enough for the compact on-bar figure below ("₱12.3k") without colliding
+// with its neighbors.
+const BAR_WIDTH_PX = 52;
+
+/** Short on-bar figure — the full centavo-precise formatPeso() would overflow
+    a 52px bar and collide with its neighbors once every bar shows one (the
+    exact amount is still in the `title` tooltip and everywhere else in the
+    app that needs precision, e.g. the tables below this chart). */
+function formatPesoCompact(value: number): string {
+  const rounded = Math.round(value);
+  if (Math.abs(rounded) < 1000) return `₱${rounded}`;
+  const thousands = rounded / 1000;
+  return `₱${thousands.toFixed(Number.isInteger(thousands) ? 0 : 1)}k`;
+}
+
 /** Hand-rolled stacked bar chart — no charting library in this app, and this
     is simple enough not to need one. Store sits at the base of each bar,
     E-Service on top, using the same STORE_COLOR/ESERVICE_COLOR as
@@ -25,9 +46,6 @@ export default function RevenueTrendChart({
   buckets: RevenueBucket[];
 }) {
   const maxTotal = buckets.reduce((m, b) => Math.max(m, b.store + b.eService), 0);
-  // Caps the number of visible date labels so they never overlap — every
-  // bar still renders, just not every bar gets a label underneath it.
-  const labelStep = Math.max(1, Math.ceil(buckets.length / 5));
 
   return (
     <div className="rounded-lg border bg-card p-4">
@@ -63,67 +81,71 @@ export default function RevenueTrendChart({
           <EmptyState title="No sales in this window yet." />
         </div>
       ) : (
-        <div className="mt-4 flex h-36 gap-1">
-          {buckets.map((bucket, i) => {
-            const total = bucket.store + bucket.eService;
-            // Where the figure sits inside the track, as a % from the top —
-            // right at the top edge of this bar's own fill, not the track's
-            // full height, so it reads as "on the bar" for short bars too.
-            // Clamped to 82% so the pill never runs past the bottom edge.
-            const showFigure = i % labelStep === 0 && total > 0;
-            const figureTop = Math.min(
-              85,
-              Math.max(0, (1 - total / maxTotal) * 100)
-            );
-            return (
-              <div
-                key={bucket.key}
-                className="flex min-w-0 flex-1 flex-col items-center gap-1"
-              >
+        <div className="mt-4 -mx-4 overflow-x-auto px-4">
+          <div
+            className="flex h-36 gap-1"
+            style={{ minWidth: `${buckets.length * BAR_WIDTH_PX}px` }}
+          >
+            {buckets.map((bucket) => {
+              const total = bucket.store + bucket.eService;
+              // Where the figure sits inside the track, as a % from the top
+              // — right at the top edge of this bar's own fill, not the
+              // track's full height, so it reads as "on the bar" for short
+              // bars too. Clamped to 85% so the pill never runs past the
+              // bottom edge.
+              const figureTop = Math.min(
+                85,
+                Math.max(0, (1 - total / maxTotal) * 100)
+              );
+              return (
                 <div
-                  className="relative w-full min-h-0 flex-1 overflow-visible rounded-sm bg-muted/40"
-                  title={`${bucket.label}: ${formatPeso(total)}`}
+                  key={bucket.key}
+                  className="flex shrink-0 flex-col items-center gap-1"
+                  style={{ width: `${BAR_WIDTH_PX}px` }}
                 >
-                  <div className="absolute inset-0 overflow-hidden rounded-sm">
-                    {bucket.store > 0 ? (
-                      <div
-                        className="absolute inset-x-0 bottom-0"
-                        style={{
-                          height: `${(bucket.store / maxTotal) * 100}%`,
-                          backgroundColor: STORE_COLOR,
-                        }}
-                      />
-                    ) : null}
-                    {bucket.eService > 0 ? (
-                      <div
-                        className="absolute inset-x-0"
-                        style={{
-                          bottom: `${(bucket.store / maxTotal) * 100}%`,
-                          height: `${(bucket.eService / maxTotal) * 100}%`,
-                          backgroundColor: ESERVICE_COLOR,
-                        }}
-                      />
+                  <div
+                    className="relative h-full w-full overflow-visible rounded-sm bg-muted/40"
+                    title={`${bucket.label}: ${formatPeso(total)}`}
+                  >
+                    <div className="absolute inset-0 overflow-hidden rounded-sm">
+                      {bucket.store > 0 ? (
+                        <div
+                          className="absolute inset-x-0 bottom-0"
+                          style={{
+                            height: `${(bucket.store / maxTotal) * 100}%`,
+                            backgroundColor: STORE_COLOR,
+                          }}
+                        />
+                      ) : null}
+                      {bucket.eService > 0 ? (
+                        <div
+                          className="absolute inset-x-0"
+                          style={{
+                            bottom: `${(bucket.store / maxTotal) * 100}%`,
+                            height: `${(bucket.eService / maxTotal) * 100}%`,
+                            backgroundColor: ESERVICE_COLOR,
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                    {total > 0 ? (
+                      <span
+                        className="pointer-events-none absolute inset-x-0 flex justify-center"
+                        style={{ top: `${figureTop}%` }}
+                      >
+                        <span className="rounded-sm bg-background px-1 text-[0.6rem] leading-tight font-medium whitespace-nowrap text-foreground shadow">
+                          {formatPesoCompact(total)}
+                        </span>
+                      </span>
                     ) : null}
                   </div>
-                  {/* Same thinning as the date label below — a figure over
-                      every one of up to 30 bars would overlap on mobile. */}
-                  {showFigure ? (
-                    <span
-                      className="pointer-events-none absolute inset-x-0 flex justify-center"
-                      style={{ top: `${figureTop}%` }}
-                    >
-                      <span className="rounded-sm bg-background px-1 text-[0.6rem] leading-tight font-medium whitespace-nowrap text-foreground shadow">
-                        {formatPeso(total)}
-                      </span>
-                    </span>
-                  ) : null}
+                  <span className="shrink-0 text-center text-[0.65rem] whitespace-nowrap text-muted-foreground">
+                    {bucket.label}
+                  </span>
                 </div>
-                <span className="shrink-0 overflow-visible text-center text-[0.65rem] whitespace-nowrap text-muted-foreground">
-                  {i % labelStep === 0 ? bucket.label : ""}
-                </span>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

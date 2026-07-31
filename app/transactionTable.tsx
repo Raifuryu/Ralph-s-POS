@@ -487,23 +487,36 @@ function VisitGroup({ entries }: { entries: NumberedEntry[] }) {
 
 export default function TransactionTable({
   entries,
-  dateKey
+  resetKey,
+  searchActive = false
 }: {
   entries: SalesEntry[];
-  /** Resets "load more" back to the top page whenever the picked day changes
-      — a plain useState wouldn't, since switching days re-renders this
-      component in place rather than remounting it (see HistorySheet for the
-      same reset-during-render pattern). */
-  dateKey: string;
+  /** Resets "load more" back to the top page whenever the picked day or the
+      search term changes — a plain useState wouldn't, since either one
+      re-renders this component in place rather than remounting it (see
+      HistorySheet for the same reset-during-render pattern). Composed by
+      the caller (TransactionTabs) from the date key and the search needle. */
+  resetKey: string;
+  /** Picks the right empty-state copy — an empty result from typing a
+      search is a different situation than a genuinely quiet day/category. */
+  searchActive?: boolean;
 }) {
-  const [visible, setVisible] = useState({ key: dateKey, count: PAGE_SIZE });
-  if (visible.key !== dateKey) {
-    setVisible({ key: dateKey, count: PAGE_SIZE });
+  const [visible, setVisible] = useState({ key: resetKey, count: PAGE_SIZE });
+  if (visible.key !== resetKey) {
+    setVisible({ key: resetKey, count: PAGE_SIZE });
   }
-  const visibleCount = visible.key === dateKey ? visible.count : PAGE_SIZE;
+  const visibleCount = visible.key === resetKey ? visible.count : PAGE_SIZE;
 
   if (entries.length === 0) {
-    return <EmptyState title="No transactions recorded yet." />;
+    return (
+      <EmptyState
+        title={
+          searchActive
+            ? "No transactions match your search."
+            : "No transactions recorded yet."
+        }
+      />
+    );
   }
 
   const visibleEntries = entries.slice(0, visibleCount);
