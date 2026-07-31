@@ -61,6 +61,20 @@ export default function HistorySheet({
 }) {
   const router = useRouter();
 
+  // Local, not driven purely by the `open` prop — a swipe-to-close needs to
+  // animate away instantly. If it waited on `open` to flip (it's URL-driven,
+  // via the router.push below), the sheet would sit open until that
+  // navigation's server round trip finished, which feels laggy next to
+  // every other Drawer in the app that closes off local state alone.
+  // Reset-during-render, same pattern as `visible` below: only re-syncs from
+  // the prop when it actually changes (a fresh deep link, or the redirect
+  // after some other close path), never stomping an in-progress swipe.
+  const [openState, setOpenState] = useState({ prop: open, value: open });
+  if (openState.prop !== open) {
+    setOpenState({ prop: open, value: open });
+  }
+  const drawerOpen = openState.value;
+
   // Reset back to the top PAGE_SIZE whenever a different product's history
   // is opened, rather than leaving a stale "load more" position from
   // whichever product was viewed previously. Adjusted during render, same
@@ -73,8 +87,9 @@ export default function HistorySheet({
 
   return (
     <Drawer
-      open={open}
+      open={drawerOpen}
       onOpenChange={(next) => {
+        setOpenState({ prop: open, value: next });
         if (!next) router.push("/inventory", { scroll: false });
       }}
       showSwipeHandle

@@ -9,6 +9,9 @@ import { Input } from "@/components/ui/input";
 import { formatDate, formatPeso, storeDayKey } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { Category, Product } from "@/lib/types";
+import CategoryFilterDropdown, {
+  type CategoryOption,
+} from "./categoryFilterDropdown";
 import DeleteButton from "./deleteButton";
 
 const UNCATEGORIZED = "__none__";
@@ -359,18 +362,20 @@ export default function ItemsBrowser({
     [products]
   );
 
-  const categoryChips: { key: string; label: string }[] = [
+  const categoryOptions: CategoryOption[] = [
     ...categories
       .filter((category) => categoryCounts.has(category.id))
       .map((category) => ({
         key: category.id,
-        label: `${category.name} (${categoryCounts.get(category.id)})`,
+        name: category.name,
+        count: categoryCounts.get(category.id) ?? 0,
       })),
     ...(categoryCounts.has(UNCATEGORIZED)
       ? [
           {
             key: UNCATEGORIZED,
-            label: `No category (${categoryCounts.get(UNCATEGORIZED)})`,
+            name: "No category",
+            count: categoryCounts.get(UNCATEGORIZED) ?? 0,
           },
         ]
       : []),
@@ -389,28 +394,12 @@ export default function ItemsBrowser({
         }}
       />
 
-      <div className="flex gap-1.5 overflow-x-auto pb-1">
-        <FilterChip
-          label={`All (${products.length})`}
-          active={activeCategories.size === 0}
-          onClick={() => setActiveCategories(new Set())}
-        />
-        {categoryChips.map((chip) => (
-          <FilterChip
-            key={chip.key}
-            label={chip.label}
-            active={activeCategories.has(chip.key)}
-            onClick={() =>
-              setActiveCategories((prev) => {
-                const next = new Set(prev);
-                if (next.has(chip.key)) next.delete(chip.key);
-                else next.add(chip.key);
-                return next;
-              })
-            }
-          />
-        ))}
-      </div>
+      <CategoryFilterDropdown
+        options={categoryOptions}
+        totalCount={products.length}
+        active={activeCategories}
+        onChange={setActiveCategories}
+      />
 
       {stockCounts.low > 0 || stockCounts.out > 0 ? (
         <div className="flex gap-1.5 overflow-x-auto pb-1">
