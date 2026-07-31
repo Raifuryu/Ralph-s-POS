@@ -1,9 +1,10 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useState } from "react";
 
 import { EmptyState } from "@/components/emptyState";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   formatPeso,
   formatTime,
@@ -24,6 +25,8 @@ import {
 } from "./transactionActions";
 
 const initialVoidState: VoidState = { error: null };
+
+const PAGE_SIZE = 50;
 
 /** An entry plus its 1-based position in the overall (pre-grouping) list —
     what the row number on the left shows. */
@@ -483,17 +486,31 @@ function VisitGroup({ entries }: { entries: NumberedEntry[] }) {
 }
 
 export default function TransactionTable({
-  entries
+  entries,
+  dateKey
 }: {
   entries: SalesEntry[];
+  /** Resets "load more" back to the top page whenever the picked day changes
+      — a plain useState wouldn't, since switching days re-renders this
+      component in place rather than remounting it (see HistorySheet for the
+      same reset-during-render pattern). */
+  dateKey: string;
 }) {
+  const [visible, setVisible] = useState({ key: dateKey, count: PAGE_SIZE });
+  if (visible.key !== dateKey) {
+    setVisible({ key: dateKey, count: PAGE_SIZE });
+  }
+  const visibleCount = visible.key === dateKey ? visible.count : PAGE_SIZE;
+
   if (entries.length === 0) {
     return <EmptyState title="No transactions recorded yet." />;
   }
 
+  const visibleEntries = entries.slice(0, visibleCount);
+
   return (
     <div className="flex flex-col gap-3">
-      {groupByDay(entries).map((group) => {
+      {groupByDay(visibleEntries).map((group) => {
         const entryCount = group.items.reduce(
           (sum, item) =>
             sum + (item.kind === "single" ? 1 : item.entries.length),
@@ -535,6 +552,18 @@ export default function TransactionTable({
           </section>
         );
       })}
+      {entries.length > visibleCount ? (
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={() =>
+            setVisible((prev) => ({ ...prev, count: prev.count + PAGE_SIZE }))
+          }
+        >
+          Show {Math.min(PAGE_SIZE, entries.length - visibleCount)} more (
+          {entries.length - visibleCount} left)
+        </Button>
+      ) : null}
     </div>
   );
 }

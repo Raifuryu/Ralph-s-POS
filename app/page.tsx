@@ -1,4 +1,3 @@
-import { Pager } from "@/components/pager";
 import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
@@ -9,7 +8,6 @@ import {
   storeDayKey,
   storeDayRange,
 } from "@/lib/format";
-import { pageCountFor, pageRange, parsePage } from "@/lib/pagination";
 import { queryRows } from "@/lib/mysql/pool";
 import {
   SALES_FILTERS,
@@ -79,7 +77,6 @@ function sortByCreatedAtDesc(entries: SalesEntry[]): SalesEntry[] {
 
 type SearchParams = {
   date?: string;
-  page?: string;
   tab?: string;
 };
 
@@ -115,8 +112,6 @@ export default async function Home({
   const dateKey =
     params.date && DATE_KEY_PATTERN.test(params.date) ? params.date : today;
 
-  const page = parsePage(params.page);
-  const { rangeFrom, rangeTo } = pageRange(page);
   const activeTab = SALES_FILTERS.includes(params.tab as (typeof SALES_FILTERS)[number])
     ? (params.tab as (typeof SALES_FILTERS)[number])
     : "all";
@@ -181,15 +176,15 @@ export default async function Home({
     return <LoadError message={(err as Error).message} />;
   }
 
-  // One chronological feed, newest first, then paginated in JS — the two
-  // source tables can't share a single DB-level LIMIT/OFFSET the way one
-  // table could, so both are fetched in full for the window and sliced here.
+  // One chronological feed, newest first — the two source tables can't share
+  // a single DB-level LIMIT/OFFSET the way one table could, so both are
+  // fetched in full for the day and merged here. TransactionTabs/
+  // TransactionTable reveal it to the cashier a page at a time via
+  // "load more", entirely client-side.
   const merged = sortByCreatedAtDesc([
     ...sales.map((t) => ({ kind: "sale" as const, data: t })),
     ...serviceList.map((s) => ({ kind: "service" as const, data: s })),
   ]);
-  const pageCount = pageCountFor(merged.length);
-  const pageEntries = merged.slice(rangeFrom, rangeTo + 1);
 
   // Store = all product sales in the window, regardless of payment method —
   // a sale is store revenue whether the customer paid cash, GCash, or Maya.
@@ -301,16 +296,10 @@ export default async function Home({
           />
         </div>
 
-        <TransactionTabs entries={pageEntries} activeTab={activeTab} />
-
-        <Pager
-          page={page}
-          pageCount={pageCount}
-          basePath="/"
-          params={{
-            date: dateKey === today ? undefined : dateKey,
-            tab: activeTab === "all" ? undefined : activeTab,
-          }}
+        <TransactionTabs
+          entries={merged}
+          activeTab={activeTab}
+          dateKey={dateKey}
         />
       </>
     </PageShell>

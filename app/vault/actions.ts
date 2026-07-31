@@ -7,7 +7,9 @@ import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney } from "@/lib/money";
 import { pool } from "@/lib/mysql/pool";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
+import { fetchVaultLedgerPage, type VaultLedgerFilters } from "@/lib/vault/ledgerQuery";
 import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
+import type { LedgerEntry } from "./ledger";
 
 export type VaultMoveState = { error: string | null; ok?: boolean };
 
@@ -113,4 +115,15 @@ export async function recordCount(
   } catch (err) {
     return { error: (err as Error).message };
   }
+}
+
+/** Fetches the next batch of ledger rows for VaultLedgerClient's "Load more"
+    button — same query the page itself uses for its first batch, just at a
+    later offset, so results stay consistent even if the filters came from a
+    URL a cashier bookmarked or shared. */
+export async function loadMoreVaultEntries(
+  filters: VaultLedgerFilters,
+  offset: number
+): Promise<{ entries: LedgerEntry[]; total: number }> {
+  return fetchVaultLedgerPage(filters, offset);
 }

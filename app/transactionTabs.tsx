@@ -21,6 +21,7 @@ import TransactionTable from "./transactionTable";
 export default function TransactionTabs({
   entries,
   activeTab,
+  dateKey,
 }: {
   entries: SalesEntry[];
   /** Selected filter, mirrored in the URL via ?tab= so it survives page
@@ -29,6 +30,10 @@ export default function TransactionTabs({
       the server, which silently reset the selection back to "All" every
       time a cashier paged through a busy day while looking at one category. */
   activeTab: SalesFilter;
+  /** Picked day, "YYYY-MM-DD" — threaded down to TransactionTable so its
+      "load more" position resets when the cashier switches days instead of
+      staying stuck mid-list from whatever day was viewed previously. */
+  dateKey: string;
 }) {
   const router = useRouter();
 
@@ -49,9 +54,6 @@ export default function TransactionTabs({
     const params = new URLSearchParams(window.location.search);
     if (value === "all") params.delete("tab");
     else params.set("tab", value);
-    // Switching category naturally starts back at page 1 — same reasoning
-    // Pager already documents for every other filter on this dashboard.
-    params.delete("page");
     const qs = params.toString();
     router.push(qs ? `/?${qs}` : "/");
   }
@@ -72,7 +74,7 @@ export default function TransactionTabs({
 
       {SALES_FILTERS.map((filter) => (
         <TabsContent key={filter} value={filter} className="min-w-0">
-          <TransactionTable entries={byFilter[filter]} />
+          <TransactionTable entries={byFilter[filter]} dateKey={dateKey} />
         </TabsContent>
       ))}
     </Tabs>
