@@ -19,7 +19,21 @@ function createPool(): mysql.Pool {
     // how the app already does Number(x) everywhere on Supabase's
     // string-typed numerics — avoids touching every call site.
     decimalNumbers: true,
-    dateStrings: false,
+    // DATE/DATETIME/TIMESTAMP columns come back as plain "YYYY-MM-DD[ HH:MM:SS]"
+    // strings, not inflated into JS Date objects — every Row type in this
+    // app (created_at, voided_at, expiry_date, ...) is typed as `string`,
+    // matching what Supabase's client always returned. Getting this wrong
+    // caused a real production bug: `dateStrings: false` (mysql2's default)
+    // silently handed out Date objects instead, and any code calling a
+    // string-only method directly on one (e.g. .localeCompare() to sort by
+    // created_at) threw a TypeError — see the History sheet crash in
+    // app/inventory/page.tsx, which only surfaced for products with 2+
+    // combined restock/sale rows (Array.sort never invokes the comparator
+    // for 0-1 elements, so quieter products never hit it). Comparisons that
+    // didn't call a string method (e.g. `expiry_date < todayKey`) didn't
+    // crash but were silently wrong instead, comparing a stringified Date
+    // against a "YYYY-MM-DD" key.
+    dateStrings: true,
     connectionLimit: 10,
     // mysql2 returns TINYINT(1) — what BOOLEAN actually is in MariaDB — as
     // a raw 0/1 number by default, and JSON columns as a raw string, not a
@@ -45,9 +59,13 @@ function createPool(): mysql.Pool {
   // default happens to be — without it, CURRENT_TIMESTAMP defaults and
   // NOW()-based view logic (product_sales_totals' "last 3 days") would
   // compute against the server's default zone instead of the store's
-  // actual calendar day. mysql2's own DATETIME/TIMESTAMP parsing (how the
-  // app reads these values back into JS Date objects) separately relies on
-  // the Node process's own TZ env var — see the Dockerfile/package.json
+  // actual calendar day. With dateStrings above, this is also what makes
+  // the "YYYY-MM-DD HH:MM:SS" strings the app reads back already be Manila
+  // wall-clock time — mysql2 just passes through whatever the server
+  // formatted the value as, no client-side timezone conversion involved.
+  // Any later `new Date(thatString)` call (storeDayKey, formatDateTime,
+  // ...) still relies on the Node process's own TZ env var to parse a
+  // timezone-less string correctly — see the Dockerfile/package.json
   // scripts, both set to Asia/Manila too, so both ends agree.
   pool.on("connection", (connection) => {
     connection.query("SET time_zone = '+08:00'");
