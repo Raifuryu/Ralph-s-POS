@@ -2,10 +2,13 @@ import { ESERVICE_COLOR, STORE_COLOR } from "@/app/incomeBreakdownCard";
 import { EmptyState } from "@/components/emptyState";
 import { formatPeso } from "@/lib/format";
 
-export type RevenueBucket = {
+export type ProfitBucket = {
   key: string;
   label: string;
+  /** Store margin (price − cost) for sales in this bucket — not gross
+      revenue. Known-cost lines only, same as the Gross profit KPI above. */
   store: number;
+  /** E-Service fee income — already pure margin, no COGS to subtract. */
   eService: number;
 };
 
@@ -33,17 +36,18 @@ function formatPesoCompact(value: number): string {
 /** Hand-rolled stacked bar chart — no charting library in this app, and this
     is simple enough not to need one. Store sits at the base of each bar,
     E-Service on top, using the same STORE_COLOR/ESERVICE_COLOR as
-    IncomeBreakdownCard so the meaning stays consistent across the app. No
-    hover interactivity beyond the native `title` tooltip — this is a Server
-    Component, kept that way deliberately. */
-export default function RevenueTrendChart({
+    IncomeBreakdownCard so the meaning stays consistent across the app — the
+    stacking is itself the store/e-service breakdown, not a separate table.
+    No hover interactivity beyond the native `title` tooltip — this is a
+    Server Component, kept that way deliberately. */
+export default function ProfitTrendChart({
   title,
   subtitle,
   buckets,
 }: {
   title: string;
   subtitle?: string;
-  buckets: RevenueBucket[];
+  buckets: ProfitBucket[];
 }) {
   const maxTotal = buckets.reduce((m, b) => Math.max(m, b.store + b.eService), 0);
 
@@ -78,7 +82,7 @@ export default function RevenueTrendChart({
 
       {maxTotal === 0 ? (
         <div className="mt-3">
-          <EmptyState title="No sales in this window yet." />
+          <EmptyState title="No profit in this window yet." />
         </div>
       ) : (
         <div className="mt-4 -mx-4 overflow-x-auto px-4">

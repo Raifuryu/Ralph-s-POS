@@ -8,13 +8,13 @@ export type HourlyBucket = {
   eService: number;
 };
 
-// Same reasoning as RevenueTrendChart's BAR_WIDTH_PX — a fixed width plus
+// Same reasoning as ProfitTrendChart's BAR_WIDTH_PX — a fixed width plus
 // horizontal scroll so every one of the 24 bars gets its own label and
 // figure instead of only every 3rd one. Counts are short (1-2 digits), so
 // this can be narrower than the peso-figure chart.
 const BAR_WIDTH_PX = 40;
 
-/** Same hand-rolled stacked bar chart as RevenueTrendChart, but bucketed by
+/** Same hand-rolled stacked bar chart as ProfitTrendChart, but bucketed by
     hour-of-day (store timezone, always 24 bars) instead of by date, and
     counting transactions/service actions instead of summing revenue — the
     closest proxy this app has for "customers" (there's no separate customer

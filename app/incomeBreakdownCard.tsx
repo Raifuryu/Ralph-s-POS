@@ -44,6 +44,7 @@ export default function IncomeBreakdownCard({
   storeLabel = "Store",
   eService,
   storeProfit,
+  personalTake,
   className,
 }: {
   title: string;
@@ -61,6 +62,11 @@ export default function IncomeBreakdownCard({
       already pure profit since the principal is a pass-through). Omit to
       fall back to plain gross everywhere, and skip the profit line. */
   storeProfit?: number;
+  /** Value of stock taken out without a sale — shown as its own footer
+      line, never folded into `store`/`total`/the proportion bar, since a
+      personal take isn't income (see checkoutForm.tsx: no payment method,
+      no tender, no income posted for one). Omitted (or 0) hides the line. */
+  personalTake?: number;
   className?: string;
 }) {
   const eServiceTotal = eService.gcash + eService.maya + eService.other;
@@ -112,15 +118,27 @@ export default function IncomeBreakdownCard({
       total={total}
       rows={rows}
       footer={
-        totalProfit !== undefined ? (
-          <p className="flex items-baseline justify-between gap-2 text-xs">
-            <span className="font-medium text-muted-foreground">
-              Total profit
-            </span>
-            <span className="font-semibold tabular-nums">
-              {formatPeso(totalProfit)}
-            </span>
-          </p>
+        totalProfit !== undefined || (personalTake ?? 0) > 0 ? (
+          <div className="flex flex-col gap-1">
+            {totalProfit !== undefined ? (
+              <p className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="font-medium text-muted-foreground">
+                  Total profit
+                </span>
+                <span className="font-semibold tabular-nums">
+                  {formatPeso(totalProfit)}
+                </span>
+              </p>
+            ) : null}
+            {(personalTake ?? 0) > 0 ? (
+              <p className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="text-muted-foreground">Personal take</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {formatPeso(personalTake ?? 0)}
+                </span>
+              </p>
+            ) : null}
+          </div>
         ) : undefined
       }
       className={className}

@@ -24,7 +24,7 @@ import TransactionFilters from "@/app/transactionFilters";
 import CategoryLeaderboard, { type CategoryRevenue } from "./categoryLeaderboard";
 import HourlyTrafficChart, { type HourlyBucket } from "./hourlyTrafficChart";
 import PaymentBreakdownCard from "./paymentBreakdownCard";
-import RevenueTrendChart, { type RevenueBucket } from "./revenueTrendChart";
+import ProfitTrendChart, { type ProfitBucket } from "./profitTrendChart";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
 const TRANSACTION_COLUMNS =
@@ -85,25 +85,38 @@ function rangeSubtitle(from?: string, to?: string): string {
   return "All time";
 }
 
-/** Buckets sale + service revenue by store-day into a chart-ready series.
-    Bounds come from the requested from/to date keys when both are set, else
-    from the data's own earliest/latest timestamp (so "all time" on a young
-    store doesn't try to render decades of empty bars). Widens buckets past
-    MAX_BARS so long ranges stay readable. */
-function buildRevenueBuckets(
+/** Buckets sale + service PROFIT (not revenue) by store-day into a
+    chart-ready series. A sale's contribution is its margin, summed only
+    over line items with a known unit_cost — same "cost unknown lines are
+    excluded, not assumed 100% margin" rule the Gross profit KPI and every
+    other profit figure on this page already follows. An e-service's
+    contribution is its fee as-is, since the fee already IS its margin (no
+    COGS to subtract). Bounds come from the requested from/to date keys when
+    both are set, else from the data's own earliest/latest timestamp (so
+    "all time" on a young store doesn't try to render decades of empty
+    bars). Widens buckets past MAX_BARS so long ranges stay readable. */
+function buildProfitBuckets(
   sales: TransactionWithItems[],
   services: ServiceRevenuePoint[],
   fromKey: string | undefined,
   toKey: string | undefined
-): RevenueBucket[] {
+): ProfitBucket[] {
   const points = [
     ...sales
       .filter((t) => !t.is_personal_take && !t.voided_at)
-      .map((t) => ({
-        ts: new Date(t.created_at).getTime(),
-        store: Number(t.total),
-        eService: 0,
-      })),
+      .map((t) => {
+        let margin = 0;
+        for (const item of t.transaction_items) {
+          if (item.unit_cost !== null) {
+            margin += Number(item.line_total) - Number(item.unit_cost) * item.quantity;
+          }
+        }
+        return {
+          ts: new Date(t.created_at).getTime(),
+          store: margin,
+          eService: 0,
+        };
+      }),
     ...services.map((s) => ({
       ts: new Date(s.created_at).getTime(),
       store: 0,
@@ -135,7 +148,7 @@ function buildRevenueBuckets(
   const bucketDays = Math.max(1, Math.ceil(totalDays / MAX_BARS));
   const bucketCount = Math.max(1, Math.ceil(totalDays / bucketDays));
 
-  const buckets: RevenueBucket[] = Array.from({ length: bucketCount }, (_, i) => {
+  const buckets: ProfitBucket[] = Array.from({ length: bucketCount }, (_, i) => {
     const bucketStart = new Date(startDate.getTime() + i * bucketDays * ONE_DAY_MS);
     const bucketEnd = new Date(
       bucketStart.getTime() + (bucketDays - 1) * ONE_DAY_MS
@@ -513,7 +526,7 @@ export default async function StatisticsPage({
     .map(([name, v]) => ({ key: name, name, units: v.units, revenue: v.revenue }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  const buckets = buildRevenueBuckets(sales, serviceList, params.from, params.to);
+  const buckets = buildProfitBuckets(sales, serviceList, params.from, params.to);
 
   // "Customers" ≈ each individual sale/service action, same units already
   // summed into the Transactions summary card above — just bucketed by hour
@@ -588,7 +601,7 @@ export default async function StatisticsPage({
           />
         </div>
 
-        <RevenueTrendChart title="Revenue trend" subtitle={subtitle} buckets={buckets} />
+        <ProfitTrendChart title="Profit trend" subtitle={subtitle} buckets={buckets} />
 
         <HourlyTrafficChart
           title="Busiest times of day"
@@ -602,11 +615,13 @@ export default async function StatisticsPage({
             subtitle={subtitle}
             store={storeTotal}
             eService={eServiceFees}
+            personalTake={personalTakesValue}
           />
           <PaymentBreakdownCard
             title="By payment method"
             subtitle={subtitle}
             revenue={paymentRevenue}
+            personalTake={personalTakesValue}
           />
         </div>
 
