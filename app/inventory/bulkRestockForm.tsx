@@ -19,7 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
-import { costFor, costPerPieceFor, sellingPriceFor, toNumber } from "@/lib/pricing";
+import { costFor, costPerPieceFor, sellingPriceFor, toNumber, totalFor } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
 
@@ -54,11 +54,19 @@ type CartLine = {
   /** Cost per single piece — used when costMode is "individual". */
   costPerItem: string;
   price: string;
-  /** Only meaningful for new-item lines (productId === null): whichever of
-      Cost/Price the user has typed into directly is a "driver" the
-      calculator won't overwrite; the other one (if untouched) is free to be
-      auto-filled from Qty + the touched field. If both get touched, neither
-      is auto-filled anymore. Existing-item lines never auto-fill regardless. */
+  /** Snapshot of the picked product's last recorded cost (products.cost) —
+      null for a new-item line or an existing product that's never had a
+      cost recorded. Seeds the Cost/Cost-per-item field so restocking an
+      item doesn't require retyping a cost that's usually unchanged; see
+      costTouched below for when that stops happening. */
+  productCost: number | null;
+  /** Whichever of Cost/Price the user has typed into directly is a "driver"
+      the calculator won't overwrite; the other one (if untouched) is free to
+      be auto-filled. For a new-item line this drives the markup calculator
+      (Cost/Price/Qty, via priceTouched too). For an existing-item line,
+      Price never auto-fills (restocking shouldn't silently change a real
+      price) — but Cost does, from productCost above, for as long as the
+      cashier hasn't typed into Cost themselves. */
   priceTouched: boolean;
   costTouched: boolean;
   /** Only meaningful for new-item lines. */
@@ -77,6 +85,7 @@ function emptyLine(): CartLine {
     cost: "",
     costPerItem: "",
     price: "",
+    productCost: null,
     priceTouched: false,
     costTouched: false,
     categoryId: "",
@@ -132,7 +141,7 @@ function isLineComplete(line: CartLine): boolean {
     is fine here, same as toNumber's existing blank/invalid convention. */
 function totalCostFor(line: CartLine): number {
   if (line.costMode === "individual") {
-    return Math.round(toNumber(line.costPerItem) * toNumber(line.quantity) * 100) / 100;
+    return totalFor(toNumber(line.costPerItem), toNumber(line.quantity));
   }
   return toNumber(line.cost);
 }
@@ -249,6 +258,9 @@ function CartLineCard({
       onChange({
         productId: null,
         productName: "",
+        productCost: null,
+        cost: "",
+        costPerItem: "",
         price: "",
         priceTouched: false,
         costTouched: false,
@@ -258,9 +270,26 @@ function CartLineCard({
       return;
     }
     const product = products.find((p) => p.id === option.value);
+    const knownCost = product?.cost ?? null;
+    const q = toNumber(line.quantity);
     onChange({
       productId: option.value,
       productName: product?.name ?? "",
+      productCost: knownCost,
+      // Individual mode's Cost per item is quantity-independent, so it can
+      // fill in right away; pack mode's Cost is a total, so it only fills
+      // in once a quantity is already known (rare — Qty is normally typed
+      // after picking the item, and handleQuantityChange covers that case).
+      // Cleared to blank rather than left stale otherwise, same as when
+      // switching between two existing products with different costs.
+      cost:
+        knownCost !== null && line.costMode === "pack" && q > 0
+          ? String(totalFor(knownCost, q))
+          : "",
+      costPerItem:
+        knownCost !== null && line.costMode === "individual"
+          ? String(knownCost)
+          : "",
       price: product ? String(product.price) : "",
       priceTouched: false,
       costTouched: false,
@@ -269,16 +298,18 @@ function CartLineCard({
     });
   }
 
-  // New-item lines only: whichever of Cost/Price hasn't been typed into
-  // directly gets auto-filled from the markup calculator as the other two
-  // fields change. Existing-item lines never auto-fill — restocking
-  // shouldn't silently change a real price. Individual mode's Cost per item
-  // is quantity-independent (it's already a per-piece figure), so only pack
-  // mode's Cost (a total) needs Qty in the math at all.
+  // New-item lines: whichever of Cost/Price hasn't been typed into directly
+  // gets auto-filled from the markup calculator as the other two fields
+  // change. Existing-item lines never auto-fill Price — restocking shouldn't
+  // silently change a real price — but DO auto-fill Cost from the product's
+  // last recorded cost (productCost), for as long as the cashier hasn't
+  // typed into Cost themselves (costTouched). Individual mode's Cost per
+  // item is quantity-independent, so only pack mode's Cost (a total) needs
+  // Qty in the math at all.
   function handleQuantityChange(value: string) {
     const patch: Partial<CartLine> = { quantity: value };
+    const q = toNumber(value);
     if (line.productId === null && line.costMode === "pack") {
-      const q = toNumber(value);
       if (line.priceTouched && !line.costTouched) {
         const p = toNumber(line.price);
         if (p > 0 && q > 0) patch.cost = String(costFor(p, q));
@@ -286,6 +317,14 @@ function CartLineCard({
         const c = toNumber(line.cost);
         if (c > 0 && q > 0) patch.price = String(sellingPriceFor(c / q));
       }
+    } else if (
+      line.productId !== null &&
+      line.productCost !== null &&
+      line.costMode === "pack" &&
+      !line.costTouched &&
+      q > 0
+    ) {
+      patch.cost = String(totalFor(line.productCost, q));
     }
     onChange(patch);
   }
@@ -326,10 +365,22 @@ function CartLineCard({
   // Switching modes clears both cost inputs rather than trying to convert
   // between them — less surprising than a stale pack total silently
   // reappearing as a per-item figure (or vice versa) if the cashier toggles
-  // back later. costTouched resets too, so the newly active field can
-  // auto-fill the suggested price fresh.
+  // back later. costTouched resets too, so the newly active field is free
+  // to auto-fill again — from productCost when it's known (an existing
+  // item), otherwise left blank for the suggested-price calculator to seed
+  // once Cost/Price/Qty are typed (a new item).
   function handleCostModeChange(mode: CostMode) {
-    onChange({ costMode: mode, cost: "", costPerItem: "", costTouched: false });
+    const knownCost = line.productId !== null ? line.productCost : null;
+    const q = toNumber(line.quantity);
+    onChange({
+      costMode: mode,
+      cost:
+        knownCost !== null && mode === "pack" && q > 0
+          ? String(totalFor(knownCost, q))
+          : "",
+      costPerItem: knownCost !== null && mode === "individual" ? String(knownCost) : "",
+      costTouched: false,
+    });
   }
 
   return (
@@ -569,6 +620,7 @@ export default function BulkRestockForm({
       cost: "",
       costPerItem: "",
       price: "",
+      productCost: null,
       priceTouched: false,
       costTouched: false,
       categoryId: "",
@@ -596,26 +648,34 @@ export default function BulkRestockForm({
       if (raw) {
         const parsed: unknown = JSON.parse(raw);
         if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isValidCartLine)) {
-          // A draft saved before costMode/costPerItem existed won't have
-          // them — default to "pack" (the old field's only prior meaning)
-          // rather than rejecting the whole draft.
+          // A draft saved before costMode/costPerItem/productCost existed
+          // won't have them — default to "pack" (the old field's only prior
+          // meaning) rather than rejecting the whole draft.
           const normalized: CartLine[] = parsed.map((line) => ({
             ...line,
             costMode: line.costMode === "individual" ? "individual" : "pack",
             costPerItem: typeof line.costPerItem === "string" ? line.costPerItem : "",
+            productCost: typeof line.productCost === "number" ? line.productCost : null,
           }));
           // A line's product may have been deleted since the draft was
           // saved — fall back to a "new item" line using the last-known
-          // name rather than silently pointing at nothing.
-          const reconciled = normalized.map((line) =>
-            line.productId && !products.some((p) => p.id === line.productId)
-              ? {
-                  ...line,
-                  productId: null,
-                  newName: line.newName || line.productName,
-                }
-              : line
-          );
+          // name rather than silently pointing at nothing. For a product
+          // that still exists, refresh productCost from the live record too
+          // — the whole point of it is to reflect the CURRENT known cost,
+          // not whatever was true when the draft was saved.
+          const reconciled = normalized.map((line) => {
+            if (!line.productId) return line;
+            const product = products.find((p) => p.id === line.productId);
+            if (!product) {
+              return {
+                ...line,
+                productId: null,
+                productCost: null,
+                newName: line.newName || line.productName,
+              };
+            }
+            return { ...line, productCost: product.cost };
+          });
           if (reconciled.some(hasAnyContent)) {
             // Deliberately setState-in-effect: localStorage doesn't exist
             // during SSR, so the initial render (server AND the first

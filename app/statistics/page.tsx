@@ -86,15 +86,15 @@ function rangeSubtitle(from?: string, to?: string): string {
 }
 
 /** Buckets sale + service revenue by store-day into a chart-ready series.
-    Bounds come from the requested from_ts/to_ts when both are set, else from
-    the data's own earliest/latest timestamp (so "all time" on a young store
-    doesn't try to render decades of empty bars). Widens buckets past
+    Bounds come from the requested from/to date keys when both are set, else
+    from the data's own earliest/latest timestamp (so "all time" on a young
+    store doesn't try to render decades of empty bars). Widens buckets past
     MAX_BARS so long ranges stay readable. */
 function buildRevenueBuckets(
   sales: TransactionWithItems[],
   services: ServiceRevenuePoint[],
-  fromTs: string | undefined,
-  toTs: string | undefined
+  fromKey: string | undefined,
+  toKey: string | undefined
 ): RevenueBucket[] {
   const points = [
     ...sales
@@ -113,9 +113,15 @@ function buildRevenueBuckets(
 
   let startDate: Date;
   let endDate: Date;
-  if (fromTs && toTs) {
-    startDate = storeDateFromKey(storeDayKey(fromTs));
-    endDate = storeDateFromKey(storeDayKey(toTs));
+  if (fromKey && toKey) {
+    // Pass the plain "YYYY-MM-DD" keys straight to storeDateFromKey rather
+    // than parsing a *_ts timestamp string here — that string is a naive
+    // local literal (see the comment on TransactionFilters' apply()), and
+    // `new Date(naiveString)` is implementation-defined parsing that only
+    // happens to land right because this process's TZ is pinned to Manila.
+    // storeDateFromKey is explicit and host-timezone-independent by design.
+    startDate = storeDateFromKey(fromKey);
+    endDate = storeDateFromKey(toKey);
   } else if (points.length > 0) {
     const tsValues = points.map((p) => p.ts);
     startDate = storeDateFromKey(storeDayKey(new Date(Math.min(...tsValues))));
@@ -507,12 +513,7 @@ export default async function StatisticsPage({
     .map(([name, v]) => ({ key: name, name, units: v.units, revenue: v.revenue }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  const buckets = buildRevenueBuckets(
-    sales,
-    serviceList,
-    params.from_ts,
-    params.to_ts
-  );
+  const buckets = buildRevenueBuckets(sales, serviceList, params.from, params.to);
 
   // "Customers" ≈ each individual sale/service action, same units already
   // summed into the Transactions summary card above — just bucketed by hour

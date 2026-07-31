@@ -27,3 +27,10 @@ export function costPerPieceFor(sellingPrice: number): number {
 export function costFor(sellingPrice: number, quantity: number): number {
   return Math.round(costPerPieceFor(sellingPrice) * quantity * 100) / 100;
 }
+
+/** Total cost from an ACTUAL known per-piece cost and a quantity — same
+    round-to-centavo handling as costFor, but for a real recorded cost
+    (e.g. products.cost) rather than one estimated backward from a markup. */
+export function totalFor(unitCost: number, quantity: number): number {
+  return Math.round(unitCost * quantity * 100) / 100;
+}

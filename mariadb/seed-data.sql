@@ -19,7 +19,8 @@ SET time_zone = '+00:00';
 -- =============================================================================
 
 INSERT INTO users (id, username, password_hash, created_at) VALUES
-('3b835bdd-46ac-43eb-8a0f-c3c1cddb1c98', 'migrated-data', 'unusable', NOW());
+('3b835bdd-46ac-43eb-8a0f-c3c1cddb1c98', 'ralph', 'scrypt$N=16384,r=8,p=1$CI9cq2cgW0QKRjJ9snS9HA==$CSDJdCtGzHkES5jpsEHkbzVW6D/sekmpDtAy+JVYN1ms3r/WFlMPYM10ZAz3A7fMLj8t80wMdrf9DqdacFk8wg==
+', NOW());
 
 -- =============================================================================
 -- categories (28 rows)

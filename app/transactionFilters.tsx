@@ -12,6 +12,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { storeDayKey } from "@/lib/format";
 
 export type FilterValues = {
   q: string;
@@ -19,16 +20,17 @@ export type FilterValues = {
   to: string;
 };
 
-/** Local YYYY-MM-DD — not toISOString(), which would shift the day in UTC+8. */
-function localDate(date: Date): string {
-  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
-}
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
+/** Store-timezone "N days ago", as a "YYYY-MM-DD" key — same storeDayKey
+    helper DashboardDateFilter already uses, not the browser's own clock/
+    timezone (date.getTimezoneOffset(), as this used to do). Those can
+    disagree with the store's actual Asia/Manila day, silently shifting
+    which transactions the "Today"/"Last N days" presets below pull in
+    relative to what the dashboard shows for the same calendar day. Manila
+    has no DST, so a flat 24h step per day never lands on the wrong date. */
 function daysAgo(n: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - n);
-  return localDate(d);
+  return storeDayKey(new Date(Date.now() - n * ONE_DAY_MS));
 }
 
 export default function TransactionFilters({
@@ -70,23 +72,30 @@ export default function TransactionFilters({
 
     if (values.q.trim()) params.set("q", values.q.trim());
 
-    // Send both the plain date (to repopulate the inputs) and the absolute
-    // instant (for the query). The instant is derived from the browser's
-    // timezone, so "today" means the cashier's today, not UTC's.
+    // Send both the plain date (to repopulate the inputs) and the query
+    // bound. The bound is a naive "YYYY-MM-DD HH:MM:SS" local literal, not a
+    // UTC instant — every pooled MariaDB connection pins its session
+    // time_zone to '+08:00' (see lib/mysql/pool.ts), so a real UTC instant
+    // string would get silently re-interpreted as if it were already store
+    // wall-clock time, shifting the whole range 8 hours (see the comment on
+    // storeDayRange in lib/format.ts, which hit the identical bug). This
+    // also sidesteps ever depending on the browser's own timezone — `from`/
+    // `to` are plain calendar dates from the picker, meant as the STORE's
+    // day regardless of what device the cashier is using.
     if (values.from) {
       params.set("from", values.from);
-      params.set("from_ts", new Date(`${values.from}T00:00:00`).toISOString());
+      params.set("from_ts", `${values.from} 00:00:00`);
     }
     if (values.to) {
       params.set("to", values.to);
-      params.set("to_ts", new Date(`${values.to}T23:59:59.999`).toISOString());
+      params.set("to_ts", `${values.to} 23:59:59`);
     }
 
     router.push(params.size ? `${basePath}?${params}` : basePath);
   }
 
   function preset(fromDate: string) {
-    const today = localDate(new Date());
+    const today = storeDayKey(new Date());
     setFrom(fromDate);
     setTo(today);
     apply({ from: fromDate, to: today });
@@ -170,7 +179,7 @@ export default function TransactionFilters({
                     type="button"
                     variant="outline"
                     size="xs"
-                    onClick={() => preset(localDate(new Date()))}
+                    onClick={() => preset(storeDayKey(new Date()))}
                   >
                     Today
                   </Button>
