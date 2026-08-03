@@ -48,6 +48,11 @@ type DayGroup = {
       never for a personal take, and never for a voided sale) plus every
       service's fee. Never principal: that just passes through. */
   total: number;
+  /** Sum of the day's non-voided personal takes — shown as its own line
+      next to `total`, never folded into it, since a personal take still
+      isn't income (see checkout()'s "no income" comment). A void reverses
+      the stock deduction, so a voided take is excluded here too. */
+  personalTakeTotal: number;
   items: DayRenderItem[];
 };
 
@@ -85,6 +90,15 @@ function entryIncome(entry: SalesEntry): number {
     return saleProfit(entry.data.transaction_items).profit;
   }
   return Number(entry.data.fee);
+}
+
+/** Value contributed by one entry toward the day's personal-take total —
+    non-voided personal takes only. `total` on a personal-take transaction
+    is itself the cost of what was taken (see checkout()), not a price. */
+function personalTakeValue(entry: SalesEntry): number {
+  if (entry.kind !== "sale" || !entry.data.is_personal_take) return 0;
+  if (entry.data.voided_at) return 0;
+  return Number(entry.data.total);
 }
 
 /** Groups one day's entries into render items — a sale or service only gets
@@ -127,7 +141,12 @@ function groupByDay(entries: SalesEntry[]): DayGroup[] {
   const order: string[] = [];
   const byDay = new Map<
     string,
-    { label: string; total: number; numbered: NumberedEntry[] }
+    {
+      label: string;
+      total: number;
+      personalTakeTotal: number;
+      numbered: NumberedEntry[];
+    }
   >();
 
   entries.forEach((entry, i) => {
@@ -137,12 +156,14 @@ function groupByDay(entries: SalesEntry[]): DayGroup[] {
       bucket = {
         label: friendlyDayLabel(entry.data.created_at),
         total: 0,
+        personalTakeTotal: 0,
         numbered: []
       };
       byDay.set(key, bucket);
       order.push(key);
     }
     bucket.total += entryIncome(entry);
+    bucket.personalTakeTotal += personalTakeValue(entry);
     bucket.numbered.push({ number: i + 1, entry });
   });
 
@@ -152,6 +173,7 @@ function groupByDay(entries: SalesEntry[]): DayGroup[] {
       key,
       label: bucket.label,
       total: bucket.total,
+      personalTakeTotal: bucket.personalTakeTotal,
       items: buildDayItems(bucket.numbered)
     };
   });
@@ -559,9 +581,16 @@ export default function TransactionTable({
                   {entryCount} {entryCount === 1 ? "entry" : "entries"}
                 </Badge>
               </h3>
-              <p className="text-sm font-semibold tabular-nums">
-                {formatPeso(group.total)}
-              </p>
+              <span className="flex flex-col items-end">
+                <p className="text-sm font-semibold tabular-nums">
+                  {formatPeso(group.total)}
+                </p>
+                {group.personalTakeTotal > 0 ? (
+                  <p className="text-xs text-muted-foreground tabular-nums">
+                    Personal take {formatPeso(group.personalTakeTotal)}
+                  </p>
+                ) : null}
+              </span>
             </div>
             {group.items.map((item) =>
               item.kind === "visit" ? (

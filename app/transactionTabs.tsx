@@ -11,7 +11,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { formatPeso } from "@/lib/format";
 import {
   MONEY_ACCOUNT_LABELS,
   PAYMENT_METHOD_LABELS,
@@ -87,19 +86,13 @@ export default function TransactionTabs({
     () => entries.filter((entry) => entry.data.voided_at !== null).length,
     [entries]
   );
-  // Voided personal takes are excluded from the total — a void reverses the
-  // stock deduction, so it isn't really an outstanding take anymore, same
-  // reasoning Statistics' personalTakesValue already follows.
-  const { personalTakeCount, personalTakeTotal } = useMemo(() => {
-    let count = 0;
-    let total = 0;
-    for (const entry of entries) {
-      if (entry.kind !== "sale" || !entry.data.is_personal_take) continue;
-      count++;
-      if (entry.data.voided_at === null) total += Number(entry.data.total);
-    }
-    return { personalTakeCount: count, personalTakeTotal: total };
-  }, [entries]);
+  const personalTakeCount = useMemo(
+    () =>
+      entries.filter(
+        (entry) => entry.kind === "sale" && entry.data.is_personal_take
+      ).length,
+    [entries]
+  );
 
   const searched = useMemo(
     () =>
@@ -178,7 +171,7 @@ export default function TransactionTabs({
             onClick={() => setPersonalTakeFilter("all")}
           />
           <FilterChip
-            label={`Personal take (${personalTakeCount}) · ${formatPeso(personalTakeTotal)}`}
+            label={`Personal take (${personalTakeCount})`}
             active={personalTakeFilter === "personal"}
             onClick={() =>
               setPersonalTakeFilter((prev) =>
