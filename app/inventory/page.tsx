@@ -32,6 +32,10 @@ import BulkRestockSheet from "./bulkRestockSheet";
 import HistorySheet, { type HistoryEntry } from "./historySheet";
 import ItemsBrowser from "./itemsBrowser";
 import ProductSheet from "./productSheet";
+import RestockHistorySheet, {
+  type RestockReceipt,
+  type RestockReceiptLine,
+} from "./restockHistorySheet";
 import ServiceDeleteButton from "./serviceDeleteButton";
 import ServiceForm from "./serviceForm";
 
@@ -72,7 +76,46 @@ type SearchParams = {
   editService?: string;
   history?: string;
   bulk?: string;
+  restocks?: string;
 };
+
+// Every product_restocks row created in the same bulk-restock submission
+// shares the exact same cashier + created_at — there's no separate batch id
+// in the schema (see recordBulkRestock()), but every line is inserted
+// inside one DB transaction, and TIMESTAMP here has no fractional-second
+// precision, so same-submission lines always land on an identical whole
+// second. Grouping on that pair reconstructs "receipts" from existing data
+// without a migration; two different cashiers restocking in the exact same
+// second would wrongly merge, but that's not a real scenario for this store.
+const RESTOCK_HISTORY_LIMIT = 1000;
+
+function groupIntoReceipts(
+  rows: (RestockReceiptLine & { cashier_id: string })[]
+): RestockReceipt[] {
+  const receipts: RestockReceipt[] = [];
+  for (const row of rows) {
+    const last = receipts[receipts.length - 1];
+    if (
+      last &&
+      last.createdAt === row.created_at &&
+      last.cashierId === row.cashier_id
+    ) {
+      last.lines.push(row);
+      last.totalCost += Number(row.cost);
+      last.totalUnits += row.quantity;
+    } else {
+      receipts.push({
+        key: row.id,
+        createdAt: row.created_at,
+        cashierId: row.cashier_id,
+        lines: [row],
+        totalCost: Number(row.cost),
+        totalUnits: row.quantity,
+      });
+    }
+  }
+  return receipts;
+}
 
 export default async function InventoryPage({
   searchParams,
@@ -84,45 +127,61 @@ export default async function InventoryPage({
   // Empty string and undefined both mean "no history sheet" — one value
   // drives both the open state and the fetch below, so they can't disagree.
   const historyId = params.history || undefined;
+  const showRestockHistory = params.restocks !== undefined;
 
   let products: Product[];
   let categories: Category[];
   let serviceList: Service[];
   let restocks: RestockRow[];
   let items: ProductSaleRow[];
+  let restockHistoryRows: (RestockReceiptLine & { cashier_id: string })[];
 
   try {
-    [products, categories, serviceList, restocks, items] = await Promise.all([
-      queryRows<Product>(`SELECT ${PRODUCT_COLUMNS} FROM products ORDER BY name`),
-      queryRows<Category>(
-        "SELECT id, name, sort_order, created_at FROM categories ORDER BY sort_order"
-      ),
-      queryRows<Service>(`SELECT ${SERVICE_COLUMNS} FROM services ORDER BY name`),
-      // History is independent of the queries above (keyed only by
-      // ?history=), so it rides in the same Promise.all instead of waiting
-      // on them to resolve first.
-      historyId
-        ? queryRows<RestockRow>(
-            "SELECT id, quantity, cost, note, created_at FROM product_restocks WHERE product_id = ? ORDER BY created_at DESC",
-            [historyId]
-          )
-        : Promise.resolve([]),
-      historyId
-        ? queryRows<ProductSaleRow>(
-            `SELECT ti.id, ti.quantity, ti.unit_price, ti.discount_amount, ti.line_total,
+    [products, categories, serviceList, restocks, items, restockHistoryRows] =
+      await Promise.all([
+        queryRows<Product>(`SELECT ${PRODUCT_COLUMNS} FROM products ORDER BY name`),
+        queryRows<Category>(
+          "SELECT id, name, sort_order, created_at FROM categories ORDER BY sort_order"
+        ),
+        queryRows<Service>(`SELECT ${SERVICE_COLUMNS} FROM services ORDER BY name`),
+        // History is independent of the queries above (keyed only by
+        // ?history=), so it rides in the same Promise.all instead of waiting
+        // on them to resolve first.
+        historyId
+          ? queryRows<RestockRow>(
+              "SELECT id, quantity, cost, note, created_at FROM product_restocks WHERE product_id = ? ORDER BY created_at DESC",
+              [historyId]
+            )
+          : Promise.resolve([]),
+        historyId
+          ? queryRows<ProductSaleRow>(
+              `SELECT ti.id, ti.quantity, ti.unit_price, ti.discount_amount, ti.line_total,
                     t.created_at, t.is_personal_take, t.voided_at, t.void_reason, t.payment_method
              FROM transaction_items ti
              JOIN transactions t ON t.id = ti.transaction_id
              WHERE ti.product_id = ?`,
-            [historyId]
-          )
-        : Promise.resolve([]),
-    ]);
+              [historyId]
+            )
+          : Promise.resolve([]),
+        // Also independent of everything above (keyed only by ?restocks),
+        // and only worth fetching when that sheet is actually open — same
+        // "don't pay for a query nobody's looking at" reasoning as history.
+        showRestockHistory
+          ? queryRows<RestockReceiptLine & { cashier_id: string }>(
+              `SELECT id, product_id, product_name, quantity, cost, note, cashier_id, created_at
+             FROM product_restocks
+             ORDER BY created_at DESC, id ASC
+             LIMIT ${RESTOCK_HISTORY_LIMIT}`
+            )
+          : Promise.resolve([]),
+      ]);
   } catch (err) {
     return (
       <PageError title="Could not load inventory" message={(err as Error).message} />
     );
   }
+
+  const restockReceipts = groupIntoReceipts(restockHistoryRows);
 
   const editing = params.edit
     ? products.find((p) => p.id === params.edit)
@@ -283,13 +342,23 @@ export default async function InventoryPage({
               </div>
             ) : null}
 
-            <Button
-              className="self-start"
-              nativeButton={false}
-              render={<Link href="/inventory?bulk" />}
-            >
-              Bulk restock
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="self-start"
+                nativeButton={false}
+                render={<Link href="/inventory?bulk" />}
+              >
+                Bulk restock
+              </Button>
+              <Button
+                variant="outline"
+                className="self-start"
+                nativeButton={false}
+                render={<Link href="/inventory?restocks" />}
+              >
+                Restock history
+              </Button>
+            </div>
 
             <ItemsBrowser products={products} categories={categories} />
           </TabsContent>
@@ -395,6 +464,8 @@ export default async function InventoryPage({
           products={products}
           categories={categories}
         />
+
+        <RestockHistorySheet open={showRestockHistory} receipts={restockReceipts} />
       </>
     </PageShell>
   );
