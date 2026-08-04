@@ -4,9 +4,11 @@ import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 
 export default function VaultCard({
   balances,
+  compact = false,
   className,
 }: {
   balances: Map<MoneyAccount, number>;
+  compact?: boolean;
   className?: string;
 }) {
   const rows = ACCOUNT_ORDER.map((account) => ({
@@ -24,6 +26,7 @@ export default function VaultCard({
       rows={rows}
       href="/vault"
       linkLabel="Vault →"
+      compact={compact}
       className={className}
     />
   );

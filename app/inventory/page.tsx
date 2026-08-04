@@ -323,6 +323,7 @@ export default async function InventoryPage({
                         ]
                       : undefined
                   }
+                  compact
                 />
                 <SummaryCard
                   label="Potential profit"
@@ -338,6 +339,7 @@ export default async function InventoryPage({
                         ]
                       : []),
                   ]}
+                  compact
                 />
               </div>
             ) : null}

@@ -6,15 +6,7 @@ import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { storeDateFromKey, storeDayKey } from "@/lib/format";
-
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Shifts a "YYYY-MM-DD" store-day key by N calendar days. Manila has no
-    DST, so a flat 24h step never lands on the wrong day. */
-function shiftDateKey(dateKey: string, days: number): string {
-  return storeDayKey(new Date(storeDateFromKey(dateKey).getTime() + days * ONE_DAY_MS));
-}
+import { shiftDateKey, storeDayKey } from "@/lib/format";
 
 /**
  * The dashboard used to be hardcoded to "today" with no way to look back —

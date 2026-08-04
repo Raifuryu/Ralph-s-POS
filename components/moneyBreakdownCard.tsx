@@ -36,6 +36,7 @@ export function MoneyBreakdownCard({
   footer,
   href,
   linkLabel = "View →",
+  compact = false,
   className,
 }: {
   title: string;
@@ -49,6 +50,11 @@ export function MoneyBreakdownCard({
   /** If set, a small link to view the full breakdown elsewhere. */
   href?: string;
   linkLabel?: string;
+  /** Tighter padding and a smaller headline number — same recipe as
+      SummaryCard's own `compact`, for pages that stack several of these
+      cards where the full-size headline is more room than the number
+      needs (e.g. Sales' Vault/Income pair). */
+  compact?: boolean;
   className?: string;
 }) {
   // Collapsed by default — the headline total is the thing worth seeing at
@@ -59,9 +65,16 @@ export function MoneyBreakdownCard({
   const showBar = barTotal > 0 && rows.every((row) => row.value >= 0);
 
   return (
-    <div className={cn("rounded-lg border bg-card p-4", className)}>
+    <div className={cn("rounded-lg border bg-card p-4", compact && "p-3", className)}>
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm text-muted-foreground">{title}</p>
+        <p
+          className={cn(
+            "text-sm text-muted-foreground",
+            compact && "truncate text-xs"
+          )}
+        >
+          {title}
+        </p>
         {href ? (
           <Button
             variant="ghost"
@@ -82,7 +95,12 @@ export function MoneyBreakdownCard({
         className="mt-1 flex w-full items-center justify-between gap-2 text-left"
       >
         <span className="flex flex-col">
-          <span className="text-2xl font-semibold tabular-nums">
+          <span
+            className={cn(
+              "font-semibold tabular-nums",
+              compact ? "text-lg" : "text-2xl"
+            )}
+          >
             {formatPeso(total)}
           </span>
           {subtitle ? (

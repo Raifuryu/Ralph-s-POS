@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react";
 
 import {
   Accordion,
@@ -12,7 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { storeDayKey } from "@/lib/format";
+import { shiftDateKey, storeDayKey } from "@/lib/format";
 
 export type FilterValues = {
   q: string;
@@ -59,6 +60,7 @@ export default function TransactionFilters({
   const [q, setQ] = useState(initial.q);
   const [from, setFrom] = useState(initial.from);
   const [to, setTo] = useState(initial.to);
+  const today = storeDayKey(new Date());
 
   const activeCount = [
     showSearch && initial.q,
@@ -95,10 +97,29 @@ export default function TransactionFilters({
   }
 
   function preset(fromDate: string) {
-    const today = storeDayKey(new Date());
     setFrom(fromDate);
     setTo(today);
     apply({ from: fromDate, to: today });
+  }
+
+  // Nav arrows shift whichever field they're attached to by one day and
+  // apply immediately, same "button click = instant action" behavior as the
+  // preset buttons above (typing/picking in the raw input still waits on
+  // Apply). Clamped against the other bound so From can never end up after
+  // To (or vice versa) — same ordering the manual pickers' min/max already
+  // enforce, just also covering the button path.
+  function shiftFrom(days: number) {
+    const next = shiftDateKey(from || today, days);
+    const clamped = to && next > to ? to : next;
+    setFrom(clamped);
+    apply({ from: clamped });
+  }
+
+  function shiftTo(days: number) {
+    const next = shiftDateKey(to || today, days);
+    const clamped = from && next < from ? from : next;
+    setTo(clamped);
+    apply({ to: clamped });
   }
 
   function clear() {
@@ -150,27 +171,70 @@ export default function TransactionFilters({
                     <Label htmlFor="from" className="text-xs">
                       From
                     </Label>
-                    <Input
-                      id="from"
-                      name="from"
-                      type="date"
-                      value={from}
-                      max={to || undefined}
-                      onChange={(event) => setFrom(event.target.value)}
-                    />
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="From: previous day"
+                        onClick={() => shiftFrom(-1)}
+                      >
+                        <ChevronLeftIcon />
+                      </Button>
+                      <Input
+                        id="from"
+                        name="from"
+                        type="date"
+                        value={from}
+                        max={to || undefined}
+                        onChange={(event) => setFrom(event.target.value)}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="From: next day"
+                        onClick={() => shiftFrom(1)}
+                      >
+                        <ChevronRightIcon />
+                      </Button>
+                    </div>
                   </div>
                   <div className="flex flex-col gap-2">
                     <Label htmlFor="to" className="text-xs">
                       To
                     </Label>
-                    <Input
-                      id="to"
-                      name="to"
-                      type="date"
-                      value={to}
-                      min={from || undefined}
-                      onChange={(event) => setTo(event.target.value)}
-                    />
+                    <div className="flex items-center gap-1">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="To: previous day"
+                        onClick={() => shiftTo(-1)}
+                      >
+                        <ChevronLeftIcon />
+                      </Button>
+                      <Input
+                        id="to"
+                        name="to"
+                        type="date"
+                        value={to}
+                        min={from || undefined}
+                        onChange={(event) => setTo(event.target.value)}
+                        className="flex-1"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="icon-sm"
+                        aria-label="To: next day"
+                        disabled={(to || today) >= today}
+                        onClick={() => shiftTo(1)}
+                      >
+                        <ChevronRightIcon />
+                      </Button>
+                    </div>
                   </div>
                 </div>
 
@@ -179,7 +243,7 @@ export default function TransactionFilters({
                     type="button"
                     variant="outline"
                     size="xs"
-                    onClick={() => preset(storeDayKey(new Date()))}
+                    onClick={() => preset(today)}
                   >
                     Today
                   </Button>

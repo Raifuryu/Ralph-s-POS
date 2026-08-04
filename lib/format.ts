@@ -92,6 +92,16 @@ export function storeDateFromKey(dateKey: string): Date {
   return new Date(Date.UTC(year, month - 1, day, 12 - 8, 0, 0));
 }
 
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Shifts a "YYYY-MM-DD" store-day key by N calendar days — the "Previous
+    day"/"Next day" arrows on DashboardDateFilter and TransactionFilters both
+    use this. Manila has no DST, so a flat 24h step never lands on the wrong
+    day. */
+export function shiftDateKey(dateKey: string, days: number): string {
+  return storeDayKey(new Date(storeDateFromKey(dateKey).getTime() + days * ONE_DAY_MS));
+}
+
 /**
  * Wall-clock bounds (store timezone) of a calendar day, as naive
  * "YYYY-MM-DD HH:MM:SS" literals ready to bind against a TIMESTAMP column.
@@ -134,3 +144,20 @@ export function formatHourLabel(hour: number): string {
   const twelveHour = hour % 12 === 0 ? 12 : hour % 12;
   return `${twelveHour} ${period}`;
 }
+
+const weekdayFormat = new Intl.DateTimeFormat("en-US", {
+  timeZone: STORE_TIME_ZONE,
+  weekday: "short",
+});
+
+/** Su, Mo, Tu, We, Th, Fr, Sa — Intl's weekday names, not a fixed lookup
+    table, so they stay correct if the locale ever changes. Used as the
+    bucket key for "which day of the week" analysis (ProductAnalysis),
+    paired with WEEKDAY_ORDER below for a stable Sun-first display order. */
+export function storeWeekday(value: string | Date): string {
+  return weekdayFormat.format(new Date(value));
+}
+
+/** Sun-first order for weekday buckets — matches how every common calendar
+    (and the date picker's own week layout) starts the week in this locale. */
+export const WEEKDAY_ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

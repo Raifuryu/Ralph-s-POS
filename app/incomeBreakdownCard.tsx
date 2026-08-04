@@ -45,6 +45,7 @@ export default function IncomeBreakdownCard({
   eService,
   storeProfit,
   personalTake,
+  compact = false,
   className,
 }: {
   title: string;
@@ -67,6 +68,8 @@ export default function IncomeBreakdownCard({
       personal take isn't income (see checkoutForm.tsx: no payment method,
       no tender, no income posted for one). Omitted (or 0) hides the line. */
   personalTake?: number;
+  /** Tighter padding and a smaller headline number — see MoneyBreakdownCard. */
+  compact?: boolean;
   className?: string;
 }) {
   const eServiceTotal = eService.gcash + eService.maya + eService.other;
@@ -141,6 +144,7 @@ export default function IncomeBreakdownCard({
           </div>
         ) : undefined
       }
+      compact={compact}
       className={className}
     />
   );

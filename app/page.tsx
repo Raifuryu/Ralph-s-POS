@@ -286,13 +286,14 @@ export default async function Home({
             two headline cards — equal weight, stacked on mobile, side by
             side from sm up. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <VaultCard balances={vault} />
+          <VaultCard balances={vault} compact />
           <IncomeBreakdownCard
             title={incomeTitle}
             subtitle={incomeSubtitle}
             store={storeTotal}
             eService={eServiceFees}
             storeProfit={storeMargin}
+            compact
           />
         </div>
 

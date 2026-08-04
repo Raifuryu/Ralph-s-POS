@@ -10,6 +10,8 @@ import {
   storeDateFromKey,
   storeDayKey,
   storeHour,
+  storeWeekday,
+  WEEKDAY_ORDER,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import {
@@ -24,6 +26,7 @@ import TransactionFilters from "@/app/transactionFilters";
 import CategoryLeaderboard, { type CategoryRevenue } from "./categoryLeaderboard";
 import HourlyTrafficChart, { type HourlyBucket } from "./hourlyTrafficChart";
 import PaymentBreakdownCard from "./paymentBreakdownCard";
+import ProductAnalysis, { type ProductTimeStats } from "./productAnalysis";
 import ProfitTrendChart, { type ProfitBucket } from "./profitTrendChart";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
@@ -433,8 +436,18 @@ export default async function StatisticsPage({
   // category — powers the click-to-expand item breakdown under each row in
   // CategoryLeaderboard.
   const categoryProductAgg = new Map<string, Map<string, ProductAggEntry>>();
+  // When (day of week, hour of day) a product tends to sell — powers
+  // ProductAnalysis's per-item breakdown below. Keyed the same way as
+  // productAgg; bucketed by the transaction's timestamp since that's when
+  // the sale actually happened, not by anything about the line item itself.
+  const productTimeAgg = new Map<
+    string,
+    { name: string; units: number; byWeekday: number[]; byHour: number[] }
+  >();
 
   for (const t of salesExcludingPersonal) {
+    const weekdayIndex = WEEKDAY_ORDER.indexOf(storeWeekday(t.created_at));
+    const hourIndex = storeHour(t.created_at);
     for (const item of t.transaction_items) {
       const revenue = Number(item.line_total);
       const unitCost = item.unit_cost !== null ? Number(item.unit_cost) : null;
@@ -448,6 +461,17 @@ export default async function StatisticsPage({
         revenue,
         unitCost
       );
+
+      const timeEntry = productTimeAgg.get(productKey) ?? {
+        name: item.product_name,
+        units: 0,
+        byWeekday: Array(7).fill(0) as number[],
+        byHour: Array(24).fill(0) as number[],
+      };
+      timeEntry.units += item.quantity;
+      timeEntry.byWeekday[weekdayIndex] += item.quantity;
+      timeEntry.byHour[hourIndex] += item.quantity;
+      productTimeAgg.set(productKey, timeEntry);
 
       const categoryId = item.product_id
         ? categoryIdByProductId.get(item.product_id)
@@ -486,6 +510,16 @@ export default async function StatisticsPage({
     }))
     .sort((a, b) => b.revenue - a.revenue)
     .slice(0, 10);
+
+  const productAnalysis: ProductTimeStats[] = [...productTimeAgg.entries()]
+    .map(([key, v]) => ({
+      key,
+      name: v.name,
+      units: v.units,
+      byWeekday: v.byWeekday,
+      byHour: v.byHour,
+    }))
+    .sort((a, b) => b.units - a.units);
 
   const categoryRows: CategoryRevenue[] = [...categoryRevenue.entries()]
     .map(([name, revenue]) => ({
@@ -644,6 +678,8 @@ export default async function StatisticsPage({
           subtitle="Reflects each product's current category, not its category at time of sale."
           categories={categoryRows}
         />
+
+        <ProductAnalysis key={`analysis-${subtitle}`} products={productAnalysis} />
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SummaryCard
