@@ -57,6 +57,11 @@ function toNumber(value: string): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+/** Common PH peso bill denominations — a GCash/Maya cash-in customer almost
+    always hands over one of these, so tapping one is faster than typing it
+    for the single most-filled field on this screen. */
+const QUICK_AMOUNTS = [20, 50, 100, 200, 500, 1000];
+
 /** Tier-matched fee for the amount, falling back to the service's flat
     default_fee when no tier covers it (or none are configured at all). */
 function resolveFee(service: Service, principal: number): number | null {
@@ -227,6 +232,18 @@ export default function ServiceLineEditor({
             principalNum >= t.min && (t.max === null || principalNum <= t.max)
         ) ?? null)
       : null;
+
+  // Shared by the raw input's onChange and the quick-amount chips below, so
+  // tapping ₱100 does exactly what typing "100" would — including the same
+  // tiered-fee auto-fill (only while the cashier hasn't touched Fee
+  // directly, same "touched" pattern as the bulk restock calculator).
+  function handlePrincipalChange(value: string) {
+    setPrincipal(value);
+    if (selected && !feeTouched && tiers.length > 0) {
+      const resolved = resolveFee(selected, toNumber(value));
+      if (resolved !== null) setFee(String(resolved));
+    }
+  }
 
   function pick(service: Service) {
     setSelected(service);
@@ -440,14 +457,7 @@ export default function ServiceLineEditor({
                   inputMode="decimal"
                   placeholder="0.00"
                   value={principal}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setPrincipal(value);
-                    if (selected && !feeTouched && tiers.length > 0) {
-                      const resolved = resolveFee(selected, toNumber(value));
-                      if (resolved !== null) setFee(String(resolved));
-                    }
-                  }}
+                  onChange={(event) => handlePrincipalChange(event.target.value)}
                 />
               </div>
               <div className="flex flex-col gap-2">
@@ -468,6 +478,21 @@ export default function ServiceLineEditor({
                   }}
                 />
               </div>
+            </div>
+
+            <div className="-mt-1 flex flex-wrap gap-1.5">
+              {QUICK_AMOUNTS.map((amount) => (
+                <Button
+                  key={amount}
+                  type="button"
+                  variant="outline"
+                  size="xs"
+                  aria-label={`Set amount to ${formatPeso(amount)}`}
+                  onClick={() => handlePrincipalChange(String(amount))}
+                >
+                  ₱{amount}
+                </Button>
+              ))}
             </div>
 
             {tiers.length > 0 ? (
