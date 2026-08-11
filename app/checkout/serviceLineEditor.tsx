@@ -57,10 +57,11 @@ function toNumber(value: string): number {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
 
-/** Common PH peso bill denominations — a GCash/Maya cash-in customer almost
-    always hands over one of these, so tapping one is faster than typing it
-    for the single most-filled field on this screen. */
-const QUICK_AMOUNTS = [20, 50, 100, 200, 500, 1000];
+/** Common PH peso bill denominations plus every ₱100 step up to ₱1,000 — a
+    GCash/Maya cash-in customer almost always hands over some combination of
+    these, so tapping is faster than typing for the single most-filled field
+    on this screen. */
+const QUICK_AMOUNTS = [20, 50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
 
 /** Tier-matched fee for the amount, falling back to the service's flat
     default_fee when no tier covers it (or none are configured at all). */
@@ -480,23 +481,6 @@ export default function ServiceLineEditor({
               </div>
             </div>
 
-            <div className="-mt-1 flex flex-wrap gap-1.5">
-              {QUICK_AMOUNTS.map((amount) => (
-                <Button
-                  key={amount}
-                  type="button"
-                  variant="outline"
-                  size="xs"
-                  aria-label={`Add ${formatPeso(amount)} to amount`}
-                  onClick={() =>
-                    handlePrincipalChange(String(toNumber(principal) + amount))
-                  }
-                >
-                  +₱{amount}
-                </Button>
-              ))}
-            </div>
-
             {tiers.length > 0 ? (
               <p className="-mt-2 text-xs text-muted-foreground">
                 {matchedTier ? (
@@ -652,6 +636,29 @@ export default function ServiceLineEditor({
           </AccordionItem>
         </Accordion>
       </div>
+
+      {/* Outside the scrollable area on purpose — pinned just above the
+          footer so it's always in thumb reach without scrolling back up,
+          unlike the Amount field itself which can scroll out of view once
+          the tier note/checkboxes/details push the sheet taller. */}
+      {!isPerUnit ? (
+        <div className="grid shrink-0 grid-cols-3 gap-2 border-t pt-3">
+          {QUICK_AMOUNTS.map((amount) => (
+            <Button
+              key={amount}
+              type="button"
+              variant="outline"
+              className="h-12 text-base font-semibold"
+              aria-label={`Add ${formatPeso(amount)} to amount`}
+              onClick={() =>
+                handlePrincipalChange(String(toNumber(principal) + amount))
+              }
+            >
+              +₱{amount}
+            </Button>
+          ))}
+        </div>
+      ) : null}
 
       <DrawerFooter className="flex-row items-center justify-between gap-3 border-t p-0 pt-4">
         <div>
