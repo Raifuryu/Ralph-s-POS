@@ -487,10 +487,12 @@ export default function ServiceLineEditor({
                   type="button"
                   variant="outline"
                   size="xs"
-                  aria-label={`Set amount to ${formatPeso(amount)}`}
-                  onClick={() => handlePrincipalChange(String(amount))}
+                  aria-label={`Add ${formatPeso(amount)} to amount`}
+                  onClick={() =>
+                    handlePrincipalChange(String(toNumber(principal) + amount))
+                  }
                 >
-                  ₱{amount}
+                  +₱{amount}
                 </Button>
               ))}
             </div>
