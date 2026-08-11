@@ -98,7 +98,12 @@ export async function checkout(
       return { ...line, product, discount: 0 };
     }
     const subtotal = roundMoney(product.price * line.quantity);
-    const discount = Math.min(line.discountAmount, subtotal);
+    // Rounded here (transaction_items.discount_amount is DECIMAL) rather
+    // than trusted as-is — a percent-of-subtotal discount computed
+    // client-side can leave floating-point noise past the centavo, which
+    // this app's strict-mode MariaDB rejects outright instead of silently
+    // truncating (same reasoning as recordRestock's cost rounding).
+    const discount = roundMoney(Math.min(line.discountAmount, subtotal));
     total += subtotal - discount;
     return { ...line, product, discount };
   });

@@ -20,8 +20,17 @@ export async function recordRestock(
     cashierId: string;
   }
 ): Promise<string> {
-  const { productId, quantity, cost, cashierId } = params;
+  const { productId, quantity, cashierId } = params;
   const note = params.note?.trim() || null;
+  // Rounded once here rather than trusted as-is — the client can hand this
+  // function a value with floating-point noise past the centavo (e.g. a
+  // pack cost divided down to a per-piece figure and back), and
+  // product_restocks.cost is DECIMAL(12,2): MariaDB's default strict SQL
+  // mode turns "value doesn't fit the column's scale" into a hard INSERT
+  // error rather than silently truncating it, so an unrounded value doesn't
+  // just lose precision quietly — it can fail the whole restock, and only
+  // for the specific lines whose arithmetic happened to leave a dirty tail.
+  const cost = roundMoney(params.cost);
 
   if (!Number.isInteger(quantity) || quantity <= 0) {
     throw new Error("Quantity must be more than 0");

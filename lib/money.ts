@@ -9,6 +9,16 @@
 
 export type ParsedMoney = number | null | "bad";
 
+// At most 2 decimal digits, checked against the raw STRING rather than the
+// parsed float. The old check compared Math.round(parsed * 100) against
+// parsed * 100 directly — but IEEE754 doubles don't hold most decimal
+// fractions exactly (19.1 * 100 is 1910.0000000000002, not 1910), so that
+// comparison failed for roughly 1 in 7 perfectly valid two-decimal amounts
+// (19.10, 4.40, 8.20, ...), rejecting them as "bad" even though the
+// cashier typed a normal peso-and-centavo value. Matching the string
+// itself sidesteps floating-point entirely.
+const MONEY_PATTERN = /^\d+(\.\d{1,2})?$/;
+
 export function parseMoney(
   raw: FormDataEntryValue | null,
   opts: { allowBlank?: boolean; requirePositive?: boolean } = {}
@@ -16,12 +26,15 @@ export function parseMoney(
   const value = String(raw ?? "").trim();
   if (value === "") return opts.allowBlank ? null : "bad";
 
+  // Reject more precision than numeric(_,2) can hold rather than letting
+  // Postgres round it silently. Also rejects a leading "-" (negative
+  // amounts), so the finite/non-negative check below is now redundant for
+  // any string that reaches it, but stays as a defensive backstop.
+  if (!MONEY_PATTERN.test(value)) return "bad";
+
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) return "bad";
   if (opts.requirePositive && parsed <= 0) return "bad";
-  // Reject more precision than numeric(_,2) can hold rather than letting
-  // Postgres round it silently.
-  if (Math.round(parsed * 100) !== parsed * 100) return "bad";
   return parsed;
 }
 

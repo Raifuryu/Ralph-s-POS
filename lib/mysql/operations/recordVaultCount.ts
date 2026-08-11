@@ -12,7 +12,12 @@ export async function recordVaultCount(
   params: { account: MoneyAccount; counted: number },
   cashierId: string
 ): Promise<{ account: MoneyAccount; counted: number; expected: number; overShort: number }> {
-  const { account, counted } = params;
+  const { account } = params;
+  // Rounded here rather than trusted as-is — same reasoning as every other
+  // money value in these operations (see recordRestock's cost rounding);
+  // counted is typed input, lower-risk than a computed value, but cheap to
+  // guard the same way regardless.
+  const counted = roundMoney(params.counted);
 
   if (!Number.isFinite(counted) || counted < 0) {
     throw new Error("Counted amount must be 0 or more");

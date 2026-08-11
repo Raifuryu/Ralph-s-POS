@@ -3,7 +3,7 @@ import type { PoolConnection } from "mysql2/promise";
 
 import type { CashFlow } from "@/lib/db/types";
 import type { MoneyAccount } from "@/lib/types";
-import { queryConn } from "./helpers";
+import { queryConn, roundMoney } from "./helpers";
 
 export type RecordServiceParams = {
   serviceId: string;
@@ -29,22 +29,33 @@ export async function recordService(
   params: RecordServiceParams,
   cashierId: string
 ): Promise<string> {
-  let fee = params.fee;
   const {
     serviceId,
-    principal,
+    principal: principalInput,
     paymentAccount = "cash",
     tendered = null,
     feeInWallet = false,
     unitLabel = null,
     unitQuantity = null,
-    unitPrice = null,
+    unitPrice: unitPriceInput = null,
     visitId = null,
-    discountAmount = 0,
+    discountAmount: discountAmountInput = 0,
   } = params;
   const contactNumber = params.contactNumber?.trim() || null;
   const reference = params.reference?.trim() || null;
   const description = params.description?.trim() || null;
+
+  // Rounded here rather than trusted as-is — service_transactions' money
+  // columns are DECIMAL, and this app's strict-mode MariaDB rejects an
+  // INSERT with floating-point noise past the centavo outright instead of
+  // silently truncating it (same reasoning as recordRestock's cost
+  // rounding). These all reach here from client-side arithmetic (a percent
+  // discount, a per-unit total) that can leave one; `fee` gets the same
+  // treatment below, once it's finalized either way it can be produced.
+  const principal = roundMoney(principalInput);
+  const unitPrice = unitPriceInput !== null ? roundMoney(unitPriceInput) : null;
+  const discountAmount = roundMoney(discountAmountInput);
+  let fee = roundMoney(params.fee);
 
   if (!Number.isFinite(principal) || principal < 0) {
     throw new Error("Amount must be 0 or more");
@@ -68,8 +79,10 @@ export async function recordService(
   if (unitLabel !== null) {
     // Per-unit: fee is always derived here from unit_price x quantity minus
     // the discount, never trusted as a separately-submitted number — so a
-    // discount and the actual charged fee can never drift apart.
-    fee = unitPrice! * unitQuantity! - discountAmount;
+    // discount and the actual charged fee can never drift apart. Re-rounded
+    // since this multiplication can reintroduce floating-point noise even
+    // though unitPrice/discountAmount are already clean.
+    fee = roundMoney(unitPrice! * unitQuantity! - discountAmount);
     if (fee < 0) {
       throw new Error("Discount cannot exceed the line's own subtotal");
     }
@@ -141,10 +154,15 @@ export async function recordService(
   );
 
   async function postVaultEntry(amount: number, account: MoneyAccount, note?: string) {
-    if (amount === 0) return;
+    // Re-rounded even though every caller already passes rounded operands
+    // — summing two clean 2-decimal values (principal + fee) can still
+    // land on a double with noise past the centavo, same reasoning as
+    // everywhere else in this file.
+    const rounded = roundMoney(amount);
+    if (rounded === 0) return;
     await conn.query(
       "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, created_by, note) VALUES (?, 'service', ?, ?, ?, ?, ?)",
-      [randomUUID(), amount, id, account, cashierId, note ?? null]
+      [randomUUID(), rounded, id, account, cashierId, note ?? null]
     );
   }
 

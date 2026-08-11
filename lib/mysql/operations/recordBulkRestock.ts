@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { withTransaction } from "@/lib/mysql/pool";
-import { placeholders, queryConn } from "./helpers";
+import { placeholders, queryConn, roundMoney } from "./helpers";
 import { recordRestock } from "./recordRestock";
 
 export type BulkRestockLine = {
@@ -103,16 +103,22 @@ export async function recordBulkRestock(
     for (const line of items) {
       const name = line.name?.trim() || null;
       const description = line.description?.trim() || null;
+      // Rounded here rather than trusted as-is — same reasoning as
+      // recordRestock's own cost rounding: products.price is DECIMAL(12,2),
+      // and this app's MariaDB rejects an INSERT/UPDATE outright rather than
+      // silently truncating a value with floating-point noise past the
+      // centavo (e.g. a price computed backward from a markup percentage).
+      const price = roundMoney(line.price);
       let productId: string;
 
       if (line.productId !== null) {
         productId = line.productId;
-        await conn.query("UPDATE products SET price = ? WHERE id = ?", [line.price, productId]);
+        await conn.query("UPDATE products SET price = ? WHERE id = ?", [price, productId]);
       } else {
         productId = randomUUID();
         await conn.query(
           "INSERT INTO products (id, name, price, stock, category_id, description) VALUES (?, ?, ?, NULL, ?, ?)",
-          [productId, name, line.price, line.categoryId, description]
+          [productId, name, price, line.categoryId, description]
         );
       }
 
