@@ -41,33 +41,37 @@ function toAmount(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-type DiscountMode = "peso" | "percent";
-type DiscountDraft = { mode: DiscountMode; value: string };
+type AdjustmentMode = "peso" | "percent";
+// "discount" takes off, "surcharge" adds on top — the inverse of each
+// other, sharing the same peso/percent editor.
+type AdjustmentKind = "discount" | "surcharge";
+type AdjustmentDraft = { kind: AdjustmentKind; mode: AdjustmentMode; value: string };
 
 /** Converts whatever the cashier typed (pesos, or a percent of the line's
-    own subtotal) down to a single peso amount, clamped to [0, subtotal] --
-    a line can never go negative, and a discount always resolves the same
-    way regardless of which mode it was entered in. Recomputed on every
-    render rather than stored, so a percent discount automatically tracks
+    own subtotal) into a single SIGNED peso delta — negative for a discount
+    (taken off, clamped so a line can never go negative), positive for a
+    surcharge (added on top, no natural cap). Recomputed on every render
+    rather than stored, so a percent adjustment automatically tracks
     quantity changes instead of going stale. */
-function discountAmountFor(
-  draft: DiscountDraft | undefined,
+function adjustmentDeltaFor(
+  draft: AdjustmentDraft | undefined,
   subtotal: number
 ): number {
   if (!draft) return 0;
   const raw = toAmount(draft.value);
   if (raw === null || raw <= 0) return 0;
   const pesos = draft.mode === "percent" ? (subtotal * raw) / 100 : raw;
-  return Math.min(pesos, subtotal);
+  return draft.kind === "discount" ? -Math.min(pesos, subtotal) : pesos;
 }
 
 // Versioned so a future change to this shape can't misread an old draft
-// left over from before a deploy.
-const DRAFT_STORAGE_KEY = "ralph-pos:sale-draft:v1";
+// left over from before a deploy. Bumped to v2 when discountDrafts grew a
+// `kind` field and became adjustmentDrafts.
+const DRAFT_STORAGE_KEY = "ralph-pos:sale-draft:v2";
 
 type SaleDraft = {
   quantities: Record<string, number>;
-  discountDrafts: Record<string, DiscountDraft>;
+  adjustmentDrafts: Record<string, AdjustmentDraft>;
   serviceDrafts: ServiceDraft[];
   paymentMethod: PaymentMethod;
   tendered: string;
@@ -100,11 +104,11 @@ export default function CheckoutForm({
   onRecorded?: () => void;
 }) {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
-  // Per product id -- tap a line in "In this sale" to expand its own peso/
-  // percent discount editor. Independent per line: discounting the Coke
+  // Per product id -- tap a line in "In this sale" to expand its own
+  // discount/surcharge editor. Independent per line: adjusting the Coke
   // never touches the Ice sitting right below it.
-  const [discountDrafts, setDiscountDrafts] = useState<
-    Record<string, DiscountDraft>
+  const [adjustmentDrafts, setAdjustmentDrafts] = useState<
+    Record<string, AdjustmentDraft>
   >({});
   const [expandedDiscountId, setExpandedDiscountId] = useState<string | null>(
     null
@@ -154,8 +158,11 @@ export default function CheckoutForm({
           // eslint-disable-next-line react-hooks/set-state-in-effect
           setQuantities(draft.quantities);
         }
-        if (draft.discountDrafts && typeof draft.discountDrafts === "object") {
-          setDiscountDrafts(draft.discountDrafts);
+        if (
+          draft.adjustmentDrafts &&
+          typeof draft.adjustmentDrafts === "object"
+        ) {
+          setAdjustmentDrafts(draft.adjustmentDrafts);
         }
         if (Array.isArray(draft.serviceDrafts)) {
           setServiceDrafts(draft.serviceDrafts);
@@ -181,7 +188,7 @@ export default function CheckoutForm({
     try {
       const draft: SaleDraft = {
         quantities,
-        discountDrafts,
+        adjustmentDrafts,
         serviceDrafts,
         paymentMethod,
         tendered,
@@ -195,7 +202,7 @@ export default function CheckoutForm({
   }, [
     hydrated,
     quantities,
-    discountDrafts,
+    adjustmentDrafts,
     serviceDrafts,
     paymentMethod,
     tendered,
@@ -216,7 +223,7 @@ export default function CheckoutForm({
 
   function resetDraft() {
     setQuantities({});
-    setDiscountDrafts({});
+    setAdjustmentDrafts({});
     setExpandedDiscountId(null);
     setServiceDrafts([]);
     setPaymentMethod("cash");
@@ -233,9 +240,9 @@ export default function CheckoutForm({
     setServiceDrafts((prev) => prev.filter((draft) => draft.key !== key));
     // Same cleanup setQuantity does for a removed product line — a
     // service re-added later should start over, not resurrect a stale
-    // markdown from a completely different line that happened to reuse
+    // adjustment from a completely different line that happened to reuse
     // this expanded/discount state.
-    setDiscountDrafts((prev) => {
+    setAdjustmentDrafts((prev) => {
       if (!(key in prev)) return prev;
       const copy = { ...prev };
       delete copy[key];
@@ -275,14 +282,13 @@ export default function CheckoutForm({
         .map((product) => {
           const quantity = quantities[product.id] ?? 0;
           const subtotal = Number(product.price) * quantity;
-          const discount = discountAmountFor(
-            discountDrafts[product.id],
-            subtotal
-          );
-          return { product, quantity, subtotal, discount };
+          const delta = adjustmentDeltaFor(adjustmentDrafts[product.id], subtotal);
+          const discount = delta < 0 ? -delta : 0;
+          const surcharge = delta > 0 ? delta : 0;
+          return { product, quantity, subtotal, discount, surcharge };
         })
         .filter((line) => line.quantity > 0),
-    [products, quantities, discountDrafts]
+    [products, quantities, adjustmentDrafts]
   );
 
   // Lines selling more than the recorded stock. Allowed — the shelf is the
@@ -294,28 +300,31 @@ export default function CheckoutForm({
 
   // Display only. The authoritative total is computed by the database.
   const previewTotal = cart.reduce(
-    (sum, line) => sum + (line.subtotal - line.discount),
+    (sum, line) => sum + (line.subtotal + line.surcharge - line.discount),
     0
   );
   const totalDiscount = cart.reduce((sum, line) => sum + line.discount, 0);
+  const totalSurcharge = cart.reduce((sum, line) => sum + line.surcharge, 0);
   const pieceCount = cart.reduce((sum, line) => sum + line.quantity, 0);
 
-  // Discount only applies to a per-unit service line (it acts like a
-  // product line once added — see the render below); a flat/tiered draft's
-  // fee is exactly what was typed when it was configured. discountDrafts is
-  // shared with the product cart above — draft.key and a product id are
-  // both effectively-random UUIDs from different sources, so there's no
-  // realistic collision between the two.
+  // Discount/surcharge only apply to a per-unit service line (it acts like
+  // a product line once added — see the render below); a flat/tiered
+  // draft's fee is exactly what was typed when it was configured.
+  // adjustmentDrafts is shared with the product cart above — draft.key and
+  // a product id are both effectively-random UUIDs from different sources,
+  // so there's no realistic collision between the two.
   const serviceLines = useMemo(
     () =>
       serviceDrafts.map((draft) => {
-        const discount =
+        const delta =
           draft.unitLabel !== null
-            ? discountAmountFor(discountDrafts[draft.key], draft.fee)
+            ? adjustmentDeltaFor(adjustmentDrafts[draft.key], draft.fee)
             : 0;
-        return { draft, discount, netFee: draft.fee - discount };
+        const discount = delta < 0 ? -delta : 0;
+        const surcharge = delta > 0 ? delta : 0;
+        return { draft, discount, surcharge, netFee: draft.fee + delta };
       }),
-    [serviceDrafts, discountDrafts]
+    [serviceDrafts, adjustmentDrafts]
   );
 
   const serviceFeesTotal = serviceLines.reduce(
@@ -356,10 +365,10 @@ export default function CheckoutForm({
 
   function setQuantity(id: string, next: number) {
     setQuantities((prev) => ({ ...prev, [id]: Math.max(0, next) }));
-    // Removing a line clears its discount too — re-adding the same product
-    // later should start over, not resurrect a stale markdown.
+    // Removing a line clears its adjustment too — re-adding the same
+    // product later should start over, not resurrect a stale markdown.
     if (next <= 0) {
-      setDiscountDrafts((prev) => {
+      setAdjustmentDrafts((prev) => {
         if (!(id in prev)) return prev;
         const copy = { ...prev };
         delete copy[id];
@@ -412,7 +421,8 @@ export default function CheckoutForm({
           cart.map((line) => ({
             product_id: line.product.id,
             quantity: line.quantity,
-            discount_amount: line.discount
+            discount_amount: line.discount,
+            surcharge_amount: line.surcharge
           }))
         )}
       />
@@ -420,16 +430,17 @@ export default function CheckoutForm({
         type="hidden"
         name="services"
         value={JSON.stringify(
-          serviceLines.map(({ draft, netFee, discount }) => ({
+          serviceLines.map(({ draft, netFee, discount, surcharge }) => ({
             service_id: draft.serviceId,
             principal: draft.principal,
             // The server derives the real fee itself for a per-unit line
-            // (unit_price x quantity - discount_amount), same reasoning
-            // checkout() never trusts a client-submitted price — this is
-            // just what the sheet is already showing, not the source of
-            // truth.
+            // (unit_price x quantity + surcharge_amount - discount_amount),
+            // same reasoning checkout() never trusts a client-submitted
+            // price — this is just what the sheet is already showing, not
+            // the source of truth.
             fee: netFee,
             discount_amount: discount,
+            surcharge_amount: surcharge,
             // The sale's one combined payment method, same as the cart —
             // no longer chosen per service line.
             payment_account: paymentMethod,
@@ -503,9 +514,10 @@ export default function CheckoutForm({
                 line.product.stock !== null &&
                 line.quantity > line.product.stock;
               const isExpanded = expandedDiscountId === line.product.id;
-              const draft = discountDrafts[line.product.id];
+              const draft = adjustmentDrafts[line.product.id];
               const hasDiscount = line.discount > 0;
-              const lineTotal = line.subtotal - line.discount;
+              const hasSurcharge = line.surcharge > 0;
+              const lineTotal = line.subtotal + line.surcharge - line.discount;
               return (
                 <div
                   key={line.product.id}
@@ -518,10 +530,11 @@ export default function CheckoutForm({
                   )}
                 >
                   <div className="min-w-0 flex-1">
-                    {/* Tapping the name/price toggles this line's discount
-                      editor below — kept as its own button, separate from
-                      the quantity controls to the right, so a mis-tap can't
-                      accidentally change how many are being sold. */}
+                    {/* Tapping the name/price toggles this line's discount/
+                      surcharge editor below — kept as its own button,
+                      separate from the quantity controls to the right, so a
+                      mis-tap can't accidentally change how many are being
+                      sold. */}
                     <button
                       type="button"
                       onClick={() =>
@@ -530,7 +543,7 @@ export default function CheckoutForm({
                         )
                       }
                       aria-expanded={isExpanded}
-                      aria-label={`${hasDiscount ? "Edit" : "Add"} discount for ${line.product.name}`}
+                      aria-label={`${hasDiscount || hasSurcharge ? "Edit" : "Add"} discount or surcharge for ${line.product.name}`}
                       className="block w-full min-w-0 text-left"
                     >
                       <p className="truncate text-sm">{line.product.name}</p>
@@ -541,6 +554,15 @@ export default function CheckoutForm({
                           <>
                             {" − "}
                             {formatPeso(line.discount)}
+                            {" = "}
+                            <span className="font-medium text-foreground">
+                              {formatPeso(lineTotal)}
+                            </span>
+                          </>
+                        ) : hasSurcharge ? (
+                          <>
+                            {" + "}
+                            {formatPeso(line.surcharge)}
                             {" = "}
                             <span className="font-medium text-foreground">
                               {formatPeso(lineTotal)}
@@ -560,14 +582,37 @@ export default function CheckoutForm({
 
                     {isExpanded ? (
                       <div className="mt-2 flex flex-col gap-2 rounded-lg border bg-muted/30 p-2">
+                        <Tabs
+                          value={draft?.kind ?? "discount"}
+                          onValueChange={(value) =>
+                            setAdjustmentDrafts((prev) => ({
+                              ...prev,
+                              [line.product.id]: {
+                                kind: value as AdjustmentKind,
+                                mode: prev[line.product.id]?.mode ?? "peso",
+                                value: prev[line.product.id]?.value ?? ""
+                              }
+                            }))
+                          }
+                        >
+                          <TabsList className="w-full">
+                            <TabsTrigger value="discount" className="flex-1">
+                              Discount
+                            </TabsTrigger>
+                            <TabsTrigger value="surcharge" className="flex-1">
+                              Add charge
+                            </TabsTrigger>
+                          </TabsList>
+                        </Tabs>
                         <div className="flex items-center gap-2">
                           <Tabs
                             value={draft?.mode ?? "peso"}
                             onValueChange={(value) =>
-                              setDiscountDrafts((prev) => ({
+                              setAdjustmentDrafts((prev) => ({
                                 ...prev,
                                 [line.product.id]: {
-                                  mode: value as DiscountMode,
+                                  kind: prev[line.product.id]?.kind ?? "discount",
+                                  mode: value as AdjustmentMode,
                                   value: prev[line.product.id]?.value ?? ""
                                 }
                               }))
@@ -579,7 +624,7 @@ export default function CheckoutForm({
                             </TabsList>
                           </Tabs>
                           <Input
-                            aria-label={`Discount amount for ${line.product.name}`}
+                            aria-label={`${draft?.kind === "surcharge" ? "Surcharge" : "Discount"} amount for ${line.product.name}`}
                             type="number"
                             step="0.01"
                             min="0"
@@ -588,9 +633,10 @@ export default function CheckoutForm({
                             className="w-20"
                             value={draft?.value ?? ""}
                             onChange={(event) =>
-                              setDiscountDrafts((prev) => ({
+                              setAdjustmentDrafts((prev) => ({
                                 ...prev,
                                 [line.product.id]: {
+                                  kind: prev[line.product.id]?.kind ?? "discount",
                                   mode: prev[line.product.id]?.mode ?? "peso",
                                   value: event.target.value
                                 }
@@ -603,7 +649,7 @@ export default function CheckoutForm({
                               variant="ghost"
                               size="sm"
                               onClick={() =>
-                                setDiscountDrafts((prev) => {
+                                setAdjustmentDrafts((prev) => {
                                   const copy = { ...prev };
                                   delete copy[line.product.id];
                                   return copy;
@@ -614,13 +660,14 @@ export default function CheckoutForm({
                             </Button>
                           ) : null}
                         </div>
-                        {hasDiscount ? (
+                        {hasDiscount || hasSurcharge ? (
                           <p className="text-xs text-muted-foreground">
                             New line total:{" "}
                             <span className="font-medium text-foreground">
                               {formatPeso(lineTotal)}
                             </span>{" "}
-                            (−{formatPeso(line.discount)})
+                            ({hasDiscount ? "−" : "+"}
+                            {formatPeso(hasDiscount ? line.discount : line.surcharge)})
                           </p>
                         ) : null}
                       </div>
@@ -676,7 +723,7 @@ export default function CheckoutForm({
               );
             })}
 
-            {serviceLines.map(({ draft, discount, netFee }) => {
+            {serviceLines.map(({ draft, discount, surcharge, netFee }) => {
               // Flat/tiered: unchanged simple row -- Amount and Fee were
               // typed directly when it was configured, there's no quantity
               // or discount concept to attach here.
@@ -707,10 +754,12 @@ export default function CheckoutForm({
               }
 
               // Per-unit: acts like a product line -- its own quantity
-              // stepper and discount editor, same pattern as the cart above.
+              // stepper and discount/surcharge editor, same pattern as the
+              // cart above.
               const isExpanded = expandedDiscountId === draft.key;
-              const discountDraft = discountDrafts[draft.key];
+              const adjustmentDraft = adjustmentDrafts[draft.key];
               const hasDiscount = discount > 0;
+              const hasSurcharge = surcharge > 0;
               const quantity = draft.unitQuantity ?? 0;
               return (
                 <div
@@ -729,7 +778,7 @@ export default function CheckoutForm({
                         )
                       }
                       aria-expanded={isExpanded}
-                      aria-label={`${hasDiscount ? "Edit" : "Add"} discount for ${draft.label}`}
+                      aria-label={`${hasDiscount || hasSurcharge ? "Edit" : "Add"} discount or surcharge for ${draft.label}`}
                       className="block w-full min-w-0 text-left"
                     >
                       <p className="truncate text-sm">{draft.label}</p>
@@ -745,6 +794,15 @@ export default function CheckoutForm({
                               {formatPeso(netFee)}
                             </span>
                           </>
+                        ) : hasSurcharge ? (
+                          <>
+                            {" + "}
+                            {formatPeso(surcharge)}
+                            {" = "}
+                            <span className="font-medium text-foreground">
+                              {formatPeso(netFee)}
+                            </span>
+                          </>
                         ) : (
                           <> = {formatPeso(netFee)}</>
                         )}
@@ -753,14 +811,37 @@ export default function CheckoutForm({
 
                     {isExpanded ? (
                       <div className="mt-2 flex flex-col gap-2 rounded-lg border bg-muted/30 p-2">
+                        <Tabs
+                          value={adjustmentDraft?.kind ?? "discount"}
+                          onValueChange={(value) =>
+                            setAdjustmentDrafts((prev) => ({
+                              ...prev,
+                              [draft.key]: {
+                                kind: value as AdjustmentKind,
+                                mode: prev[draft.key]?.mode ?? "peso",
+                                value: prev[draft.key]?.value ?? ""
+                              }
+                            }))
+                          }
+                        >
+                          <TabsList className="w-full">
+                            <TabsTrigger value="discount" className="flex-1">
+                              Discount
+                            </TabsTrigger>
+                            <TabsTrigger value="surcharge" className="flex-1">
+                              Add charge
+                            </TabsTrigger>
+                          </TabsList>
+                        </Tabs>
                         <div className="flex items-center gap-2">
                           <Tabs
-                            value={discountDraft?.mode ?? "peso"}
+                            value={adjustmentDraft?.mode ?? "peso"}
                             onValueChange={(value) =>
-                              setDiscountDrafts((prev) => ({
+                              setAdjustmentDrafts((prev) => ({
                                 ...prev,
                                 [draft.key]: {
-                                  mode: value as DiscountMode,
+                                  kind: prev[draft.key]?.kind ?? "discount",
+                                  mode: value as AdjustmentMode,
                                   value: prev[draft.key]?.value ?? ""
                                 }
                               }))
@@ -772,31 +853,32 @@ export default function CheckoutForm({
                             </TabsList>
                           </Tabs>
                           <Input
-                            aria-label={`Discount amount for ${draft.label}`}
+                            aria-label={`${adjustmentDraft?.kind === "surcharge" ? "Surcharge" : "Discount"} amount for ${draft.label}`}
                             type="number"
                             step="0.01"
                             min="0"
                             inputMode="decimal"
                             placeholder="0"
                             className="w-20"
-                            value={discountDraft?.value ?? ""}
+                            value={adjustmentDraft?.value ?? ""}
                             onChange={(event) =>
-                              setDiscountDrafts((prev) => ({
+                              setAdjustmentDrafts((prev) => ({
                                 ...prev,
                                 [draft.key]: {
+                                  kind: prev[draft.key]?.kind ?? "discount",
                                   mode: prev[draft.key]?.mode ?? "peso",
                                   value: event.target.value
                                 }
                               }))
                             }
                           />
-                          {discountDraft?.value ? (
+                          {adjustmentDraft?.value ? (
                             <Button
                               type="button"
                               variant="ghost"
                               size="sm"
                               onClick={() =>
-                                setDiscountDrafts((prev) => {
+                                setAdjustmentDrafts((prev) => {
                                   const copy = { ...prev };
                                   delete copy[draft.key];
                                   return copy;
@@ -807,13 +889,14 @@ export default function CheckoutForm({
                             </Button>
                           ) : null}
                         </div>
-                        {hasDiscount ? (
+                        {hasDiscount || hasSurcharge ? (
                           <p className="text-xs text-muted-foreground">
                             New line total:{" "}
                             <span className="font-medium text-foreground">
                               {formatPeso(netFee)}
                             </span>{" "}
-                            (−{formatPeso(discount)})
+                            ({hasDiscount ? "−" : "+"}
+                            {formatPeso(hasDiscount ? discount : surcharge)})
                           </p>
                         ) : null}
                       </div>
@@ -969,6 +1052,9 @@ export default function CheckoutForm({
               ? ` · ${pieceCount} pc${pieceCount === 1 ? "" : "s"}`
               : ""}
             {totalDiscount > 0 ? ` · −${formatPeso(totalDiscount)} off` : ""}
+            {totalSurcharge > 0
+              ? ` · +${formatPeso(totalSurcharge)} added`
+              : ""}
             {serviceDrafts.length > 0
               ? ` · ${serviceDrafts.length} service${serviceDrafts.length === 1 ? "" : "s"}`
               : ""}

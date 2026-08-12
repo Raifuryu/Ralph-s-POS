@@ -113,6 +113,7 @@ export type Database = {
           quantity: number;
           unit_cost: number | null;
           discount_amount: number;
+          surcharge_amount: number;
           line_total: number | null;
         };
       };
@@ -140,6 +141,7 @@ export type Database = {
           unit_price: number | null;
           visit_id: string | null;
           discount_amount: number;
+          surcharge_amount: number;
         };
       };
       vault_entries: {

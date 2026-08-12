@@ -750,6 +750,15 @@ export default function BulkRestockForm({
     (sum, line) => sum + toNumber(line.quantity),
     0
   );
+  // What this whole batch would bring in if every piece sold at its set
+  // Price — gross revenue, not profit (that's potentialIncome - total,
+  // shown alongside it below rather than as its own figure, since it's
+  // trivially the difference between two numbers already on screen).
+  const potentialIncome = lines.reduce(
+    (sum, line) => sum + toNumber(line.price) * toNumber(line.quantity),
+    0
+  );
+  const potentialProfit = potentialIncome - total;
 
   const hasIncompleteLine = lines.some((line) => !isLineComplete(line));
 
@@ -857,6 +866,14 @@ export default function BulkRestockForm({
           <p className="text-2xl font-semibold tabular-nums">
             {formatPeso(total)}
           </p>
+          {potentialIncome > 0 ? (
+            <p className="text-xs text-muted-foreground tabular-nums">
+              Potential income {formatPeso(potentialIncome)}
+              {potentialProfit !== 0
+                ? ` (${potentialProfit >= 0 ? "+" : "-"}${formatPeso(Math.abs(potentialProfit))})`
+                : ""}
+            </p>
+          ) : null}
         </div>
         <div className="flex gap-2">
           <Button

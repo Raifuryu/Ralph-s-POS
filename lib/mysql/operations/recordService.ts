@@ -20,6 +20,10 @@ export type RecordServiceParams = {
   unitPrice?: number | null;
   visitId?: string | null;
   discountAmount?: number;
+  /** Extra charged on top of a per-unit line's own subtotal — the inverse
+      of discountAmount, for a line sold above its usual price. Same scope
+      restriction as discount: only meaningful on a per-unit line. */
+  surchargeAmount?: number;
 };
 
 /** Port of record_service(). No row locking here, same as the original —
@@ -40,6 +44,7 @@ export async function recordService(
     unitPrice: unitPriceInput = null,
     visitId = null,
     discountAmount: discountAmountInput = 0,
+    surchargeAmount: surchargeAmountInput = 0,
   } = params;
   const contactNumber = params.contactNumber?.trim() || null;
   const reference = params.reference?.trim() || null;
@@ -50,11 +55,13 @@ export async function recordService(
   // INSERT with floating-point noise past the centavo outright instead of
   // silently truncating it (same reasoning as recordRestock's cost
   // rounding). These all reach here from client-side arithmetic (a percent
-  // discount, a per-unit total) that can leave one; `fee` gets the same
-  // treatment below, once it's finalized either way it can be produced.
+  // discount/surcharge, a per-unit total) that can leave one; `fee` gets
+  // the same treatment below, once it's finalized either way it can be
+  // produced.
   const principal = roundMoney(principalInput);
   const unitPrice = unitPriceInput !== null ? roundMoney(unitPriceInput) : null;
   const discountAmount = roundMoney(discountAmountInput);
+  const surchargeAmount = roundMoney(surchargeAmountInput);
   let fee = roundMoney(params.fee);
 
   if (!Number.isFinite(principal) || principal < 0) {
@@ -62,6 +69,9 @@ export async function recordService(
   }
   if (!Number.isFinite(discountAmount) || discountAmount < 0) {
     throw new Error("Discount must be 0 or more");
+  }
+  if (!Number.isFinite(surchargeAmount) || surchargeAmount < 0) {
+    throw new Error("Surcharge must be 0 or more");
   }
 
   const unitFieldsGiven = unitLabel !== null || unitQuantity !== null || unitPrice !== null;
@@ -77,17 +87,22 @@ export async function recordService(
   }
 
   if (unitLabel !== null) {
-    // Per-unit: fee is always derived here from unit_price x quantity minus
-    // the discount, never trusted as a separately-submitted number — so a
-    // discount and the actual charged fee can never drift apart. Re-rounded
-    // since this multiplication can reintroduce floating-point noise even
-    // though unitPrice/discountAmount are already clean.
-    fee = roundMoney(unitPrice! * unitQuantity! - discountAmount);
+    // Per-unit: fee is always derived here from unit_price x quantity, plus
+    // the surcharge, minus the discount — never trusted as a separately-
+    // submitted number, so neither one can drift apart from the actual
+    // charged fee. Re-rounded since this arithmetic can reintroduce
+    // floating-point noise even though the operands are already clean.
+    fee = roundMoney(unitPrice! * unitQuantity! + surchargeAmount - discountAmount);
     if (fee < 0) {
       throw new Error("Discount cannot exceed the line's own subtotal");
     }
-  } else if (discountAmount > 0) {
-    throw new Error("Discount only applies to a per-unit service line");
+  } else {
+    if (discountAmount > 0) {
+      throw new Error("Discount only applies to a per-unit service line");
+    }
+    if (surchargeAmount > 0) {
+      throw new Error("Surcharge only applies to a per-unit service line");
+    }
   }
 
   if (fee === null || fee === undefined || !Number.isFinite(fee) || fee < 0) {
@@ -129,8 +144,8 @@ export async function recordService(
   await conn.query(
     `INSERT INTO service_transactions
       (id, service_id, service_name, cash_flow, principal, fee, cashier_id, wallet, payment_account,
-       contact_number, reference, description, tendered, unit_label, unit_quantity, unit_price, visit_id, discount_amount)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       contact_number, reference, description, tendered, unit_label, unit_quantity, unit_price, visit_id, discount_amount, surcharge_amount)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       serviceId,
@@ -150,6 +165,7 @@ export async function recordService(
       unitPrice,
       visitId,
       discountAmount,
+      surchargeAmount,
     ]
   );
 

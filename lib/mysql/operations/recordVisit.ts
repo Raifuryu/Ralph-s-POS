@@ -5,7 +5,12 @@ import type { MoneyAccount } from "@/lib/types";
 import { checkout } from "./checkout";
 import { recordService, type RecordServiceParams } from "./recordService";
 
-type CartLine = { productId: string; quantity: number; discountAmount?: number };
+type CartLine = {
+  productId: string;
+  quantity: number;
+  discountAmount?: number;
+  surchargeAmount?: number;
+};
 type ServiceLine = Omit<RecordServiceParams, "visitId">;
 
 /** Port of record_visit(). The single entry point for recording a sale —

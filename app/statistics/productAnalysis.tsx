@@ -4,8 +4,17 @@ import { useState } from "react";
 
 import { STORE_COLOR } from "@/app/incomeBreakdownCard";
 import { EmptyState } from "@/components/emptyState";
-import { Select } from "@/components/ui/select";
+import {
+  Combobox,
+  ComboboxContent,
+  ComboboxEmpty,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+} from "@/components/ui/combobox";
 import { formatHourLabel, WEEKDAY_ORDER } from "@/lib/format";
+
+type ProductOption = { key: string; label: string };
 
 export type ProductTimeStats = {
   key: string;
@@ -91,12 +100,14 @@ function peakIndex(buckets: number[]): number {
 }
 
 /**
- * Per-product "when does this sell" breakdown — a plain `<select>` (native,
- * not a custom dropdown, same one-handed-mobile reasoning as
- * components/ui/select.tsx) to pick one product, then its units broken down
- * by day of week and by hour of day for the active date range. Every
- * product that sold at all in the window is selectable, sorted by units so
- * the top seller is the default.
+ * Per-product "when does this sell" breakdown — a searchable combobox (same
+ * one bulkRestockForm.tsx uses for its item picker) to pick one product,
+ * then its units broken down by day of week and by hour of day for the
+ * active date range. Every product that sold at all in the window is
+ * selectable, sorted by units so the top seller is the default — a plain
+ * `<select>` worked fine for a short list, but this store's catalogue runs
+ * into the hundreds, and scrolling a native picker that long to find one
+ * name is slower than just typing part of it.
  */
 export default function ProductAnalysis({
   products,
@@ -105,6 +116,13 @@ export default function ProductAnalysis({
 }) {
   const [selectedKey, setSelectedKey] = useState(products[0]?.key);
   const selected = products.find((p) => p.key === selectedKey) ?? products[0];
+
+  const options: ProductOption[] = products.map((product) => ({
+    key: product.key,
+    label: `${product.name} (${product.units} sold)`,
+  }));
+  const selectedOption =
+    options.find((option) => option.key === selected?.key) ?? null;
 
   if (!selected) {
     return (
@@ -134,18 +152,30 @@ export default function ProductAnalysis({
     <div className="rounded-lg border bg-card p-4">
       <p className="text-sm text-muted-foreground">Product analysis</p>
 
-      <Select
-        aria-label="Product to analyze"
-        className="mt-3"
-        value={selected.key}
-        onChange={(event) => setSelectedKey(event.target.value)}
+      <Combobox
+        items={options}
+        value={selectedOption}
+        onValueChange={(option) => {
+          if (option) setSelectedKey(option.key);
+        }}
+        isItemEqualToValue={(a, b) => a.key === b.key}
       >
-        {products.map((product) => (
-          <option key={product.key} value={product.key}>
-            {product.name} ({product.units} sold)
-          </option>
-        ))}
-      </Select>
+        <ComboboxInput
+          aria-label="Product to analyze"
+          placeholder="Search products…"
+          className="mt-3"
+        />
+        <ComboboxContent>
+          <ComboboxEmpty>No products match.</ComboboxEmpty>
+          <ComboboxList>
+            {(option: ProductOption) => (
+              <ComboboxItem key={option.key} value={option}>
+                {option.label}
+              </ComboboxItem>
+            )}
+          </ComboboxList>
+        </ComboboxContent>
+      </Combobox>
 
       <p className="mt-3 text-xs text-muted-foreground">
         Busiest: <span className="font-medium text-foreground">{bestWeekday}</span>

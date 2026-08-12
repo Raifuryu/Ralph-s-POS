@@ -14,9 +14,10 @@ type ServiceLinePayload = {
   service_id?: string;
   principal?: number;
   fee?: number;
-  /** Per-unit lines only — the sheet already nets this out of `fee`, sent
-      separately just so it's recorded. Always 0 for a flat/tiered line. */
+  /** Per-unit lines only — the sheet already nets these out of `fee`, sent
+      separately just so they're recorded. Always 0 for a flat/tiered line. */
   discount_amount?: number;
+  surcharge_amount?: number;
   payment_account?: string;
   deduct_fee?: boolean;
   fee_in_wallet?: boolean;
@@ -54,6 +55,7 @@ export async function recordVisit(
     product_id: string;
     quantity: number;
     discount_amount?: number;
+    surcharge_amount?: number;
   }[];
   try {
     cart = JSON.parse(String(formData.get("cart") ?? "[]"));
@@ -101,6 +103,15 @@ export async function recordVisit(
   ) {
     return { error: "Discount must be a non-negative amount." };
   }
+  if (
+    items.some(
+      (line) =>
+        line.surcharge_amount !== undefined &&
+        (!Number.isFinite(line.surcharge_amount) || line.surcharge_amount < 0)
+    )
+  ) {
+    return { error: "Surcharge must be a non-negative amount." };
+  }
 
   // Optional: what the customer handed over. transactions.tendered only
   // has a well-defined meaning against the cart's own total (checkout()
@@ -144,6 +155,12 @@ export async function recordVisit(
     ) {
       return { error: "Discount must be a non-negative amount." };
     }
+    if (
+      line.surcharge_amount !== undefined &&
+      (!Number.isFinite(line.surcharge_amount) || line.surcharge_amount < 0)
+    ) {
+      return { error: "Surcharge must be a non-negative amount." };
+    }
     const hasAnyUnit =
       line.unit_label != null ||
       line.unit_quantity != null ||
@@ -185,6 +202,7 @@ export async function recordVisit(
       principal: Math.max(0, principal),
       fee,
       discountAmount: line.discount_amount ?? 0,
+      surchargeAmount: line.surcharge_amount ?? 0,
       paymentAccount: line.payment_account as "cash" | "gcash" | "maya",
       feeInWallet: line.fee_in_wallet ?? false,
       unitLabel: line.unit_label ?? null,
@@ -205,7 +223,8 @@ export async function recordVisit(
             ? items.map((line) => ({
                 productId: line.product_id,
                 quantity: line.quantity,
-                discountAmount: line.discount_amount
+                discountAmount: line.discount_amount,
+                surchargeAmount: line.surcharge_amount
               }))
             : undefined,
         personalTake,
