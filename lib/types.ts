@@ -12,6 +12,7 @@ export type ProductRestock = Tables<"product_restocks">;
 export type Service = Tables<"services">;
 export type ServiceTransaction = Tables<"service_transactions">;
 export type VaultEntry = Tables<"vault_entries">;
+export type VaultSnapshot = Tables<"vault_snapshots">;
 export type Transaction = Tables<"transactions">;
 export type TransactionItem = Tables<"transaction_items">;
 
@@ -94,6 +95,7 @@ export const VAULT_ENTRY_TYPE_LABELS: Record<VaultEntryType, string> = {
   withdrawal: "Cash out",
   count: "Count",
   void: "Void",
+  adjustment: "Adjustment",
 };
 
 /** The three places money lives: the physical box and the two wallets. */

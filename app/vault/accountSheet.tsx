@@ -19,9 +19,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { cashIn, cashOut, type VaultMoveState } from "./actions";
+import {
+  adjustBalance,
+  cashIn,
+  cashOut,
+  type VaultAdjustState,
+  type VaultMoveState,
+} from "./actions";
 
 const initialState: VaultMoveState = { error: null };
+const initialAdjustState: VaultAdjustState = { error: null };
 
 /** Account travels as a hidden field — the card that opened this sheet
     already fixed it, so there's nothing left to pick. */
@@ -167,6 +174,107 @@ function CashInForm({
   );
 }
 
+/** Corrects this account's balance to whatever it's supposed to actually
+    be, instead of asking the cashier to work out the difference themselves
+    — they type the correct figure (e.g. "it's 8500"), and the delta from
+    the current balance is computed server-side and logged as a single
+    'adjustment' entry (see adjustVaultBalance). */
+function AdjustForm({
+  account,
+  balance,
+  onRecorded,
+}: {
+  account: MoneyAccount;
+  balance: number;
+  /** Called shortly after a successful record — the drawer closes itself
+      instead of leaving Cancel as the only way out. */
+  onRecorded: () => void;
+}) {
+  const [state, formAction, isPending] = useActionState(
+    adjustBalance,
+    initialAdjustState
+  );
+
+  // Longer delay than Cash in/out — there's a result to actually read here
+  // (the delta that got logged), not just a one-line confirmation.
+  useEffect(() => {
+    if (!state.result) return;
+    const timer = setTimeout(onRecorded, 1600);
+    return () => clearTimeout(timer);
+  }, [state.result, onRecorded]);
+
+  const delta = state.result?.delta ?? null;
+
+  return (
+    <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
+      <input type="hidden" name="account" value={account} />
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="adjust-balance" className="text-xs">
+          Correct balance
+        </Label>
+        <Input
+          id="adjust-balance"
+          name="target_balance"
+          type="number"
+          step="0.01"
+          min="0"
+          required
+          inputMode="decimal"
+          placeholder={formatPeso(balance)}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="adjust-note" className="text-xs">
+          Note{" "}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <Input
+          id="adjust-note"
+          name="note"
+          placeholder="e.g. Miscount corrected"
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Currently {formatPeso(balance)} for {MONEY_ACCOUNT_LABELS[account]} —
+        enter what it should actually be and the difference gets logged
+        automatically.
+      </p>
+      {state.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {state.error}
+        </p>
+      ) : null}
+      {state.result ? (
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+          <p className="text-muted-foreground">
+            Was {formatPeso(state.result.previousBalance)} · now{" "}
+            {formatPeso(state.result.targetBalance)}
+          </p>
+          <p
+            className={cn(
+              "font-medium",
+              delta! > 0 ? "text-success" : "text-destructive"
+            )}
+          >
+            Adjusted {delta! > 0 ? "+" : "−"}
+            {formatPeso(Math.abs(delta!))}.
+          </p>
+        </div>
+      ) : null}
+      <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
+        <DrawerClose
+          className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+        >
+          Cancel
+        </DrawerClose>
+        <Button type="submit" size="sm" disabled={isPending}>
+          {isPending ? "Recording…" : "Save adjustment"}
+        </Button>
+      </DrawerFooter>
+    </form>
+  );
+}
+
 /**
  * The account card itself is the drawer trigger — tapping it opens a sheet
  * scoped to that one account, with no account picker needed inside.
@@ -204,12 +312,20 @@ export default function AccountSheet({
             <TabsList className="w-full sm:w-fit">
               <TabsTrigger value="out">Cash out</TabsTrigger>
               <TabsTrigger value="in">Cash in</TabsTrigger>
+              <TabsTrigger value="adjust">Adjust</TabsTrigger>
             </TabsList>
             <TabsContent value="out" className="flex min-h-0 flex-col pt-3">
               <CashOutForm account={account} onRecorded={() => setOpen(false)} />
             </TabsContent>
             <TabsContent value="in" className="flex min-h-0 flex-col pt-3">
               <CashInForm account={account} onRecorded={() => setOpen(false)} />
+            </TabsContent>
+            <TabsContent value="adjust" className="flex min-h-0 flex-col pt-3">
+              <AdjustForm
+                account={account}
+                balance={balance}
+                onRecorded={() => setOpen(false)}
+              />
             </TabsContent>
           </Tabs>
         </div>

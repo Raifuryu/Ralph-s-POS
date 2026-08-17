@@ -249,7 +249,7 @@ CREATE TABLE service_transactions (
 CREATE TABLE vault_entries (
   id                     CHAR(36)      NOT NULL PRIMARY KEY,
   seq                    BIGINT        NOT NULL AUTO_INCREMENT,
-  entry_type             ENUM('sale','service','deposit','withdrawal','count','void') NOT NULL,
+  entry_type             ENUM('sale','service','deposit','withdrawal','count','void','adjustment') NOT NULL,
   amount                 DECIMAL(12,2) NOT NULL,
   expected               DECIMAL(12,2),
   transaction_id         CHAR(36),
@@ -269,10 +269,40 @@ CREATE TABLE vault_entries (
     OR (entry_type = 'withdrawal' AND amount < 0)
     OR (entry_type = 'service' AND amount <> 0)
     OR (entry_type = 'void' AND amount <> 0)
+    OR (entry_type = 'adjustment' AND amount <> 0)
   ),
   CONSTRAINT vault_entries_withdrawal_note_check CHECK (entry_type <> 'withdrawal' OR LENGTH(TRIM(COALESCE(note, ''))) > 0),
   INDEX vault_entries_account_seq_idx (account, seq DESC),
   INDEX vault_entries_seq_idx (seq DESC)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =============================================================================
+-- vault_snapshots — a manually-confirmed "whole vault" checkpoint: what was
+-- physically counted across all 3 accounts, plus that store-day's profit so
+-- far, both entered/computed together in one action (see AccountSheet's
+-- Adjust tab for per-account corrections instead — this table is for the
+-- combined picture, not individual balances). One row per store-day
+-- (UNIQUE(snapshot_day)) — recording a second snapshot the same day just
+-- overwrites the first via ON DUPLICATE KEY UPDATE, so the latest count
+-- always wins rather than piling up several same-day readings.
+-- =============================================================================
+
+CREATE TABLE vault_snapshots (
+  id           CHAR(36)      NOT NULL PRIMARY KEY,
+  snapshot_day DATE          NOT NULL,
+  cash_amount  DECIMAL(12,2) NOT NULL,
+  gcash_amount DECIMAL(12,2) NOT NULL,
+  maya_amount  DECIMAL(12,2) NOT NULL,
+  total_money  DECIMAL(12,2) NOT NULL,
+  profit       DECIMAL(12,2) NOT NULL,
+  created_by   CHAR(36)      NOT NULL,
+  created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT vault_snapshots_day_key UNIQUE (snapshot_day),
+  CONSTRAINT vault_snapshots_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT vault_snapshots_amounts_check CHECK (
+    cash_amount >= 0 AND gcash_amount >= 0 AND maya_amount >= 0
+  )
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================

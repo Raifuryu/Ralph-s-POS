@@ -23,7 +23,8 @@ export type VaultEntryTypeEnum =
   | "deposit"
   | "withdrawal"
   | "count"
-  | "void";
+  | "void"
+  | "adjustment";
 
 export type Database = {
   public: {
@@ -163,6 +164,20 @@ export type Database = {
           account: MoneyAccountEnum;
         };
       };
+      vault_snapshots: {
+        Row: {
+          id: string;
+          snapshot_day: string;
+          cash_amount: number;
+          gcash_amount: number;
+          maya_amount: number;
+          total_money: number;
+          profit: number;
+          created_by: string;
+          created_at: string;
+          updated_at: string;
+        };
+      };
     };
     Views: {
       product_sales_totals: {
@@ -210,6 +225,7 @@ export const Constants = {
         "withdrawal",
         "count",
         "void",
+        "adjustment",
       ] as const,
     },
   },

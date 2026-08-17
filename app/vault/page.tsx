@@ -3,15 +3,15 @@ import Link from "next/link";
 import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
-import { formatPeso, rangeSubtitle, storeDayKey } from "@/lib/format";
+import { formatPeso, rangeSubtitle } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
-import { type MoneyAccount, type VaultEntryType } from "@/lib/types";
+import { type MoneyAccount } from "@/lib/types";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
-import DailySnapshotSheet, { type DailySnapshot } from "./dailySnapshotSheet";
 import PersonalTakesSheet, { type PersonalTake } from "./personalTakesSheet";
 import VaultLedgerClient from "./vaultLedgerClient";
+import VaultSnapshotSheet, { type TodaySnapshot } from "./vaultSnapshotSheet";
 
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
 
@@ -30,61 +30,6 @@ type SearchParams = {
   debts?: string;
   snapshot?: string;
 };
-
-/**
- * Reduces the raw vault ledger + daily profit aggregates into one row per
- * day that had any activity — newest first. `totalMoney` is a genuine
- * running balance, not a per-day movement: replays every vault_entries row
- * in order (a 'count' row resets that account outright, same as
- * vault_balance's own "last count + movements since" definition; anything
- * else just adds/subtracts, entry_type already encodes the sign), snapshots
- * the combined 3-account total after each entry, and keeps only the last
- * snapshot of each day. A day with zero vault movement (e.g. only a fully
- * discounted sale, which posts no vault_entries row per checkout()'s own
- * comment) still gets a row if it shows up in the profit maps, carrying
- * forward the prior day's balance rather than showing a misleading 0.
- */
-function buildDailySnapshots(
-  vaultEntries: {
-    account: MoneyAccount;
-    amount: number;
-    entry_type: VaultEntryType;
-    created_at: string;
-  }[],
-  marginByDay: Map<string, number>,
-  feeByDay: Map<string, number>
-): DailySnapshot[] {
-  const balances: Record<MoneyAccount, number> = { cash: 0, gcash: 0, maya: 0 };
-  const totalByDay = new Map<string, number>();
-  for (const entry of vaultEntries) {
-    if (entry.entry_type === "count") {
-      balances[entry.account] = Number(entry.amount);
-    } else {
-      balances[entry.account] += Number(entry.amount);
-    }
-    const day = storeDayKey(entry.created_at);
-    totalByDay.set(day, balances.cash + balances.gcash + balances.maya);
-  }
-
-  const allDays = new Set<string>([
-    ...totalByDay.keys(),
-    ...marginByDay.keys(),
-    ...feeByDay.keys(),
-  ]);
-  const sortedDays = [...allDays].sort();
-
-  let carry = 0;
-  const rows: DailySnapshot[] = [];
-  for (const day of sortedDays) {
-    if (totalByDay.has(day)) carry = totalByDay.get(day)!;
-    rows.push({
-      day,
-      totalMoney: carry,
-      profit: (marginByDay.get(day) ?? 0) + (feeByDay.get(day) ?? 0),
-    });
-  }
-  return rows.reverse();
-}
 
 export default async function VaultPage({
   searchParams,
@@ -120,14 +65,7 @@ export default async function VaultPage({
   let personalTakeRows: Omit<PersonalTake, "items">[];
   let storeMarginRows: { store_margin: number }[];
   let eServiceFeeRows: { total_fee: number }[];
-  let snapshotEntryRows: {
-    account: MoneyAccount;
-    amount: number;
-    entry_type: VaultEntryType;
-    created_at: string;
-  }[];
-  let snapshotMarginRows: { day: string; margin: number }[];
-  let snapshotFeeRows: { day: string; fee: number }[];
+  let todaySnapshotRows: TodaySnapshot[];
 
   try {
     // The three account balances come from vault_balance — an all-time view,
@@ -138,9 +76,7 @@ export default async function VaultPage({
       personalTakeRows,
       storeMarginRows,
       eServiceFeeRows,
-      snapshotEntryRows,
-      snapshotMarginRows,
-      snapshotFeeRows,
+      todaySnapshotRows,
     ] = await Promise.all([
         queryRows<VaultBalanceRow>("SELECT account, balance FROM vault_balance"),
         fetchVaultLedgerPage(filters, 0),
@@ -179,47 +115,13 @@ export default async function VaultPage({
            WHERE voided_at IS NULL ${profitDateWhere}`,
           profitDateParams
         ),
-        // The snapshot sheet's own three queries — deliberately date-filter-
-        // and search-independent (unlike everything above): a running
-        // balance needs its FULL history to reconstruct correctly, not just
-        // whatever window happens to be selected. Only worth fetching when
-        // that sheet is actually open, same "don't pay for a query nobody's
-        // looking at" reasoning as Personal takes/Restock history. `DATE()`
-        // matches storeDayKey's grouping exactly, not just approximately —
-        // every pooled connection pins its SESSION time_zone to Manila (see
-        // lib/mysql/pool.ts), so a TIMESTAMP column already reads back as
-        // Manila wall-clock time here.
-        showSnapshot
-          ? queryRows<{
-              account: MoneyAccount;
-              amount: number;
-              entry_type: VaultEntryType;
-              created_at: string;
-            }>("SELECT account, amount, entry_type, created_at FROM vault_entries ORDER BY seq ASC")
-          : Promise.resolve([]),
-        showSnapshot
-          ? queryRows<{ day: string; margin: number }>(
-              `SELECT DATE(t.created_at) AS day,
-                 COALESCE(SUM(
-                   CASE WHEN ti.unit_cost IS NOT NULL
-                     THEN ti.line_total - ti.unit_cost * ti.quantity
-                     ELSE 0
-                   END
-                 ), 0) AS margin
-               FROM transaction_items ti
-               JOIN transactions t ON t.id = ti.transaction_id
-               WHERE t.is_personal_take = 0 AND t.voided_at IS NULL
-               GROUP BY DATE(t.created_at)`
-            )
-          : Promise.resolve([]),
-        showSnapshot
-          ? queryRows<{ day: string; fee: number }>(
-              `SELECT DATE(created_at) AS day, COALESCE(SUM(fee), 0) AS fee
-               FROM service_transactions
-               WHERE voided_at IS NULL
-               GROUP BY DATE(created_at)`
-            )
-          : Promise.resolve([]),
+        // Cheap single-row lookup (UNIQUE(snapshot_day)) — always worth
+        // fetching, unlike the ?debts-gated queries above, since it also
+        // decides the snapshot button's own label ("Record" vs "Update").
+        queryRows<TodaySnapshot>(
+          `SELECT cash_amount, gcash_amount, maya_amount, total_money, profit, updated_at
+           FROM vault_snapshots WHERE snapshot_day = CURDATE()`
+        ),
       ]);
   } catch (err) {
     return <PageError title="Could not load the vault" message={(err as Error).message} />;
@@ -267,11 +169,16 @@ export default async function VaultPage({
   const windowProfit =
     Number(storeMarginRows[0]?.store_margin ?? 0) + Number(eServiceFeeRows[0]?.total_fee ?? 0);
 
-  const dailySnapshots = buildDailySnapshots(
-    snapshotEntryRows,
-    new Map(snapshotMarginRows.map((row) => [row.day, Number(row.margin)])),
-    new Map(snapshotFeeRows.map((row) => [row.day, Number(row.fee)]))
-  );
+  const todaySnapshot: TodaySnapshot | null = todaySnapshotRows[0]
+    ? {
+        cash_amount: Number(todaySnapshotRows[0].cash_amount),
+        gcash_amount: Number(todaySnapshotRows[0].gcash_amount),
+        maya_amount: Number(todaySnapshotRows[0].maya_amount),
+        total_money: Number(todaySnapshotRows[0].total_money),
+        profit: Number(todaySnapshotRows[0].profit),
+        updated_at: todaySnapshotRows[0].updated_at,
+      }
+    : null;
 
   const balances = new Map(
     balanceRows
@@ -287,7 +194,8 @@ export default async function VaultPage({
     <PageShell>
       <h1 className="text-xl font-semibold">Vault</h1>
 
-      {/* Tap a card to cash in/out of that account — nothing left to pick */}
+      {/* Tap a card to cash in/out — or adjust — that account; nothing left
+          to pick */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {ACCOUNTS.map((account) => (
           <AccountSheet
@@ -327,7 +235,7 @@ export default async function VaultPage({
           nativeButton={false}
           render={<Link href="/vault?snapshot" />}
         >
-          Daily snapshot
+          {todaySnapshot ? "Update snapshot" : "Vault snapshot"}
         </Button>
       </div>
 
@@ -347,7 +255,7 @@ export default async function VaultPage({
       />
 
       <PersonalTakesSheet open={showDebts} takes={personalTakes} />
-      <DailySnapshotSheet open={showSnapshot} snapshots={dailySnapshots} />
+      <VaultSnapshotSheet open={showSnapshot} today={todaySnapshot} />
     </PageShell>
   );
 }

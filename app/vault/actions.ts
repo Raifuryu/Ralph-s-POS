@@ -11,6 +11,11 @@ import {
   settlePersonalTake,
 } from "@/lib/mysql/operations/settlePersonalTake";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
+import { adjustVaultBalance } from "@/lib/mysql/operations/adjustVaultBalance";
+import {
+  recordVaultSnapshot,
+  type VaultSnapshotResult,
+} from "@/lib/mysql/operations/recordVaultSnapshot";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
 import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
@@ -117,6 +122,85 @@ export async function recordCount(
         over_short: result.overShort,
       },
     };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type VaultAdjustState = {
+  error: string | null;
+  result?: {
+    account: MoneyAccount;
+    previousBalance: number;
+    targetBalance: number;
+    delta: number;
+  };
+};
+
+/** Corrects one account's balance to whatever it's supposed to actually be —
+    the cashier types the correct figure, not the difference, and the delta
+    that gets logged as an 'adjustment' entry is computed server-side from
+    the account's own current balance (see adjustVaultBalance). */
+export async function adjustBalance(
+  _prev: VaultAdjustState,
+  formData: FormData
+): Promise<VaultAdjustState> {
+  const account = parseAccount(formData.get("account"));
+  if (!account) return { error: "Pick which account to adjust." };
+
+  const targetBalance = parseMoney(formData.get("target_balance"));
+  if (targetBalance === "bad" || targetBalance === null) {
+    return { error: "Enter the correct balance (0 or more, up to centavos)." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await adjustVaultBalance(
+      { account, targetBalance, note },
+      user.id
+    );
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type VaultSnapshotState = {
+  error: string | null;
+  result?: VaultSnapshotResult;
+};
+
+/** Whole-vault manual snapshot — what's physically counted across all 3
+    accounts right now, plus today's profit so far, saved as one row per
+    store-day (see recordVaultSnapshot: a second snapshot the same day just
+    overwrites the first). */
+export async function recordSnapshot(
+  _prev: VaultSnapshotState,
+  formData: FormData
+): Promise<VaultSnapshotState> {
+  const cash = parseMoney(formData.get("cash"));
+  const gcash = parseMoney(formData.get("gcash"));
+  const maya = parseMoney(formData.get("maya"));
+  if (cash === "bad" || cash === null) {
+    return { error: "Enter the counted cash amount (0 or more, up to centavos)." };
+  }
+  if (gcash === "bad" || gcash === null) {
+    return { error: "Enter the counted GCash amount (0 or more, up to centavos)." };
+  }
+  if (maya === "bad" || maya === null) {
+    return { error: "Enter the counted Maya amount (0 or more, up to centavos)." };
+  }
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await recordVaultSnapshot({ cash, gcash, maya }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
   } catch (err) {
     return { error: (err as Error).message };
   }
