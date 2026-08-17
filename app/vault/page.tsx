@@ -12,13 +12,21 @@ import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
 import PersonalTakesSheet, { type PersonalTake } from "./personalTakesSheet";
 import VaultLedgerClient from "./vaultLedgerClient";
-import VaultSnapshotSheet, { type TodaySnapshot } from "./vaultSnapshotSheet";
+import VaultSnapshotSheet, {
+  type SnapshotHistoryEntry,
+  type TodaySnapshot,
+} from "./vaultSnapshotSheet";
 
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
 
 // Personal takes are rare next to restocks/sales — no pagination needed,
 // just a generous cap so a years-old store can't make this query unbounded.
 const PERSONAL_TAKES_LIMIT = 500;
+
+// One row per day at most (UNIQUE(snapshot_day)) — a year of daily
+// snapshots is still a tiny, cheap query, so this cap is just a backstop
+// against an unbounded read on a store that's been running for many years.
+const SNAPSHOT_HISTORY_LIMIT = 365;
 
 type VaultBalanceRow = { account: MoneyAccount; balance: number };
 
@@ -69,6 +77,14 @@ export default async function VaultPage({
   let todaySnapshotRows: TodaySnapshot[];
   let todayStoreRows: { gross: number; margin: number }[];
   let todayEServiceRows: { wallet: MoneyAccount | null; fee: number }[];
+  let snapshotHistoryRows: {
+    snapshot_day: string;
+    cash_amount: number;
+    gcash_amount: number;
+    maya_amount: number;
+    total_money: number;
+    profit: number;
+  }[];
 
   try {
     // The three account balances come from vault_balance — an all-time view,
@@ -82,6 +98,7 @@ export default async function VaultPage({
       todaySnapshotRows,
       todayStoreRows,
       todayEServiceRows,
+      snapshotHistoryRows,
     ] = await Promise.all([
         queryRows<VaultBalanceRow>("SELECT account, balance FROM vault_balance"),
         fetchVaultLedgerPage(filters, 0),
@@ -159,6 +176,26 @@ export default async function VaultPage({
                GROUP BY wallet`
             )
           : Promise.resolve([]),
+        // Every past snapshot, newest first — today's own figures are
+        // already shown live via the cards above (and won't have settled
+        // into a saved row yet if nothing's been recorded today), so this
+        // is deliberately "before today," not "every row."
+        showSnapshot
+          ? queryRows<{
+              snapshot_day: string;
+              cash_amount: number;
+              gcash_amount: number;
+              maya_amount: number;
+              total_money: number;
+              profit: number;
+            }>(
+              `SELECT snapshot_day, cash_amount, gcash_amount, maya_amount, total_money, profit
+               FROM vault_snapshots
+               WHERE snapshot_day < CURDATE()
+               ORDER BY snapshot_day DESC
+               LIMIT ${SNAPSHOT_HISTORY_LIMIT}`
+            )
+          : Promise.resolve([]),
       ]);
   } catch (err) {
     return <PageError title="Could not load the vault" message={(err as Error).message} />;
@@ -226,6 +263,15 @@ export default async function VaultPage({
     (sum, account) => sum + (balances.get(account) ?? 0),
     0
   );
+
+  const snapshotHistory: SnapshotHistoryEntry[] = snapshotHistoryRows.map((row) => ({
+    day: row.snapshot_day,
+    cash: Number(row.cash_amount),
+    gcash: Number(row.gcash_amount),
+    maya: Number(row.maya_amount),
+    totalMoney: Number(row.total_money),
+    profit: Number(row.profit),
+  }));
 
   const todayStoreGross = Number(todayStoreRows[0]?.gross ?? 0);
   const todayStoreMargin = Number(todayStoreRows[0]?.margin ?? 0);
@@ -309,6 +355,7 @@ export default async function VaultPage({
         todayStoreGross={todayStoreGross}
         todayStoreMargin={todayStoreMargin}
         todayEServiceFees={todayEServiceFees}
+        history={snapshotHistory}
       />
     </PageShell>
   );
