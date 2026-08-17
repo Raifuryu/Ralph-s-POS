@@ -174,30 +174,23 @@ export type VaultSnapshotState = {
   result?: VaultSnapshotResult;
 };
 
-/** Whole-vault manual snapshot — what's physically counted across all 3
-    accounts right now, plus today's profit so far, saved as one row per
-    store-day (see recordVaultSnapshot: a second snapshot the same day just
-    overwrites the first). */
+/** Whole-vault snapshot — one tap, no typing: the 3 account balances are
+    read straight off vault_balance (see recordVaultSnapshot), the same
+    figures the account cards themselves already show, plus today's profit
+    so far. Saved as one row per store-day — a second tap the same day just
+    overwrites the first. */
+// useActionState requires this exact (prevState, formData) shape even
+// though neither is read below: there's nothing left to type once the
+// balances come straight from vault_balance instead of the form.
+/* eslint-disable @typescript-eslint/no-unused-vars */
 export async function recordSnapshot(
   _prev: VaultSnapshotState,
-  formData: FormData
+  _formData: FormData
 ): Promise<VaultSnapshotState> {
-  const cash = parseMoney(formData.get("cash"));
-  const gcash = parseMoney(formData.get("gcash"));
-  const maya = parseMoney(formData.get("maya"));
-  if (cash === "bad" || cash === null) {
-    return { error: "Enter the counted cash amount (0 or more, up to centavos)." };
-  }
-  if (gcash === "bad" || gcash === null) {
-    return { error: "Enter the counted GCash amount (0 or more, up to centavos)." };
-  }
-  if (maya === "bad" || maya === null) {
-    return { error: "Enter the counted Maya amount (0 or more, up to centavos)." };
-  }
-
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   try {
     const user = await requireCurrentUser();
-    const result = await recordVaultSnapshot({ cash, gcash, maya }, user.id);
+    const result = await recordVaultSnapshot(user.id);
     revalidatePath("/vault");
     revalidatePath("/");
     return { error: null, result };

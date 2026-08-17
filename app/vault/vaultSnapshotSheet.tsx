@@ -13,10 +13,11 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { formatDateTime, formatPeso } from "@/lib/format";
+import { formatDateTime } from "@/lib/format";
+import { type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import IncomeBreakdownCard, { type EServiceFees } from "../incomeBreakdownCard";
+import VaultCard from "../vaultCard";
 import { recordSnapshot, type VaultSnapshotState } from "./actions";
 
 const initialState: VaultSnapshotState = { error: null };
@@ -31,19 +32,30 @@ export type TodaySnapshot = {
 };
 
 /**
- * The whole-vault manual snapshot: count all 3 accounts together, submit
- * once, and the server saves the total plus today's profit-so-far as a
- * single row for today (see recordSnapshot — recording again the same day
- * just overwrites it, so there's only ever one snapshot per day and the
- * latest reading always prevails). URL-driven (?snapshot) like the other
- * Vault/Inventory sheets.
+ * The whole-vault snapshot: one tap, no typing — captures the 3 account
+ * balances exactly as vault_balance already computes them, plus today's
+ * profit-so-far, as a single row for today (see recordSnapshot — tapping
+ * again the same day just overwrites it, so there's only ever one snapshot
+ * per day and the latest tap always prevails). The preview reuses the exact
+ * same Money on hand / Income cards the Sales dashboard shows (VaultCard +
+ * IncomeBreakdownCard) — this IS that same pair, just always scoped to
+ * today and shown a tap away instead of at the top of the page. URL-driven
+ * (?snapshot) like the other Vault/Inventory sheets.
  */
 export default function VaultSnapshotSheet({
   open,
   today,
+  currentBalances,
+  todayStoreGross,
+  todayStoreMargin,
+  todayEServiceFees,
 }: {
   open: boolean;
   today: TodaySnapshot | null;
+  currentBalances: Map<MoneyAccount, number>;
+  todayStoreGross: number;
+  todayStoreMargin: number;
+  todayEServiceFees: EServiceFees;
 }) {
   const router = useRouter();
 
@@ -61,18 +73,6 @@ export default function VaultSnapshotSheet({
     initialState
   );
 
-  // Pre-filled from today's existing snapshot (if any) so re-counting is an
-  // edit, not starting from scratch — same "placeholder shows the current
-  // figure" idea AdjustForm uses, just as real editable values here since
-  // there are 3 of them to combine into one total.
-  const [cash, setCash] = useState(today ? String(today.cash_amount) : "");
-  const [gcash, setGcash] = useState(today ? String(today.gcash_amount) : "");
-  const [maya, setMaya] = useState(today ? String(today.maya_amount) : "");
-  const total =
-    (Number(cash) || 0) + (Number(gcash) || 0) + (Number(maya) || 0);
-
-  const result = state.result;
-
   return (
     <Drawer
       open={drawerOpen}
@@ -87,89 +87,34 @@ export default function VaultSnapshotSheet({
           <DrawerTitle>Vault snapshot</DrawerTitle>
           <DrawerDescription>
             {today
-              ? `Already recorded today (last updated ${formatDateTime(today.updated_at)}) — recording again replaces it.`
-              : "Count cash, GCash, and Maya, then record today's snapshot — one per day, the latest always prevails."}
+              ? `Already recorded today (last updated ${formatDateTime(today.updated_at)}) — recording again replaces it with the current figures below.`
+              : "Saves the figures below as today's snapshot — one per day, the latest tap always prevails."}
           </DrawerDescription>
         </DrawerHeader>
-        <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <form
-            action={formAction}
-            className="flex min-h-0 flex-1 flex-col gap-3"
-          >
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="snapshot-cash" className="text-xs">
-                Cash
-              </Label>
-              <Input
-                id="snapshot-cash"
-                name="cash"
-                type="number"
-                step="0.01"
-                min="0"
-                required
-                inputMode="decimal"
-                placeholder="0.00"
-                value={cash}
-                onChange={(event) => setCash(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="snapshot-gcash" className="text-xs">
-                GCash
-              </Label>
-              <Input
-                id="snapshot-gcash"
-                name="gcash"
-                type="number"
-                step="0.01"
-                min="0"
-                required
-                inputMode="decimal"
-                placeholder="0.00"
-                value={gcash}
-                onChange={(event) => setGcash(event.target.value)}
-              />
-            </div>
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="snapshot-maya" className="text-xs">
-                Maya
-              </Label>
-              <Input
-                id="snapshot-maya"
-                name="maya"
-                type="number"
-                step="0.01"
-                min="0"
-                required
-                inputMode="decimal"
-                placeholder="0.00"
-                value={maya}
-                onChange={(event) => setMaya(event.target.value)}
-              />
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Total:{" "}
-              <span className="font-medium text-foreground">
-                {formatPeso(total)}
-              </span>
+        <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <VaultCard balances={currentBalances} compact />
+            <IncomeBreakdownCard
+              title="Today's income"
+              store={todayStoreGross}
+              storeProfit={todayStoreMargin}
+              eService={todayEServiceFees}
+              compact
+            />
+          </div>
+
+          {state.error ? (
+            <p role="alert" className="text-sm text-destructive">
+              {state.error}
             </p>
-            {state.error ? (
-              <p role="alert" className="text-sm text-destructive">
-                {state.error}
-              </p>
-            ) : null}
-            {result ? (
-              <div className="rounded-lg border bg-muted/30 p-3 text-sm">
-                <p className="font-medium">
-                  {formatPeso(result.totalMoney)} total ·{" "}
-                  {formatPeso(result.profit)} profit today
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Cash {formatPeso(result.cash)} · GCash{" "}
-                  {formatPeso(result.gcash)} · Maya {formatPeso(result.maya)}
-                </p>
-              </div>
-            ) : null}
+          ) : null}
+          {state.result ? (
+            <p role="status" className="text-sm text-success">
+              Snapshot saved.
+            </p>
+          ) : null}
+
+          <form action={formAction} className="mt-auto flex flex-col">
             <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
               <DrawerClose
                 className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}

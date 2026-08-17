@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { withTransaction } from "@/lib/mysql/pool";
+import type { MoneyAccount } from "@/lib/types";
 import { queryConn, roundMoney } from "./helpers";
 
 export type VaultSnapshotResult = {
@@ -14,43 +15,37 @@ export type VaultSnapshotResult = {
 
 /**
  * Records (or, if one already exists for today, overwrites) the vault's
- * whole-picture snapshot: what's physically counted across all 3 accounts
- * right now, plus how much the store has profited today so far (store
- * margin + e-service fees, same definition Statistics/Vault's Profit card
- * already use, just scoped to today instead of a filter range). Only one
- * row per store-day (vault_snapshots.snapshot_day is UNIQUE) — recording a
- * second snapshot the same day just updates that row via
- * ON DUPLICATE KEY UPDATE, so the latest count always wins instead of
- * piling up several same-day readings.
+ * whole-picture snapshot — no manual entry: the 3 account balances are read
+ * straight from vault_balance (the same system-computed figures the account
+ * cards themselves show), not typed in by whoever taps the button. Paired
+ * with how much the store has profited today so far (store margin +
+ * e-service fees, same definition Statistics/Vault's Profit card already
+ * use, just scoped to today instead of a filter range).
  *
- * The counted amounts are trusted input, same as recordVaultCount's
- * `counted` — a human physically checked the money, this just records what
- * they saw. `CURDATE()` (not a JS-computed date) decides which day's row
- * this belongs to, staying correct off the same pinned Manila session
- * timezone every other date-sensitive query in this app already relies on
- * (see lib/mysql/pool.ts).
+ * Only one row per store-day (vault_snapshots.snapshot_day is UNIQUE) —
+ * recording a second snapshot the same day just updates that row via
+ * ON DUPLICATE KEY UPDATE, so the latest tap always wins instead of piling
+ * up several same-day readings. `CURDATE()` (not a JS-computed date)
+ * decides which day's row this belongs to, staying correct off the same
+ * pinned Manila session timezone every other date-sensitive query in this
+ * app already relies on (see lib/mysql/pool.ts).
  */
 export async function recordVaultSnapshot(
-  params: { cash: number; gcash: number; maya: number },
   cashierId: string
 ): Promise<VaultSnapshotResult> {
-  const cash = roundMoney(params.cash);
-  const gcash = roundMoney(params.gcash);
-  const maya = roundMoney(params.maya);
-
-  for (const [label, value] of [
-    ["Cash", cash],
-    ["GCash", gcash],
-    ["Maya", maya],
-  ] as const) {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error(`${label} amount must be 0 or more`);
-    }
-  }
-
-  const totalMoney = roundMoney(cash + gcash + maya);
-
   return withTransaction(async (conn) => {
+    const balanceRows = await queryConn<{ account: MoneyAccount; balance: number }>(
+      conn,
+      "SELECT account, balance FROM vault_balance"
+    );
+    const balances = new Map(
+      balanceRows.map((row) => [row.account, roundMoney(Number(row.balance ?? 0))])
+    );
+    const cash = balances.get("cash") ?? 0;
+    const gcash = balances.get("gcash") ?? 0;
+    const maya = balances.get("maya") ?? 0;
+    const totalMoney = roundMoney(cash + gcash + maya);
+
     const profitRows = await queryConn<{ store_margin: number; eservice_fee: number }>(
       conn,
       `SELECT

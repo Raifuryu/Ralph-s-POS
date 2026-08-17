@@ -7,6 +7,7 @@ import { formatPeso, rangeSubtitle } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import { type MoneyAccount } from "@/lib/types";
+import { type EServiceFees } from "../incomeBreakdownCard";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
 import PersonalTakesSheet, { type PersonalTake } from "./personalTakesSheet";
@@ -66,6 +67,8 @@ export default async function VaultPage({
   let storeMarginRows: { store_margin: number }[];
   let eServiceFeeRows: { total_fee: number }[];
   let todaySnapshotRows: TodaySnapshot[];
+  let todayStoreRows: { gross: number; margin: number }[];
+  let todayEServiceRows: { wallet: MoneyAccount | null; fee: number }[];
 
   try {
     // The three account balances come from vault_balance — an all-time view,
@@ -77,6 +80,8 @@ export default async function VaultPage({
       storeMarginRows,
       eServiceFeeRows,
       todaySnapshotRows,
+      todayStoreRows,
+      todayEServiceRows,
     ] = await Promise.all([
         queryRows<VaultBalanceRow>("SELECT account, balance FROM vault_balance"),
         fetchVaultLedgerPage(filters, 0),
@@ -122,6 +127,38 @@ export default async function VaultPage({
           `SELECT cash_amount, gcash_amount, maya_amount, total_money, profit, updated_at
            FROM vault_snapshots WHERE snapshot_day = CURDATE()`
         ),
+        // The snapshot sheet's own preview — deliberately "today" rather
+        // than this page's from/to filter, since the sheet always snapshots
+        // right now regardless of what window happens to be selected below.
+        // Only worth fetching when that sheet is actually open, same
+        // "don't pay for a query nobody's looking at" reasoning as Personal
+        // takes. Mirrors the dashboard's own storeTotal/storeMargin split
+        // (app/page.tsx) so this preview reads exactly like Sales' own
+        // Income card, just always scoped to today.
+        showSnapshot
+          ? queryRows<{ gross: number; margin: number }>(
+              `SELECT
+                 COALESCE(SUM(ti.line_total), 0) AS gross,
+                 COALESCE(SUM(
+                   CASE WHEN ti.unit_cost IS NOT NULL
+                     THEN ti.line_total - ti.unit_cost * ti.quantity
+                     ELSE 0
+                   END
+                 ), 0) AS margin
+               FROM transaction_items ti
+               JOIN transactions t ON t.id = ti.transaction_id
+               WHERE t.is_personal_take = 0 AND t.voided_at IS NULL
+                 AND DATE(t.created_at) = CURDATE()`
+            )
+          : Promise.resolve([]),
+        showSnapshot
+          ? queryRows<{ wallet: MoneyAccount | null; fee: number }>(
+              `SELECT wallet, COALESCE(SUM(fee), 0) AS fee
+               FROM service_transactions
+               WHERE voided_at IS NULL AND DATE(created_at) = CURDATE()
+               GROUP BY wallet`
+            )
+          : Promise.resolve([]),
       ]);
   } catch (err) {
     return <PageError title="Could not load the vault" message={(err as Error).message} />;
@@ -190,6 +227,16 @@ export default async function VaultPage({
     0
   );
 
+  const todayStoreGross = Number(todayStoreRows[0]?.gross ?? 0);
+  const todayStoreMargin = Number(todayStoreRows[0]?.margin ?? 0);
+  const todayEServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
+  for (const row of todayEServiceRows) {
+    const fee = Number(row.fee);
+    if (row.wallet === "gcash") todayEServiceFees.gcash += fee;
+    else if (row.wallet === "maya") todayEServiceFees.maya += fee;
+    else todayEServiceFees.other += fee;
+  }
+
   return (
     <PageShell>
       <h1 className="text-xl font-semibold">Vault</h1>
@@ -255,7 +302,14 @@ export default async function VaultPage({
       />
 
       <PersonalTakesSheet open={showDebts} takes={personalTakes} />
-      <VaultSnapshotSheet open={showSnapshot} today={todaySnapshot} />
+      <VaultSnapshotSheet
+        open={showSnapshot}
+        today={todaySnapshot}
+        currentBalances={balances}
+        todayStoreGross={todayStoreGross}
+        todayStoreMargin={todayStoreMargin}
+        todayEServiceFees={todayEServiceFees}
+      />
     </PageShell>
   );
 }
