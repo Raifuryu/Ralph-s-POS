@@ -46,14 +46,16 @@ type SearchParams = {
   to?: string;
   from_ts?: string;
   to_ts?: string;
-  /** Comma-joined category/product ids — see ProductScopeFilter. */
+  /** Comma-joined category/product/service ids — see ProductScopeFilter. */
   categories?: string;
   products?: string;
+  services?: string;
 };
 
 /** Only the columns this page's service_transactions query actually
     selects — narrower than the full ServiceTransaction row type. */
 type ServiceRevenuePoint = {
+  service_id: string | null;
   fee: number;
   wallet: MoneyAccount | null;
   payment_account: MoneyAccount;
@@ -87,13 +89,13 @@ function LoadError({ message }: { message: string }) {
     "cost unknown lines are excluded, not assumed 100% margin" rule the
     Gross profit KPI and every other profit figure on this page already
     follows. An e-service's contribution is its fee as-is, since the fee
-    already IS its margin (no COGS to subtract); `services` is already an
-    empty array here whenever a category/product filter is active (see
-    effectiveServiceList below), so this needs no e-service-specific
-    filtering of its own. Bounds come from the requested from/to date keys
-    when both are set, else from the data's own earliest/latest timestamp
-    (so "all time" on a young store doesn't try to render decades of empty
-    bars). Widens buckets past MAX_BARS so long ranges stay readable. */
+    already IS its margin (no COGS to subtract); `services` has already had
+    the page's own Service filter applied by the caller (effectiveServiceList
+    below), so this needs no e-service-specific filtering of its own. Bounds
+    come from the requested from/to date keys when both are set, else from
+    the data's own earliest/latest timestamp (so "all time" on a young store
+    doesn't try to render decades of empty bars). Widens buckets past
+    MAX_BARS so long ranges stay readable. */
 function buildProfitBuckets(
   sales: TransactionWithItems[],
   services: ServiceRevenuePoint[],
@@ -196,17 +198,27 @@ export default async function StatisticsPage({
   }
   const dateWhere = dateConditions.length > 0 ? `WHERE ${dateConditions.join(" AND ")}` : "";
 
-  // Category/product scope — narrows every figure on this page down to just
-  // matching transaction_items (see matchesItemFilter below), not only the
-  // Top-selling/Category tables. Comma-encoded in a single param each (see
-  // ProductScopeFilter) rather than repeated query keys.
+  // Category/product/service scope — narrows every figure on this page down
+  // to just matching transaction_items/service_transactions (see
+  // matchesItemFilter/matchesServiceFilter below), not only the tables.
+  // Comma-encoded in a single param each (see ProductScopeFilter) rather
+  // than repeated query keys. Category and Product are one facet (a
+  // product's own category), Service is a separate, unrelated one — see
+  // the comments on hasCategoryOrProductFilter/hasServiceFilter below for
+  // how an inactive facet behaves once ANY filter is applied.
   const selectedCategories = new Set(
     (params.categories ?? "").split(",").filter(Boolean)
   );
   const selectedProducts = new Set(
     (params.products ?? "").split(",").filter(Boolean)
   );
-  const hasProductFilter = selectedCategories.size > 0 || selectedProducts.size > 0;
+  const selectedServices = new Set(
+    (params.services ?? "").split(",").filter(Boolean)
+  );
+  const hasCategoryOrProductFilter =
+    selectedCategories.size > 0 || selectedProducts.size > 0;
+  const hasServiceFilter = selectedServices.size > 0;
+  const hasAnyFilter = hasCategoryOrProductFilter || hasServiceFilter;
 
   let sales: TransactionWithItems[];
   let serviceData: ServiceRevenuePoint[];
@@ -224,17 +236,25 @@ export default async function StatisticsPage({
   }[];
   let productsData: { id: string; name: string; category_id: string | null }[];
   let categoriesData: { id: string; name: string }[];
+  let servicesData: { id: string; name: string }[];
 
   try {
     let transactions: Transaction[];
-    [transactions, serviceData, restockData, vaultMovementData, productsData, categoriesData] =
-      await Promise.all([
+    [
+      transactions,
+      serviceData,
+      restockData,
+      vaultMovementData,
+      productsData,
+      categoriesData,
+      servicesData,
+    ] = await Promise.all([
         queryRows<Transaction>(
           `SELECT ${TRANSACTION_COLUMNS} FROM transactions ${dateWhere} ORDER BY created_at ASC`,
           dateParams
         ),
         queryRows<ServiceRevenuePoint>(
-          `SELECT fee, wallet, payment_account, created_at, voided_at, service_name, unit_label, unit_quantity
+          `SELECT service_id, fee, wallet, payment_account, created_at, voided_at, service_name, unit_label, unit_quantity
            FROM service_transactions ${dateWhere} ORDER BY created_at ASC`,
           dateParams
         ),
@@ -265,6 +285,11 @@ export default async function StatisticsPage({
         ),
         queryRows<{ id: string; name: string }>(
           "SELECT id, name FROM categories ORDER BY name"
+        ),
+        // Unfiltered by is_active too — a since-deactivated service's past
+        // transactions should still be pickable in the Service filter.
+        queryRows<{ id: string; name: string }>(
+          "SELECT id, name FROM services ORDER BY name"
         ),
       ]);
 
@@ -302,10 +327,15 @@ export default async function StatisticsPage({
   // a union across both facets, not an intersection: picking a category
   // plus one extra product outside it shows the category's items AND that
   // product, rather than narrowing to their overlap (which could easily be
-  // empty and confusing). No filter selected at all matches everything, so
-  // every figure below collapses back to exactly its old unfiltered value.
+  // empty and confusing). If Category/Product has no selections at all but
+  // Service does, every store item is excluded — the filter deliberately
+  // scoped the page to services instead, same reasoning e-service used to
+  // get zeroed out by a category/product-only filter. No filter selected
+  // anywhere matches everything, so every figure below collapses back to
+  // exactly its old unfiltered value.
   function matchesItemFilter(item: TransactionItem): boolean {
-    if (!hasProductFilter) return true;
+    if (!hasAnyFilter) return true;
+    if (!hasCategoryOrProductFilter) return false;
     if (
       selectedProducts.size > 0 &&
       item.product_id !== null &&
@@ -320,14 +350,22 @@ export default async function StatisticsPage({
     return false;
   }
 
+  // Mirrors matchesItemFilter, for the Service facet: matches only when
+  // Service has selections and this transaction's service_id is one of
+  // them. A service with no service_id on the row (a deleted service — see
+  // ServiceTransaction.service_id) can't be attributed to a selection, so
+  // it's excluded while filtering rather than guessed at, same "gap stays
+  // visible" rule as a cost-unknown sale or an unattributed restock.
+  function matchesServiceFilter(s: ServiceRevenuePoint): boolean {
+    if (!hasAnyFilter) return true;
+    if (!hasServiceFilter) return false;
+    return s.service_id !== null && selectedServices.has(s.service_id);
+  }
+
   // A voided service transaction had every entry it posted reversed — same
   // "excluded everywhere" treatment as a voided/personal-take sale.
   const serviceList = serviceData.filter((s) => !s.voided_at);
-  // E-service transactions have no product/category of their own — while a
-  // category/product filter is active, the page becomes purely about the
-  // selected product mix, so e-service figures drop out everywhere instead
-  // of showing whole-store numbers alongside filtered store numbers.
-  const effectiveServiceList = hasProductFilter ? [] : serviceList;
+  const effectiveServiceList = serviceList.filter(matchesServiceFilter);
 
   // A voided sale had its stock and any posted income both reversed — it
   // isn't real revenue, demand, or a "transaction that happened" anymore,
@@ -540,7 +578,8 @@ export default async function StatisticsPage({
 
   // E-Service fee income by wallet — same shape/reasoning as the dashboard's
   // IncomeBreakdownCard, just range-scoped instead of daily. Empty whenever
-  // effectiveServiceList is (i.e. a category/product filter is active).
+  // effectiveServiceList is (a category/product-only filter, or a Service
+  // filter matching nothing in this window).
   const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
   for (const s of effectiveServiceList) {
     const fee = Number(s.fee);
@@ -565,7 +604,8 @@ export default async function StatisticsPage({
   // rather than guessed at, same "gap stays visible" rule as cost-unknown
   // revenue above.
   function restockMatchesFilter(row: { product_id: string | null }): boolean {
-    if (!hasProductFilter) return true;
+    if (!hasAnyFilter) return true;
+    if (!hasCategoryOrProductFilter) return false;
     if (
       selectedProducts.size > 0 &&
       row.product_id !== null &&
@@ -592,15 +632,15 @@ export default async function StatisticsPage({
   // Deposits/withdrawals stay separate (not netted) — "how much did I add"
   // and "how much did I take out" are different questions. Withdrawals are
   // stored as negative amounts; flipped here so the display value reads
-  // positive. Unlike a restock, a vault deposit/withdrawal has no product or
-  // category of its own at all (not even indirectly) — while a filter is
-  // active these are zeroed rather than shown as whole-store numbers next
-  // to filtered ones.
+  // positive. Unlike a restock, a vault deposit/withdrawal has no product,
+  // category, or service of its own at all (not even indirectly) — while
+  // any filter is active these are zeroed rather than shown as whole-store
+  // numbers next to filtered ones.
   let depositsTotal = 0;
   let withdrawalsTotal = 0;
   const depositsByAccount = new Map<MoneyAccount, number>();
   const withdrawalsByAccount = new Map<MoneyAccount, number>();
-  if (!hasProductFilter) {
+  if (!hasAnyFilter) {
     for (const entry of vaultMovementData) {
       const amount = Number(entry.amount);
       if (entry.entry_type === "deposit") {
@@ -710,6 +750,10 @@ export default async function StatisticsPage({
     key: p.id,
     name: p.name,
   }));
+  const serviceOptions: MultiSelectOption[] = servicesData.map((s) => ({
+    key: s.id,
+    name: s.name,
+  }));
   const preserveParams: Record<string, string> = {};
   if (params.from) preserveParams.from = params.from;
   if (params.to) preserveParams.to = params.to;
@@ -730,8 +774,10 @@ export default async function StatisticsPage({
         <ProductScopeFilter
           categoryOptions={categoryOptions}
           productOptions={productOptions}
+          serviceOptions={serviceOptions}
           initialCategories={[...selectedCategories]}
           initialProducts={[...selectedProducts]}
+          initialServices={[...selectedServices]}
           basePath="/statistics"
           preserveParams={preserveParams}
         />
@@ -798,6 +844,11 @@ export default async function StatisticsPage({
           key={`products-${subtitle}`}
           title="Products"
           products={topProducts}
+          emptyTitle={
+            hasServiceFilter && !hasCategoryOrProductFilter
+              ? "Products aren't tied to a service, so they're excluded while filtering by service."
+              : "No sales in this window yet."
+          }
         />
 
         <TopProductsTable
@@ -807,7 +858,7 @@ export default async function StatisticsPage({
           itemHeader="Service"
           unitsHeader="Qty"
           emptyTitle={
-            hasProductFilter
+            hasCategoryOrProductFilter && !hasServiceFilter
               ? "E-Service isn't tied to a product or category, so it's excluded while filtering."
               : "No e-service transactions in this window yet."
           }
@@ -821,10 +872,10 @@ export default async function StatisticsPage({
 
         <ProductAnalysis key={`analysis-${subtitle}`} products={productAnalysis} />
 
-        {hasProductFilter ? (
+        {hasAnyFilter ? (
           <p className="text-xs text-muted-foreground">
-            Cash deposits/withdrawals aren&rsquo;t tied to a product or
-            category, so they&rsquo;re excluded while filtering.
+            Cash deposits/withdrawals aren&rsquo;t tied to a product,
+            category, or service, so they&rsquo;re excluded while filtering.
           </p>
         ) : null}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
