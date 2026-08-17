@@ -76,6 +76,8 @@ type SaleDraft = {
   paymentMethod: PaymentMethod;
   tendered: string;
   personalTake: boolean;
+  debtorName: string;
+  debtorDescription: string;
 };
 
 export default function CheckoutForm({
@@ -123,6 +125,11 @@ export default function CheckoutForm({
   // Stock still leaves the shelf, but nothing was sold — no payment method,
   // no change to tender, no income. See app/checkout/actions.ts.
   const [personalTake, setPersonalTake] = useState(false);
+  // Optional, personal-take only — who it's for and why. Can always be
+  // added/edited later from Vault → Personal takes instead (see
+  // settlePersonalTake), this is just the "cashier already knows" shortcut.
+  const [debtorName, setDebtorName] = useState("");
+  const [debtorDescription, setDebtorDescription] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [state, formAction, isPending] = useActionState(
     recordVisit,
@@ -172,6 +179,12 @@ export default function CheckoutForm({
         if (typeof draft.personalTake === "boolean") {
           setPersonalTake(draft.personalTake);
         }
+        if (typeof draft.debtorName === "string") {
+          setDebtorName(draft.debtorName);
+        }
+        if (typeof draft.debtorDescription === "string") {
+          setDebtorDescription(draft.debtorDescription);
+        }
       }
     } catch {
       // Corrupt or inaccessible storage — start with a blank sale rather
@@ -192,7 +205,9 @@ export default function CheckoutForm({
         serviceDrafts,
         paymentMethod,
         tendered,
-        personalTake
+        personalTake,
+        debtorName,
+        debtorDescription
       };
       sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft));
     } catch {
@@ -206,7 +221,9 @@ export default function CheckoutForm({
     serviceDrafts,
     paymentMethod,
     tendered,
-    personalTake
+    personalTake,
+    debtorName,
+    debtorDescription
   ]);
 
   // A recorded sale is done being a "draft" — clear it immediately so it
@@ -229,6 +246,8 @@ export default function CheckoutForm({
     setPaymentMethod("cash");
     setTendered("");
     setPersonalTake(false);
+    setDebtorName("");
+    setDebtorDescription("");
     try {
       sessionStorage.removeItem(DRAFT_STORAGE_KEY);
     } catch {
@@ -955,18 +974,58 @@ export default function CheckoutForm({
         )}
       </div>
 
-      <label className="flex items-start gap-1 rounded-lg border p-1 text-xs has-[[data-checked]]:border-ring has-[[data-checked]]:bg-muted/30">
-        <Checkbox
-          name="personal_take"
-          value="on"
-          checked={personalTake}
-          onCheckedChange={setPersonalTake}
-          className="mt-0.5"
-        />
-        <span>
-          <span className="font-medium">Personal take (Utang)</span>
-        </span>
-      </label>
+      <div className="flex flex-col gap-2 rounded-lg border p-2 has-[[data-checked]]:border-ring has-[[data-checked]]:bg-muted/30">
+        <label className="flex items-start gap-1 text-xs">
+          <Checkbox
+            name="personal_take"
+            value="on"
+            checked={personalTake}
+            onCheckedChange={setPersonalTake}
+            className="mt-0.5"
+          />
+          <span>
+            <span className="font-medium">Personal take (Utang)</span>
+          </span>
+        </label>
+
+        {/* Optional here — the debtor can always be labeled later from
+            Vault → Personal takes instead, for whenever the cashier doesn't
+            know (or doesn't have time to type) who it was for yet. */}
+        {personalTake ? (
+          <div className="flex flex-col gap-2 pl-1">
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="debtor_name" className="text-xs">
+                Debtor name{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id="debtor_name"
+                name="debtor_name"
+                placeholder="e.g. Kuya Jun"
+                value={debtorName}
+                onChange={(event) => setDebtorName(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="debtor_description" className="text-xs">
+                Description{" "}
+                <span className="font-normal text-muted-foreground">
+                  (optional)
+                </span>
+              </Label>
+              <Input
+                id="debtor_description"
+                name="debtor_description"
+                placeholder="e.g. Promised end of month"
+                value={debtorDescription}
+                onChange={(event) => setDebtorDescription(event.target.value)}
+              />
+            </div>
+          </div>
+        ) : null}
+      </div>
 
       {/* One payment method and one "Customer gave" for the whole sale —
           cart and every service line together, same as an item-only sale

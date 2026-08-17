@@ -23,6 +23,11 @@ export async function recordVisit(
     paymentMethod?: MoneyAccount;
     tendered?: number;
     personalTake: boolean;
+    /** Personal-take only — who it's for and why, capturable right at
+        checkout instead of only later from Vault → Personal takes (see
+        settlePersonalTake/labelPersonalTake). */
+    debtorName?: string | null;
+    debtorDescription?: string | null;
     services?: ServiceLine[];
   },
   cashierId: string
@@ -44,6 +49,8 @@ export async function recordVisit(
           paymentMethod: params.paymentMethod ?? null,
           tendered: params.tendered ?? null,
           personalTake,
+          debtorName: params.debtorName ?? null,
+          debtorDescription: params.debtorDescription ?? null,
           visitId,
         },
         cashierId

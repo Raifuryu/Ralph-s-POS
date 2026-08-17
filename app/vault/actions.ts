@@ -180,10 +180,15 @@ export async function settleDebt(
   const account = parseAccount(formData.get("account"));
   if (!account) return { error: "Pick which account received the payment." };
 
+  // Which of the two "Mark as paid" buttons was clicked — see the button
+  // pair in personalTakesSheet.tsx, each submitting the same form with a
+  // different name="at_selling_price" value baked into the button itself.
+  const atSellingPrice = formData.get("at_selling_price") === "1";
+
   try {
     const user = await requireCurrentUser();
     await settlePersonalTake(
-      { transactionId, account, ...debtorFields(formData) },
+      { transactionId, account, atSellingPrice, ...debtorFields(formData) },
       user.id
     );
     revalidatePath("/vault");

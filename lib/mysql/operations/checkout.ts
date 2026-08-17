@@ -29,11 +29,17 @@ export async function checkout(
     paymentMethod: MoneyAccount | null;
     tendered: number | null;
     personalTake: boolean;
+    /** Personal-take only — who it's for and why, capturable right at
+        checkout instead of only later from Vault → Personal takes (see
+        settlePersonalTake/labelPersonalTake). */
+    debtorName: string | null;
+    debtorDescription: string | null;
     visitId: string | null;
   },
   cashierId: string
 ): Promise<string> {
-  const { items, paymentMethod, tendered, personalTake, visitId } = params;
+  const { items, paymentMethod, tendered, personalTake, debtorName, debtorDescription, visitId } =
+    params;
 
   if (!items || items.length === 0) {
     throw new Error("Cart is empty");
@@ -144,8 +150,18 @@ export async function checkout(
 
   const transactionId = randomUUID();
   await conn.query(
-    "INSERT INTO transactions (id, payment_method, cashier_id, total, tendered, is_personal_take, visit_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [transactionId, paymentMethod, cashierId, total, tendered, personalTake, visitId]
+    "INSERT INTO transactions (id, payment_method, cashier_id, total, tendered, is_personal_take, visit_id, debtor_name, debtor_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    [
+      transactionId,
+      paymentMethod,
+      cashierId,
+      total,
+      tendered,
+      personalTake,
+      visitId,
+      debtorName,
+      debtorDescription,
+    ]
   );
 
   for (const line of lines) {

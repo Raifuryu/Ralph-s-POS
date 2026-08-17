@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { pool, queryRows, withTransaction } from "@/lib/mysql/pool";
 import type { MoneyAccount } from "@/lib/types";
-import { queryConn } from "./helpers";
+import { queryConn, roundMoney } from "./helpers";
 
 /**
  * Labels a personal take ("Utang") with who took it and why, without
@@ -41,11 +41,20 @@ export async function labelPersonalTake(params: {
  * 1. Saves/updates the debtor name + description alongside it (same as
  *    labelPersonalTake, just inline here so labeling and settling can
  *    happen in the same tap rather than requiring two separate saves).
- * 2. Posts a 'deposit' vault_entries row for the take's own `total`, into
+ * 2. Posts a 'deposit' vault_entries row for the settlement amount, into
  *    whichever account the debtor actually paid into — this is the first
  *    time a personal take's value ever reaches the vault; at the time it
  *    was taken, checkout() deliberately posted nothing (see its own "no
  *    income" comment).
+ *
+ * The settlement amount is either the take's own `total` (what it cost the
+ * store — the default) or, when atSellingPrice is set, what its items would
+ * have sold for — some debtors pay back the full retail price rather than
+ * just reimbursing cost. Either way it's recomputed here from the take's own
+ * transaction_items (unit_price is a snapshot from the moment of the
+ * original take, same column checkout() itself writes it from — not
+ * products' current price, which may have changed since), never trusted as
+ * a client-submitted number.
  *
  * Locks the transaction row first — same discipline voidTransaction/
  * voidServiceTransaction already follow before mutating a transaction that
@@ -57,10 +66,12 @@ export async function settlePersonalTake(
     debtorName: string | null;
     debtorDescription: string | null;
     account: MoneyAccount;
+    atSellingPrice?: boolean;
   },
   userId: string
 ): Promise<void> {
-  const { transactionId, debtorName, debtorDescription, account } = params;
+  const { transactionId, debtorName, debtorDescription, account, atSellingPrice } =
+    params;
 
   await withTransaction(async (conn) => {
     const rows = await queryConn<{
@@ -85,17 +96,30 @@ export async function settlePersonalTake(
       throw new Error("This take has already been settled");
     }
 
+    let amount = transaction.total;
+    if (atSellingPrice) {
+      const itemRows = await queryConn<{ unit_price: number; quantity: number }>(
+        conn,
+        "SELECT unit_price, quantity FROM transaction_items WHERE transaction_id = ?",
+        [transactionId]
+      );
+      amount = roundMoney(
+        itemRows.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0)
+      );
+    }
+
     await conn.query(
       "UPDATE transactions SET debtor_name = ?, debtor_description = ?, settled_at = NOW(), settled_by = ? WHERE id = ?",
       [debtorName, debtorDescription, userId, transactionId]
     );
 
+    const suffix = atSellingPrice ? " (selling price)" : "";
     const note = debtorName
-      ? `Personal take settled — ${debtorName}`
-      : "Personal take settled";
+      ? `Personal take settled${suffix} — ${debtorName}`
+      : `Personal take settled${suffix}`;
     await conn.query(
       "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, created_by, note) VALUES (?, 'deposit', ?, ?, ?, ?, ?)",
-      [randomUUID(), transaction.total, transactionId, account, userId, note]
+      [randomUUID(), amount, transactionId, account, userId, note]
     );
   });
 }

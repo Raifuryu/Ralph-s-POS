@@ -18,7 +18,7 @@ import { FilterChip } from "@/components/filterChip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatDateTime, formatPeso } from "@/lib/format";
+import { formatDateTime, formatPeso, storeDayKey } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import {
   labelDebtor,
@@ -35,12 +35,38 @@ export type PersonalTake = {
   debtor_name: string | null;
   debtor_description: string | null;
   settled_at: string | null;
+  /** What was actually taken — product_name/unit_price are the line's own
+      snapshot from the moment of the take (same as everywhere else
+      transaction_items is read), so this stays correct even if the product
+      is later renamed, repriced, or deleted. */
+  items: { product_name: string; quantity: number; unit_price: number }[];
 };
+
+/** Sum of unit_price × quantity across a take's items — what they'd have
+    sold for at the time of the take, offered as an alternative settlement
+    amount to the take's own (cost-based) total. */
+function sellingPriceTotal(items: PersonalTake["items"]): number {
+  return items.reduce(
+    (sum, item) => sum + Number(item.unit_price) * item.quantity,
+    0
+  );
+}
+
+/** "2 pcs Coke, 1 pc Bread" — comma-joined, no attempt at a full sentence,
+    since this has to fit on one line in the collapsed row and still read
+    fine as a longer wrapped list in the expanded one. */
+function itemsSummary(items: PersonalTake["items"]): string {
+  if (items.length === 0) return "No items recorded";
+  return items
+    .map((item) => `${item.quantity}× ${item.product_name}`)
+    .join(", ");
+}
 
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
 
 function PersonalTakeRow({ take }: { take: PersonalTake }) {
   const isSettled = take.settled_at !== null;
+  const priceTotal = sellingPriceTotal(take.items);
   const [expanded, setExpanded] = useState(false);
   const [debtorName, setDebtorName] = useState(take.debtor_name ?? "");
   const [debtorDescription, setDebtorDescription] = useState(
@@ -88,6 +114,9 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
               {take.debtor_description}
             </span>
           ) : null}
+          <span className="block truncate text-xs text-muted-foreground">
+            {itemsSummary(take.items)}
+          </span>
         </span>
         {expanded ? (
           <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -98,6 +127,33 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
 
       {expanded ? (
         <div className="flex flex-col gap-3 border-t p-3 pt-2">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">Items taken</Label>
+            {take.items.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                No items recorded
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-0.5">
+                {take.items.map((item, i) => (
+                  // No item id in this shape (see PersonalTake) — index is
+                  // stable here since the list itself never reorders.
+                  <li
+                    key={i}
+                    className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
+                  >
+                    <span className="min-w-0 truncate">
+                      {item.product_name}
+                    </span>
+                    <span className="shrink-0 tabular-nums">
+                      ×{item.quantity}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           <div className="flex flex-col gap-2">
             <Label htmlFor={`debtor-name-${take.id}`} className="text-xs">
               Debtor name
@@ -186,11 +242,33 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
                   {settleState.error}
                 </p>
               ) : null}
-              <Button type="submit" size="sm" disabled={isSettling}>
-                {isSettling
-                  ? "Recording…"
-                  : `Mark ${formatPeso(take.total)} as paid`}
-              </Button>
+              <div className="flex flex-col gap-1.5">
+                <Button
+                  type="submit"
+                  name="at_selling_price"
+                  value="0"
+                  size="sm"
+                  disabled={isSettling}
+                >
+                  {isSettling
+                    ? "Recording…"
+                    : `Mark ${formatPeso(take.total)} as paid (cost)`}
+                </Button>
+                {priceTotal > 0 && priceTotal !== take.total ? (
+                  <Button
+                    type="submit"
+                    name="at_selling_price"
+                    value="1"
+                    variant="outline"
+                    size="sm"
+                    disabled={isSettling}
+                  >
+                    {isSettling
+                      ? "Recording…"
+                      : `Mark ${formatPeso(priceTotal)} as paid (selling price)`}
+                  </Button>
+                ) : null}
+              </div>
             </form>
           )}
         </div>
@@ -226,8 +304,34 @@ export default function PersonalTakesSheet({
   const drawerOpen = openState.value;
 
   const [showAll, setShowAll] = useState(false);
+  // Client-side, over the already-fetched (bounded) list — same reasoning
+  // ItemsBrowser's search follows: no server round trip needed for a list
+  // this size, and it composes for free with the Outstanding/All chip.
+  const [search, setSearch] = useState("");
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+
   const outstanding = takes.filter((t) => t.settled_at === null);
-  const visible = showAll ? takes : outstanding;
+
+  const needle = search.trim().toLowerCase();
+  function matches(take: PersonalTake): boolean {
+    const dayKey = storeDayKey(take.created_at);
+    if (fromDate && dayKey < fromDate) return false;
+    if (toDate && dayKey > toDate) return false;
+    if (needle === "") return true;
+    const haystack = [
+      take.debtor_name,
+      take.debtor_description,
+      ...take.items.map((item) => item.product_name),
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(needle);
+  }
+
+  const visible = (showAll ? takes : outstanding).filter(matches);
+  const filtersActive = needle !== "" || fromDate !== "" || toDate !== "";
 
   return (
     <Drawer
@@ -251,6 +355,45 @@ export default function PersonalTakesSheet({
             <EmptyState title="No personal takes recorded yet." />
           ) : (
             <>
+              <Input
+                type="search"
+                aria-label="Search personal takes"
+                placeholder="Search debtor, description, or item…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.preventDefault();
+                }}
+                className="mb-3"
+              />
+
+              <div className="mb-3 grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="debts-from" className="text-xs">
+                    From
+                  </Label>
+                  <Input
+                    id="debts-from"
+                    type="date"
+                    value={fromDate}
+                    max={toDate || undefined}
+                    onChange={(event) => setFromDate(event.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label htmlFor="debts-to" className="text-xs">
+                    To
+                  </Label>
+                  <Input
+                    id="debts-to"
+                    type="date"
+                    value={toDate}
+                    min={fromDate || undefined}
+                    onChange={(event) => setToDate(event.target.value)}
+                  />
+                </div>
+              </div>
+
               <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
                 <FilterChip
                   label={`Outstanding (${outstanding.length})`}
@@ -265,7 +408,13 @@ export default function PersonalTakesSheet({
               </div>
 
               {visible.length === 0 ? (
-                <EmptyState title="Nothing outstanding — all settled up." />
+                <EmptyState
+                  title={
+                    filtersActive
+                      ? "No personal takes match these filters."
+                      : "Nothing outstanding — all settled up."
+                  }
+                />
               ) : (
                 <ul className="flex flex-col gap-2">
                   {visible.map((take) => (

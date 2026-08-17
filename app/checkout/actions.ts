@@ -51,6 +51,19 @@ export async function recordVisit(
     ? null
     : String(formData.get("payment_method") ?? "");
 
+  // Only meaningful for a personal take — same convention debtor_name/
+  // debtor_description already follow on the transactions row itself (see
+  // schema.sql). A real sale ignores whatever's in these fields regardless
+  // (the client only renders/submits them while the checkbox is checked),
+  // but dropping them here too means a stray value can never land on a
+  // non-personal-take row even if that ever changed.
+  const debtorName = personalTake
+    ? String(formData.get("debtor_name") ?? "").trim() || null
+    : null;
+  const debtorDescription = personalTake
+    ? String(formData.get("debtor_description") ?? "").trim() || null
+    : null;
+
   let cart: {
     product_id: string;
     quantity: number;
@@ -228,6 +241,8 @@ export async function recordVisit(
               }))
             : undefined,
         personalTake,
+        debtorName,
+        debtorDescription,
         // Validated above (isMoneyAccount) whenever items.length > 0 and this
         // isn't a personal take — the only case this actually gets sent.
         paymentMethod:
