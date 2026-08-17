@@ -1,5 +1,6 @@
 import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
+import { type MultiSelectOption } from "@/components/multiSelectDropdown";
 import { ACCOUNT_ORDER } from "@/lib/accountColors";
 import {
   formatHourLabel,
@@ -26,6 +27,7 @@ import CategoryLeaderboard, { type CategoryRevenue } from "./categoryLeaderboard
 import HourlyTrafficChart, { type HourlyBucket } from "./hourlyTrafficChart";
 import PaymentBreakdownCard from "./paymentBreakdownCard";
 import ProductAnalysis, { type ProductTimeStats } from "./productAnalysis";
+import ProductScopeFilter from "./productScopeFilter";
 import ProfitTrendChart, { type ProfitBucket } from "./profitTrendChart";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
@@ -44,6 +46,9 @@ type SearchParams = {
   to?: string;
   from_ts?: string;
   to_ts?: string;
+  /** Comma-joined category/product ids — see ProductScopeFilter. */
+  categories?: string;
+  products?: string;
 };
 
 /** Only the columns this page's service_transactions query actually
@@ -77,19 +82,24 @@ function LoadError({ message }: { message: string }) {
 
 /** Buckets sale + service PROFIT (not revenue) by store-day into a
     chart-ready series. A sale's contribution is its margin, summed only
-    over line items with a known unit_cost — same "cost unknown lines are
-    excluded, not assumed 100% margin" rule the Gross profit KPI and every
-    other profit figure on this page already follows. An e-service's
-    contribution is its fee as-is, since the fee already IS its margin (no
-    COGS to subtract). Bounds come from the requested from/to date keys when
-    both are set, else from the data's own earliest/latest timestamp (so
-    "all time" on a young store doesn't try to render decades of empty
+    over line items with a known unit_cost AND accepted by `matchesItem`
+    (the page's category/product filter — see matchesItemFilter) — same
+    "cost unknown lines are excluded, not assumed 100% margin" rule the
+    Gross profit KPI and every other profit figure on this page already
+    follows. An e-service's contribution is its fee as-is, since the fee
+    already IS its margin (no COGS to subtract); `services` is already an
+    empty array here whenever a category/product filter is active (see
+    effectiveServiceList below), so this needs no e-service-specific
+    filtering of its own. Bounds come from the requested from/to date keys
+    when both are set, else from the data's own earliest/latest timestamp
+    (so "all time" on a young store doesn't try to render decades of empty
     bars). Widens buckets past MAX_BARS so long ranges stay readable. */
 function buildProfitBuckets(
   sales: TransactionWithItems[],
   services: ServiceRevenuePoint[],
   fromKey: string | undefined,
-  toKey: string | undefined
+  toKey: string | undefined,
+  matchesItem: (item: TransactionItem) => boolean
 ): ProfitBucket[] {
   const points = [
     ...sales
@@ -97,6 +107,7 @@ function buildProfitBuckets(
       .map((t) => {
         let margin = 0;
         for (const item of t.transaction_items) {
+          if (!matchesItem(item)) continue;
           if (item.unit_cost !== null) {
             margin += Number(item.line_total) - Number(item.unit_cost) * item.quantity;
           }
@@ -185,16 +196,33 @@ export default async function StatisticsPage({
   }
   const dateWhere = dateConditions.length > 0 ? `WHERE ${dateConditions.join(" AND ")}` : "";
 
+  // Category/product scope — narrows every figure on this page down to just
+  // matching transaction_items (see matchesItemFilter below), not only the
+  // Top-selling/Category tables. Comma-encoded in a single param each (see
+  // ProductScopeFilter) rather than repeated query keys.
+  const selectedCategories = new Set(
+    (params.categories ?? "").split(",").filter(Boolean)
+  );
+  const selectedProducts = new Set(
+    (params.products ?? "").split(",").filter(Boolean)
+  );
+  const hasProductFilter = selectedCategories.size > 0 || selectedProducts.size > 0;
+
   let sales: TransactionWithItems[];
   let serviceData: ServiceRevenuePoint[];
-  let restockData: { cost: number; quantity: number; created_at: string }[];
+  let restockData: {
+    product_id: string | null;
+    cost: number;
+    quantity: number;
+    created_at: string;
+  }[];
   let vaultMovementData: {
     amount: number;
     account: MoneyAccount;
     entry_type: "deposit" | "withdrawal";
     created_at: string;
   }[];
-  let productsData: { id: string; category_id: string | null }[];
+  let productsData: { id: string; name: string; category_id: string | null }[];
   let categoriesData: { id: string; name: string }[];
 
   try {
@@ -210,8 +238,13 @@ export default async function StatisticsPage({
            FROM service_transactions ${dateWhere} ORDER BY created_at ASC`,
           dateParams
         ),
-        queryRows<{ cost: number; quantity: number; created_at: string }>(
-          `SELECT cost, quantity, created_at FROM product_restocks ${dateWhere}`,
+        queryRows<{
+          product_id: string | null;
+          cost: number;
+          quantity: number;
+          created_at: string;
+        }>(
+          `SELECT product_id, cost, quantity, created_at FROM product_restocks ${dateWhere}`,
           dateParams
         ),
         queryRows<{
@@ -224,12 +257,15 @@ export default async function StatisticsPage({
            ${dateWhere ? `${dateWhere} AND` : "WHERE"} entry_type IN ('deposit', 'withdrawal')`,
           dateParams
         ),
-        // Unfiltered by is_active: a sale of a since-deactivated product should
-        // still attribute correctly to its category.
-        queryRows<{ id: string; category_id: string | null }>(
-          "SELECT id, category_id FROM products"
+        // Unfiltered by is_active: a sale of a since-deactivated product
+        // should still attribute correctly to its category, and should
+        // still be pickable in the Product filter below for past sales.
+        queryRows<{ id: string; name: string; category_id: string | null }>(
+          "SELECT id, name, category_id FROM products ORDER BY name"
         ),
-        queryRows<{ id: string; name: string }>("SELECT id, name FROM categories"),
+        queryRows<{ id: string; name: string }>(
+          "SELECT id, name FROM categories ORDER BY name"
+        ),
       ]);
 
     const itemsByTxnId = new Map<string, TransactionItem[]>();
@@ -252,9 +288,47 @@ export default async function StatisticsPage({
     return <LoadError message={(err as Error).message} />;
   }
 
+  // Category attribution reflects each product's CURRENT category, not its
+  // category at time of sale — products don't snapshot that history. Built
+  // up front (not after the aggregation loops, like this page used to)
+  // since matchesItemFilter itself needs it.
+  const categoryNameById = new Map(categoriesData.map((c) => [c.id, c.name]));
+  const categoryIdByProductId = new Map(
+    productsData.map((p) => [p.id, p.category_id])
+  );
+
+  // A line item matches the filter if its product is one of the selected
+  // products OR its (current) category is one of the selected categories —
+  // a union across both facets, not an intersection: picking a category
+  // plus one extra product outside it shows the category's items AND that
+  // product, rather than narrowing to their overlap (which could easily be
+  // empty and confusing). No filter selected at all matches everything, so
+  // every figure below collapses back to exactly its old unfiltered value.
+  function matchesItemFilter(item: TransactionItem): boolean {
+    if (!hasProductFilter) return true;
+    if (
+      selectedProducts.size > 0 &&
+      item.product_id !== null &&
+      selectedProducts.has(item.product_id)
+    ) {
+      return true;
+    }
+    if (selectedCategories.size > 0 && item.product_id !== null) {
+      const categoryId = categoryIdByProductId.get(item.product_id);
+      if (categoryId && selectedCategories.has(categoryId)) return true;
+    }
+    return false;
+  }
+
   // A voided service transaction had every entry it posted reversed — same
   // "excluded everywhere" treatment as a voided/personal-take sale.
   const serviceList = serviceData.filter((s) => !s.voided_at);
+  // E-service transactions have no product/category of their own — while a
+  // category/product filter is active, the page becomes purely about the
+  // selected product mix, so e-service figures drop out everywhere instead
+  // of showing whole-store numbers alongside filtered store numbers.
+  const effectiveServiceList = hasProductFilter ? [] : serviceList;
+
   // A voided sale had its stock and any posted income both reversed — it
   // isn't real revenue, demand, or a "transaction that happened" anymore,
   // so it's excluded the same way personal takes already are everywhere a
@@ -262,125 +336,9 @@ export default async function StatisticsPage({
   const nonVoidedSales = sales.filter((t) => !t.voided_at);
   const salesExcludingPersonal = nonVoidedSales.filter((t) => !t.is_personal_take);
 
-  const storeTotal = salesExcludingPersonal.reduce(
-    (sum, t) => sum + Number(t.total),
-    0
-  );
-  const eServiceTotal = serviceList.reduce((sum, s) => sum + Number(s.fee), 0);
-  const totalRevenue = storeTotal + eServiceTotal;
-  const transactionCount = nonVoidedSales.length + serviceList.length;
-  const avgSale =
-    salesExcludingPersonal.length > 0
-      ? storeTotal / salesExcludingPersonal.length
-      : 0;
-  const itemsSold = salesExcludingPersonal.reduce(
-    (sum, t) =>
-      sum + t.transaction_items.reduce((n, item) => n + item.quantity, 0),
-    0
-  );
-  const personalTakesValue = nonVoidedSales
-    .filter((t) => t.is_personal_take)
-    .reduce((sum, t) => sum + Number(t.total), 0);
-
-  // Real profit, not gross revenue: a store sale's line only has a known
-  // margin once its product has been restocked through the app at least
-  // once (unit_cost is snapshotted from products.cost at sale time — see
-  // migration 0021). Older sales and products never restocked here have
-  // unit_cost = null, so their revenue is tracked separately and excluded
-  // from the margin math rather than silently assumed to be 100% profit.
-  // E-Service fees have no COGS to subtract — the fee itself is the whole
-  // margin, same as IncomeBreakdownCard already treats it.
-  let storeRevenueWithKnownCost = 0;
-  let storeCogs = 0;
-  let storeRevenueWithUnknownCost = 0;
-  for (const t of salesExcludingPersonal) {
-    for (const item of t.transaction_items) {
-      const lineRevenue = Number(item.line_total);
-      if (item.unit_cost !== null) {
-        storeRevenueWithKnownCost += lineRevenue;
-        storeCogs += Number(item.unit_cost) * item.quantity;
-      } else {
-        storeRevenueWithUnknownCost += lineRevenue;
-      }
-    }
-  }
-  const storeMargin = storeRevenueWithKnownCost - storeCogs;
-  const grossProfit = storeMargin + eServiceTotal;
-
-  // E-Service fee income by wallet — same shape/reasoning as the dashboard's
-  // IncomeBreakdownCard, just range-scoped instead of daily.
-  const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
-  for (const s of serviceList) {
-    const fee = Number(s.fee);
-    if (s.wallet === "gcash") eServiceFees.gcash += fee;
-    else if (s.wallet === "maya") eServiceFees.maya += fee;
-    else eServiceFees.other += fee;
-  }
-
-  // Revenue by which account it actually landed in — a sale's full total for
-  // its payment_method, but only the FEE (not the pass-through principal)
-  // for a service, since that's the part that's actually store income.
-  const paymentRevenue = new Map<MoneyAccount, number>();
-  for (const t of salesExcludingPersonal) {
-    if (!t.payment_method) continue;
-    paymentRevenue.set(
-      t.payment_method,
-      (paymentRevenue.get(t.payment_method) ?? 0) + Number(t.total)
-    );
-  }
-  for (const s of serviceList) {
-    paymentRevenue.set(
-      s.payment_account,
-      (paymentRevenue.get(s.payment_account) ?? 0) + Number(s.fee)
-    );
-  }
-
-  const restockSpend = restockData.reduce(
-    (sum, r) => sum + Number(r.cost),
-    0
-  );
-  const restockUnits = restockData.reduce(
-    (sum, r) => sum + r.quantity,
-    0
-  );
-
-  // Deposits/withdrawals stay separate (not netted) — "how much did I add"
-  // and "how much did I take out" are different questions. Withdrawals are
-  // stored as negative amounts; flipped here so the display value reads
-  // positive.
-  let depositsTotal = 0;
-  let withdrawalsTotal = 0;
-  const depositsByAccount = new Map<MoneyAccount, number>();
-  const withdrawalsByAccount = new Map<MoneyAccount, number>();
-  for (const entry of vaultMovementData) {
-    const amount = Number(entry.amount);
-    if (entry.entry_type === "deposit") {
-      depositsTotal += amount;
-      depositsByAccount.set(
-        entry.account,
-        (depositsByAccount.get(entry.account) ?? 0) + amount
-      );
-    } else if (entry.entry_type === "withdrawal") {
-      withdrawalsTotal += -amount;
-      withdrawalsByAccount.set(
-        entry.account,
-        (withdrawalsByAccount.get(entry.account) ?? 0) + -amount
-      );
-    }
-  }
-
-  // Category attribution reflects each product's CURRENT category, not its
-  // category at time of sale — products don't snapshot that history.
-  const categoryNameById = new Map(
-    categoriesData.map((c) => [c.id, c.name])
-  );
-  const categoryIdByProductId = new Map(
-    productsData.map((p) => [p.id, p.category_id])
-  );
-
-  // costKnownRevenue/cost mirror the storeRevenueWithKnownCost/storeCogs
-  // split above, but per product — a line only contributes to profit once
-  // its unit_cost is known (see the comment on that split for why).
+  // costKnownRevenue/cost mirror storeRevenueWithKnownCost/storeCogs below,
+  // but per product — a line only contributes to profit once its unit_cost
+  // is known.
   type ProductAggEntry = {
     name: string;
     units: number;
@@ -417,6 +375,18 @@ export default async function StatisticsPage({
       : null;
   }
 
+  // "Customers" ≈ each individual sale/service action, bucketed by hour of
+  // day (store timezone) to surface when the store is actually busiest. A
+  // sale only counts toward its hour once it has at least one matching item
+  // (see the `touched` flag in the loop below), same "touched" definition
+  // Transactions/Average sale use.
+  const hourlyTraffic: HourlyBucket[] = Array.from({ length: 24 }, (_, hour) => ({
+    hour,
+    label: formatHourLabel(hour),
+    store: 0,
+    eService: 0,
+  }));
+
   const productAgg = new Map<string, ProductAggEntry>();
   const categoryRevenue = new Map<string, number>();
   // Same per-product aggregation as productAgg above, but scoped per
@@ -431,14 +401,49 @@ export default async function StatisticsPage({
     string,
     { name: string; units: number; byWeekday: number[]; byHour: number[] }
   >();
+  // Revenue by which account it actually landed in — a sale's (filtered)
+  // revenue for its payment_method, plus only the FEE (not the pass-through
+  // principal) for a service, since that's the part that's actually store
+  // income.
+  const paymentRevenue = new Map<MoneyAccount, number>();
+
+  // Real profit, not gross revenue: a store sale's line only has a known
+  // margin once its product has been restocked through the app at least
+  // once (unit_cost is snapshotted from products.cost at sale time). Older
+  // sales and products never restocked here have unit_cost = null, so their
+  // revenue is tracked separately and excluded from the margin math rather
+  // than assumed to be 100% profit. Every figure accumulated in this loop is
+  // summed ONLY over items matchesItemFilter accepts — with no filter
+  // active that's every item, so nothing here changes from before.
+  let storeTotal = 0;
+  let storeRevenueWithKnownCost = 0;
+  let storeCogs = 0;
+  let storeRevenueWithUnknownCost = 0;
+  let itemsSold = 0;
+  const touchedSaleIds = new Set<string>();
 
   for (const t of salesExcludingPersonal) {
     const weekdayIndex = WEEKDAY_ORDER.indexOf(storeWeekday(t.created_at));
     const hourIndex = storeHour(t.created_at);
+    let transactionRevenue = 0;
+    let touched = false;
+
     for (const item of t.transaction_items) {
+      if (!matchesItemFilter(item)) continue;
+      touched = true;
+
       const revenue = Number(item.line_total);
       const unitCost = item.unit_cost !== null ? Number(item.unit_cost) : null;
       const productKey = item.product_id ?? `name:${item.product_name}`;
+
+      transactionRevenue += revenue;
+      itemsSold += item.quantity;
+      if (unitCost !== null) {
+        storeRevenueWithKnownCost += revenue;
+        storeCogs += unitCost * item.quantity;
+      } else {
+        storeRevenueWithUnknownCost += revenue;
+      }
 
       bumpProductAgg(
         productAgg,
@@ -485,8 +490,139 @@ export default async function StatisticsPage({
         unitCost
       );
     }
+
+    if (touched) {
+      touchedSaleIds.add(t.id);
+      storeTotal += transactionRevenue;
+      hourlyTraffic[hourIndex].store += 1;
+      if (t.payment_method) {
+        paymentRevenue.set(
+          t.payment_method,
+          (paymentRevenue.get(t.payment_method) ?? 0) + transactionRevenue
+        );
+      }
+    }
+  }
+  const storeMargin = storeRevenueWithKnownCost - storeCogs;
+
+  // A personal take is valued at cost, not price (see checkout()'s own
+  // "no income" comment). Filtering narrows this the same way as a real
+  // sale: only the cost of matching items within each take counts, and a
+  // take only counts toward Transactions once it has at least one.
+  let personalTakesValue = 0;
+  const touchedPersonalTakeIds = new Set<string>();
+  for (const t of nonVoidedSales) {
+    if (!t.is_personal_take) continue;
+    let matchedCost = 0;
+    let touched = false;
+    for (const item of t.transaction_items) {
+      if (!matchesItemFilter(item)) continue;
+      touched = true;
+      if (item.unit_cost !== null) {
+        matchedCost += Number(item.unit_cost) * item.quantity;
+      }
+    }
+    if (touched) {
+      touchedPersonalTakeIds.add(t.id);
+      personalTakesValue += matchedCost;
+    }
   }
 
+  const eServiceTotal = effectiveServiceList.reduce(
+    (sum, s) => sum + Number(s.fee),
+    0
+  );
+  const totalRevenue = storeTotal + eServiceTotal;
+  const transactionCount =
+    touchedSaleIds.size + touchedPersonalTakeIds.size + effectiveServiceList.length;
+  const avgSale = touchedSaleIds.size > 0 ? storeTotal / touchedSaleIds.size : 0;
+  const grossProfit = storeMargin + eServiceTotal;
+
+  // E-Service fee income by wallet — same shape/reasoning as the dashboard's
+  // IncomeBreakdownCard, just range-scoped instead of daily. Empty whenever
+  // effectiveServiceList is (i.e. a category/product filter is active).
+  const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
+  for (const s of effectiveServiceList) {
+    const fee = Number(s.fee);
+    if (s.wallet === "gcash") eServiceFees.gcash += fee;
+    else if (s.wallet === "maya") eServiceFees.maya += fee;
+    else eServiceFees.other += fee;
+  }
+  for (const s of effectiveServiceList) {
+    paymentRevenue.set(
+      s.payment_account,
+      (paymentRevenue.get(s.payment_account) ?? 0) + Number(s.fee)
+    );
+  }
+  for (const s of effectiveServiceList) {
+    hourlyTraffic[storeHour(s.created_at)].eService += 1;
+  }
+
+  // A restock is attributable the same way a sold line is — via its own
+  // product_id (and that product's current category). A restock for a
+  // brand-new item (no product_id yet — see recordBulkRestock) can't be
+  // attributed to anything, so it's excluded while a filter is active
+  // rather than guessed at, same "gap stays visible" rule as cost-unknown
+  // revenue above.
+  function restockMatchesFilter(row: { product_id: string | null }): boolean {
+    if (!hasProductFilter) return true;
+    if (
+      selectedProducts.size > 0 &&
+      row.product_id !== null &&
+      selectedProducts.has(row.product_id)
+    ) {
+      return true;
+    }
+    if (selectedCategories.size > 0 && row.product_id !== null) {
+      const categoryId = categoryIdByProductId.get(row.product_id);
+      if (categoryId && selectedCategories.has(categoryId)) return true;
+    }
+    return false;
+  }
+  const filteredRestockData = restockData.filter(restockMatchesFilter);
+  const restockSpend = filteredRestockData.reduce(
+    (sum, r) => sum + Number(r.cost),
+    0
+  );
+  const restockUnits = filteredRestockData.reduce(
+    (sum, r) => sum + r.quantity,
+    0
+  );
+
+  // Deposits/withdrawals stay separate (not netted) — "how much did I add"
+  // and "how much did I take out" are different questions. Withdrawals are
+  // stored as negative amounts; flipped here so the display value reads
+  // positive. Unlike a restock, a vault deposit/withdrawal has no product or
+  // category of its own at all (not even indirectly) — while a filter is
+  // active these are zeroed rather than shown as whole-store numbers next
+  // to filtered ones.
+  let depositsTotal = 0;
+  let withdrawalsTotal = 0;
+  const depositsByAccount = new Map<MoneyAccount, number>();
+  const withdrawalsByAccount = new Map<MoneyAccount, number>();
+  if (!hasProductFilter) {
+    for (const entry of vaultMovementData) {
+      const amount = Number(entry.amount);
+      if (entry.entry_type === "deposit") {
+        depositsTotal += amount;
+        depositsByAccount.set(
+          entry.account,
+          (depositsByAccount.get(entry.account) ?? 0) + amount
+        );
+      } else if (entry.entry_type === "withdrawal") {
+        withdrawalsTotal += -amount;
+        withdrawalsByAccount.set(
+          entry.account,
+          (withdrawalsByAccount.get(entry.account) ?? 0) + -amount
+        );
+      }
+    }
+  }
+
+  // Every product sold in the window, revenue-highest first — not curated
+  // down to a "top 10" anymore, so the table (and its Total row) reflect
+  // everything, not just the leaders. TopProductsTable's own "show more"
+  // reveals the rest a page at a time.
   const topProducts: TopProduct[] = [...productAgg.entries()]
     .map(([key, v]) => ({
       key,
@@ -495,8 +631,7 @@ export default async function StatisticsPage({
       revenue: v.revenue,
       profit: productProfit(v),
     }))
-    .sort((a, b) => b.revenue - a.revenue)
-    .slice(0, 10);
+    .sort((a, b) => b.revenue - a.revenue);
 
   const productAnalysis: ProductTimeStats[] = [...productTimeAgg.entries()]
     .map(([key, v]) => ({
@@ -529,9 +664,10 @@ export default async function StatisticsPage({
   // for services — a per-unit service breaks out per variant (its unit_label
   // snapshot), so Xerox's Black & White and Colored show as separate rows.
   // "Units" for a flat/tiered service (no unit_label) falls back to a plain
-  // transaction count — there's no natural quantity for a GCash load.
+  // transaction count — there's no natural quantity for a GCash load. Empty
+  // whenever effectiveServiceList is.
   const serviceAgg = new Map<string, { units: number; revenue: number }>();
-  for (const s of serviceList) {
+  for (const s of effectiveServiceList) {
     const key = s.unit_label ? `${s.service_name} — ${s.unit_label}` : s.service_name;
     const existing = serviceAgg.get(key);
     const units = s.unit_quantity ?? 1;
@@ -547,24 +683,14 @@ export default async function StatisticsPage({
     .map(([name, v]) => ({ key: name, name, units: v.units, revenue: v.revenue }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  const buckets = buildProfitBuckets(sales, serviceList, params.from, params.to);
+  const buckets = buildProfitBuckets(
+    sales,
+    effectiveServiceList,
+    params.from,
+    params.to,
+    matchesItemFilter
+  );
 
-  // "Customers" ≈ each individual sale/service action, same units already
-  // summed into the Transactions summary card above — just bucketed by hour
-  // of day (store timezone) instead of totalled across the whole window, to
-  // surface when the store is actually busiest.
-  const hourlyTraffic: HourlyBucket[] = Array.from({ length: 24 }, (_, hour) => ({
-    hour,
-    label: formatHourLabel(hour),
-    store: 0,
-    eService: 0,
-  }));
-  for (const t of salesExcludingPersonal) {
-    hourlyTraffic[storeHour(t.created_at)].store += 1;
-  }
-  for (const s of serviceList) {
-    hourlyTraffic[storeHour(s.created_at)].eService += 1;
-  }
   const peakHour = hourlyTraffic.reduce((best, b) =>
     b.store + b.eService > best.store + best.eService ? b : best
   );
@@ -576,6 +702,20 @@ export default async function StatisticsPage({
 
   const subtitle = rangeSubtitle(params.from, params.to);
 
+  const categoryOptions: MultiSelectOption[] = categoriesData.map((c) => ({
+    key: c.id,
+    name: c.name,
+  }));
+  const productOptions: MultiSelectOption[] = productsData.map((p) => ({
+    key: p.id,
+    name: p.name,
+  }));
+  const preserveParams: Record<string, string> = {};
+  if (params.from) preserveParams.from = params.from;
+  if (params.to) preserveParams.to = params.to;
+  if (params.from_ts) preserveParams.from_ts = params.from_ts;
+  if (params.to_ts) preserveParams.to_ts = params.to_ts;
+
   return (
     <PageShell>
       <>
@@ -585,6 +725,15 @@ export default async function StatisticsPage({
           initial={{ q: "", from: params.from ?? "", to: params.to ?? "" }}
           basePath="/statistics"
           showSearch={false}
+        />
+
+        <ProductScopeFilter
+          categoryOptions={categoryOptions}
+          productOptions={productOptions}
+          initialCategories={[...selectedCategories]}
+          initialProducts={[...selectedProducts]}
+          basePath="/statistics"
+          preserveParams={preserveParams}
         />
 
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -647,7 +796,7 @@ export default async function StatisticsPage({
 
         <TopProductsTable
           key={`products-${subtitle}`}
-          title="Top-selling products"
+          title="Products"
           products={topProducts}
         />
 
@@ -657,7 +806,11 @@ export default async function StatisticsPage({
           products={serviceBreakdown}
           itemHeader="Service"
           unitsHeader="Qty"
-          emptyTitle="No e-service transactions in this window yet."
+          emptyTitle={
+            hasProductFilter
+              ? "E-Service isn't tied to a product or category, so it's excluded while filtering."
+              : "No e-service transactions in this window yet."
+          }
         />
 
         <CategoryLeaderboard
@@ -668,6 +821,12 @@ export default async function StatisticsPage({
 
         <ProductAnalysis key={`analysis-${subtitle}`} products={productAnalysis} />
 
+        {hasProductFilter ? (
+          <p className="text-xs text-muted-foreground">
+            Cash deposits/withdrawals aren&rsquo;t tied to a product or
+            category, so they&rsquo;re excluded while filtering.
+          </p>
+        ) : null}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <SummaryCard
             label="Cash deposited"
