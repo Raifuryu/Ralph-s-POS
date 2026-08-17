@@ -2,7 +2,6 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/emptyState";
 import { PageError, PageShell } from "@/components/pageShell";
-import { SummaryCard } from "@/components/summaryCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -264,38 +263,6 @@ export default async function InventoryPage({
     ),
   ].sort((a, b) => b.created_at.localeCompare(a.created_at));
 
-  // Money currently tied up in stock, and the profit (not gross revenue) if
-  // every unit on the shelf sold at its current price — active,
-  // currently-stocked items only (null stock means "never counted,"
-  // negative means "oversold, needs a recount," and a deactivated product
-  // isn't real inventory anymore). A product only has a known cost once
-  // it's been restocked through the app at least once; unknownCost* tracks
-  // how much that gap leaves out of both figures, same "cost unknown"
-  // convention Statistics already uses for Gross profit.
-  let totalInvested = 0;
-  let potentialRevenue = 0;
-  let unknownCostValue = 0;
-  let unknownCostItems = 0;
-  let trackedItems = 0;
-  for (const product of products) {
-    if (!product.is_active || product.stock === null || product.stock <= 0) {
-      continue;
-    }
-    trackedItems++;
-    const lineValue = Number(product.price) * product.stock;
-    potentialRevenue += lineValue;
-    if (product.cost !== null) {
-      totalInvested += Number(product.cost) * product.stock;
-    } else {
-      unknownCostItems++;
-      unknownCostValue += lineValue;
-    }
-  }
-  // Profit only over the cost-known portion — the unknown-cost slice of
-  // potentialRevenue has no matching cost to subtract, so it's excluded
-  // rather than assumed to be 100% margin.
-  const potentialProfit = potentialRevenue - unknownCostValue - totalInvested;
-
   return (
     <PageShell>
       <>
@@ -308,42 +275,6 @@ export default async function InventoryPage({
           </TabsList>
 
           <TabsContent value="items" className="flex min-w-0 flex-col gap-4 pt-3">
-            {trackedItems > 0 ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <SummaryCard
-                  label="Total invested"
-                  value={formatPeso(totalInvested)}
-                  breakdown={
-                    unknownCostItems > 0
-                      ? [
-                          {
-                            label: "Cost unknown (excluded)",
-                            value: `${unknownCostItems} item${unknownCostItems === 1 ? "" : "s"}`,
-                          },
-                        ]
-                      : undefined
-                  }
-                  compact
-                />
-                <SummaryCard
-                  label="Potential profit"
-                  value={formatPeso(potentialProfit)}
-                  breakdown={[
-                    { label: "If every item in stock sold", value: `${trackedItems} item${trackedItems === 1 ? "" : "s"}` },
-                    ...(unknownCostItems > 0
-                      ? [
-                          {
-                            label: "Cost unknown (excluded)",
-                            value: `${unknownCostItems} item${unknownCostItems === 1 ? "" : "s"}`,
-                          },
-                        ]
-                      : []),
-                  ]}
-                  compact
-                />
-              </div>
-            ) : null}
-
             <div className="flex flex-wrap gap-2">
               <Button
                 className="self-start"

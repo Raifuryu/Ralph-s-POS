@@ -92,6 +92,19 @@ export function storeDateFromKey(dateKey: string): Date {
   return new Date(Date.UTC(year, month - 1, day, 12 - 8, 0, 0));
 }
 
+/** "What window is this" phrasing for a date-range-filtered card/chart —
+    Statistics and Vault both show this next to figures scoped by
+    TransactionFilters' from/to. */
+export function rangeSubtitle(from?: string, to?: string): string {
+  if (from && to) {
+    if (from === to) return friendlyDayLabel(storeDateFromKey(from));
+    return `${formatDate(storeDateFromKey(from))} – ${formatDate(storeDateFromKey(to))}`;
+  }
+  if (from) return `Since ${formatDate(storeDateFromKey(from))}`;
+  if (to) return `Until ${formatDate(storeDateFromKey(to))}`;
+  return "All time";
+}
+
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Shifts a "YYYY-MM-DD" store-day key by N calendar days — the "Previous

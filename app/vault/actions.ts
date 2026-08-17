@@ -6,6 +6,10 @@ import { revalidatePath } from "next/cache";
 import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney } from "@/lib/money";
 import { pool } from "@/lib/mysql/pool";
+import {
+  labelPersonalTake,
+  settlePersonalTake,
+} from "@/lib/mysql/operations/settlePersonalTake";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
@@ -127,4 +131,65 @@ export async function loadMoreVaultEntries(
   offset: number
 ): Promise<{ entries: LedgerEntry[]; total: number }> {
   return fetchVaultLedgerPage(filters, offset);
+}
+
+export type PersonalTakeActionState = { error: string | null; ok?: boolean };
+
+function debtorFields(formData: FormData): {
+  debtorName: string | null;
+  debtorDescription: string | null;
+} {
+  return {
+    debtorName: String(formData.get("debtor_name") ?? "").trim() || null,
+    debtorDescription:
+      String(formData.get("debtor_description") ?? "").trim() || null,
+  };
+}
+
+/** Saves/updates who a personal take belongs to without settling it — the
+    owner might only find out (or remember) the debtor's name a while after
+    the take itself. */
+export async function labelDebtor(
+  _prev: PersonalTakeActionState,
+  formData: FormData
+): Promise<PersonalTakeActionState> {
+  const transactionId = String(formData.get("transaction_id") ?? "");
+  if (!transactionId) return { error: "Missing transaction." };
+
+  try {
+    await labelPersonalTake({ transactionId, ...debtorFields(formData) });
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, ok: true };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+/** Marks a personal take as paid back — posts the amount into whichever
+    account the debtor actually paid into, the first time that take's value
+    ever reaches the vault (see settlePersonalTake's own comment on why
+    nothing was posted at the time it was taken). */
+export async function settleDebt(
+  _prev: PersonalTakeActionState,
+  formData: FormData
+): Promise<PersonalTakeActionState> {
+  const transactionId = String(formData.get("transaction_id") ?? "");
+  if (!transactionId) return { error: "Missing transaction." };
+
+  const account = parseAccount(formData.get("account"));
+  if (!account) return { error: "Pick which account received the payment." };
+
+  try {
+    const user = await requireCurrentUser();
+    await settlePersonalTake(
+      { transactionId, account, ...debtorFields(formData) },
+      user.id
+    );
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, ok: true };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
 }

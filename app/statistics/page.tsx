@@ -2,11 +2,10 @@ import { PageError, PageShell } from "@/components/pageShell";
 import { SummaryCard } from "@/components/summaryCard";
 import { ACCOUNT_ORDER } from "@/lib/accountColors";
 import {
-  formatDate,
   formatHourLabel,
   formatPeso,
   formatShortDate,
-  friendlyDayLabel,
+  rangeSubtitle,
   storeDateFromKey,
   storeDayKey,
   storeHour,
@@ -74,18 +73,6 @@ function LoadError({ message }: { message: string }) {
       }
     />
   );
-}
-
-/** Same "what window is this" phrasing the dashboard used before it was
-    locked to daily-only — Statistics is the page that still needs it. */
-function rangeSubtitle(from?: string, to?: string): string {
-  if (from && to) {
-    if (from === to) return friendlyDayLabel(storeDateFromKey(from));
-    return `${formatDate(storeDateFromKey(from))} – ${formatDate(storeDateFromKey(to))}`;
-  }
-  if (from) return `Since ${formatDate(storeDateFromKey(from))}`;
-  if (to) return `Until ${formatDate(storeDateFromKey(to))}`;
-  return "All time";
 }
 
 /** Buckets sale + service PROFIT (not revenue) by store-day into a

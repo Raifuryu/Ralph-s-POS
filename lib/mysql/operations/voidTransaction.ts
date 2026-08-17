@@ -24,15 +24,27 @@ export async function voidTransaction(
       is_personal_take: boolean;
       total: number;
       payment_method: MoneyAccount | null;
+      settled_at: string | null;
     }>(
       conn,
-      "SELECT voided_at, is_personal_take, total, payment_method FROM transactions WHERE id = ? FOR UPDATE",
+      "SELECT voided_at, is_personal_take, total, payment_method, settled_at FROM transactions WHERE id = ? FOR UPDATE",
       [transactionId]
     );
     const transaction = rows[0];
     if (!transaction) throw new Error("Transaction not found");
     if (transaction.voided_at !== null) {
       throw new Error("This transaction has already been voided");
+    }
+    // A settled personal take already has its own vault deposit recording
+    // the debtor's payment (see settlePersonalTake) — voiding the take now
+    // wouldn't touch that deposit (the block below never reverses vault
+    // entries for a personal take), leaving money on record for a take
+    // that's supposedly never happened. Simplest correct rule: it's already
+    // resolved, so there's nothing left to void.
+    if (transaction.is_personal_take && transaction.settled_at !== null) {
+      throw new Error(
+        "This take has already been settled (paid back) — it can't be voided anymore"
+      );
     }
 
     await conn.query(

@@ -131,24 +131,35 @@ CREATE TABLE services (
 -- =============================================================================
 
 CREATE TABLE transactions (
-  id               CHAR(36)      NOT NULL PRIMARY KEY,
-  payment_method   ENUM('cash','gcash','maya'),
-  cashier_id       CHAR(36)      NOT NULL,
-  total            DECIMAL(12,2) NOT NULL,
-  created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  tendered         DECIMAL(12,2),
-  is_personal_take BOOLEAN       NOT NULL DEFAULT FALSE,
-  voided_at        TIMESTAMP     NULL,
-  voided_by        CHAR(36),
-  void_reason      TEXT,
-  visit_id         CHAR(36),
+  id                 CHAR(36)      NOT NULL PRIMARY KEY,
+  payment_method     ENUM('cash','gcash','maya'),
+  cashier_id         CHAR(36)      NOT NULL,
+  total              DECIMAL(12,2) NOT NULL,
+  created_at         TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  tendered           DECIMAL(12,2),
+  is_personal_take   BOOLEAN       NOT NULL DEFAULT FALSE,
+  voided_at          TIMESTAMP     NULL,
+  voided_by          CHAR(36),
+  void_reason        TEXT,
+  visit_id           CHAR(36),
+  -- Personal-take-only ("Utang"): who took it and why, and — once they've
+  -- paid it back — when and by whom that was recorded. Never meaningful on
+  -- a real sale; nothing enforces that beyond convention, same as
+  -- void_reason/voided_by only being meaningful on a voided row.
+  debtor_name        VARCHAR(255),
+  debtor_description TEXT,
+  settled_at         TIMESTAMP     NULL,
+  settled_by         CHAR(36),
   CONSTRAINT transactions_cashier_id_fkey FOREIGN KEY (cashier_id) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT transactions_voided_by_fkey FOREIGN KEY (voided_by) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT transactions_settled_by_fkey FOREIGN KEY (settled_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT transactions_tendered_check CHECK (tendered IS NULL OR (payment_method = 'cash' AND tendered >= total)),
   CONSTRAINT transactions_personal_take_payment_check CHECK (is_personal_take = (payment_method IS NULL)),
   CONSTRAINT transactions_personal_take_tendered_check CHECK (payment_method IS NOT NULL OR tendered IS NULL),
   CONSTRAINT transactions_total_check CHECK (total >= 0),
   CONSTRAINT transactions_void_fields_check CHECK (voided_at IS NOT NULL OR (voided_by IS NULL AND void_reason IS NULL)),
+  CONSTRAINT transactions_settled_fields_check CHECK (settled_at IS NOT NULL OR settled_by IS NULL),
+  CONSTRAINT transactions_settled_personal_take_check CHECK (settled_at IS NULL OR is_personal_take = TRUE),
   INDEX idx_transactions_visit_id (visit_id),
   INDEX transactions_cashier_id_idx (cashier_id),
   INDEX transactions_created_at_idx (created_at DESC)

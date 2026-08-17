@@ -5,6 +5,7 @@ import Link from "next/link";
 
 import { EmptyState } from "@/components/emptyState";
 import { FilterChip } from "@/components/filterChip";
+import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatDate, formatPeso, storeDayKey } from "@/lib/format";
@@ -326,6 +327,51 @@ export default function ItemsBrowser({
     [products]
   );
 
+  // Money currently tied up in stock, and the profit (not gross revenue) if
+  // every unit on the shelf sold at its current price — recomputed from
+  // `filtered`, not the full catalog, so the cards track whatever
+  // search/category/stock/expiry/cost filter is active above (e.g. narrow
+  // to one category and these two numbers narrow with it). Same eligibility
+  // rule as before either way: active, currently-stocked items only (null
+  // stock means "never counted," negative means "oversold, needs a
+  // recount," and a deactivated product isn't real inventory anymore). A
+  // product only has a known cost once it's been restocked through the app
+  // at least once; unknownCost* tracks how much that gap leaves out of both
+  // figures, same "cost unknown" convention Statistics uses for Gross
+  // profit.
+  const { totalInvested, potentialProfit, trackedItems, unknownCostItems } =
+    useMemo(() => {
+      let invested = 0;
+      let potentialRevenue = 0;
+      let unknownValue = 0;
+      let unknownItems = 0;
+      let tracked = 0;
+      for (const product of filtered) {
+        if (!product.is_active || product.stock === null || product.stock <= 0) {
+          continue;
+        }
+        tracked++;
+        const lineValue = Number(product.price) * product.stock;
+        potentialRevenue += lineValue;
+        if (product.cost !== null) {
+          invested += Number(product.cost) * product.stock;
+        } else {
+          unknownItems++;
+          unknownValue += lineValue;
+        }
+      }
+      // Profit only over the cost-known portion — the unknown-cost slice of
+      // potentialRevenue has no matching cost to subtract, so it's excluded
+      // rather than assumed to be 100% margin.
+      const profit = potentialRevenue - unknownValue - invested;
+      return {
+        totalInvested: invested,
+        potentialProfit: profit,
+        trackedItems: tracked,
+        unknownCostItems: unknownItems,
+      };
+    }, [filtered]);
+
   const categoryOptions: CategoryOption[] = [
     ...categories
       .filter((category) => categoryCounts.has(category.id))
@@ -347,6 +393,45 @@ export default function ItemsBrowser({
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {trackedItems > 0 ? (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <SummaryCard
+            label="Total invested"
+            value={formatPeso(totalInvested)}
+            breakdown={
+              unknownCostItems > 0
+                ? [
+                    {
+                      label: "Cost unknown (excluded)",
+                      value: `${unknownCostItems} item${unknownCostItems === 1 ? "" : "s"}`,
+                    },
+                  ]
+                : undefined
+            }
+            compact
+          />
+          <SummaryCard
+            label="Potential profit"
+            value={formatPeso(potentialProfit)}
+            breakdown={[
+              {
+                label: "If every item in stock sold",
+                value: `${trackedItems} item${trackedItems === 1 ? "" : "s"}`,
+              },
+              ...(unknownCostItems > 0
+                ? [
+                    {
+                      label: "Cost unknown (excluded)",
+                      value: `${unknownCostItems} item${unknownCostItems === 1 ? "" : "s"}`,
+                    },
+                  ]
+                : []),
+            ]}
+            compact
+          />
+        </div>
+      ) : null}
+
       <Input
         type="search"
         aria-label="Search inventory"

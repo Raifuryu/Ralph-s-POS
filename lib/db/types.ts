@@ -101,6 +101,10 @@ export type Database = {
           voided_by: string | null;
           void_reason: string | null;
           visit_id: string | null;
+          debtor_name: string | null;
+          debtor_description: string | null;
+          settled_at: string | null;
+          settled_by: string | null;
         };
       };
       transaction_items: {
