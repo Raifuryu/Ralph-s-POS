@@ -20,6 +20,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDateTime, formatPeso, storeDayKey } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import {
   labelDebtor,
   settleDebt,
@@ -212,17 +213,7 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
               Paid {formatDateTime(take.settled_at!)}
             </p>
           ) : (
-            <form
-              action={settleActionFn}
-              className="flex flex-col gap-2 border-t pt-3"
-            >
-              <input type="hidden" name="transaction_id" value={take.id} />
-              <input type="hidden" name="debtor_name" value={debtorName} />
-              <input
-                type="hidden"
-                name="debtor_description"
-                value={debtorDescription}
-              />
+            <div className="flex flex-col gap-2 border-t pt-3">
               <Label className="text-xs">Paid into</Label>
               <Tabs
                 value={account}
@@ -236,42 +227,171 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
                   ))}
                 </TabsList>
               </Tabs>
-              <input type="hidden" name="account" value={account} />
               {settleState.error ? (
                 <p role="alert" className="text-xs text-destructive">
                   {settleState.error}
                 </p>
               ) : null}
+              {/* Two separate forms, not one form with two submit buttons
+                  differentiated by name/value — React 19's Server Action
+                  form submission doesn't reliably preserve which button was
+                  the actual click target as the form's "submitter," so a
+                  shared form could silently record at_selling_price from
+                  the wrong button (this is exactly the bug: tapping
+                  "selling price" recorded cost instead). A hidden input
+                  with a fixed value inside each button's own form removes
+                  that ambiguity entirely — it doesn't depend on submitter
+                  tracking at all. */}
               <div className="flex flex-col gap-1.5">
-                <Button
-                  type="submit"
-                  name="at_selling_price"
-                  value="0"
-                  size="sm"
-                  disabled={isSettling}
-                >
-                  {isSettling
-                    ? "Recording…"
-                    : `Mark ${formatPeso(take.total)} as paid (cost)`}
-                </Button>
-                {priceTotal > 0 && priceTotal !== take.total ? (
+                <form action={settleActionFn}>
+                  <input type="hidden" name="transaction_id" value={take.id} />
+                  <input type="hidden" name="debtor_name" value={debtorName} />
+                  <input
+                    type="hidden"
+                    name="debtor_description"
+                    value={debtorDescription}
+                  />
+                  <input type="hidden" name="account" value={account} />
+                  <input type="hidden" name="at_selling_price" value="0" />
                   <Button
                     type="submit"
-                    name="at_selling_price"
-                    value="1"
-                    variant="outline"
                     size="sm"
                     disabled={isSettling}
+                    className="w-full"
                   >
                     {isSettling
                       ? "Recording…"
-                      : `Mark ${formatPeso(priceTotal)} as paid (selling price)`}
+                      : `Mark ${formatPeso(take.total)} as paid (cost)`}
                   </Button>
+                </form>
+                {priceTotal > 0 && priceTotal !== take.total ? (
+                  <form action={settleActionFn}>
+                    <input
+                      type="hidden"
+                      name="transaction_id"
+                      value={take.id}
+                    />
+                    <input
+                      type="hidden"
+                      name="debtor_name"
+                      value={debtorName}
+                    />
+                    <input
+                      type="hidden"
+                      name="debtor_description"
+                      value={debtorDescription}
+                    />
+                    <input type="hidden" name="account" value={account} />
+                    <input type="hidden" name="at_selling_price" value="1" />
+                    <Button
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      disabled={isSettling}
+                      className="w-full"
+                    >
+                      {isSettling
+                        ? "Recording…"
+                        : `Mark ${formatPeso(priceTotal)} as paid (selling price)`}
+                    </Button>
+                  </form>
                 ) : null}
               </div>
-            </form>
+            </div>
           )}
         </div>
+      ) : null}
+    </li>
+  );
+}
+
+type DebtorGroup = {
+  /** debtor_name as stored, or "" for an unlabeled take — kept separate
+      from `name` (the display string) so the empty-key group can still be
+      styled/labeled distinctly without a magic-string comparison against
+      "Not labeled yet" itself. */
+  key: string;
+  name: string;
+  takes: PersonalTake[];
+  total: number;
+};
+
+/** Compresses a list of takes down to one row per debtor, each carrying its
+    own subtotal (see DebtorGroupRow) — same "collapsed summary, tap for
+    detail" pattern the individual rows already use, just one level up.
+    Unlabeled takes (debtor_name null) group together under their own row
+    rather than one row each, same as everywhere else in this sheet treats
+    "not labeled yet" as its own bucket. Sorted by total descending — who's
+    holding the most owed shows up first. */
+function buildDebtorGroups(takes: PersonalTake[]): DebtorGroup[] {
+  const map = new Map<string, DebtorGroup>();
+  for (const take of takes) {
+    const key = take.debtor_name ?? "";
+    const existing = map.get(key);
+    if (existing) {
+      existing.takes.push(take);
+      existing.total += take.total;
+    } else {
+      map.set(key, {
+        key,
+        name: take.debtor_name ?? "Not labeled yet",
+        takes: [take],
+        total: take.total,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => b.total - a.total);
+}
+
+/** One debtor's combined row — tap to expand into their individual takes
+    (each still a full PersonalTakeRow, so labeling/settling per-take works
+    exactly the same as the ungrouped view). */
+function DebtorGroupRow({ group }: { group: DebtorGroup }) {
+  const [expanded, setExpanded] = useState(false);
+  const outstandingCount = group.takes.filter((t) => t.settled_at === null).length;
+
+  return (
+    <li className="rounded-lg border">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between gap-2 p-3 text-left"
+      >
+        <span className="min-w-0">
+          <span
+            className={cn(
+              "block text-sm font-medium",
+              group.key === "" && "font-normal italic text-muted-foreground"
+            )}
+          >
+            {group.name}
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            {group.takes.length} take{group.takes.length === 1 ? "" : "s"}
+            {outstandingCount > 0 && outstandingCount < group.takes.length
+              ? ` · ${outstandingCount} outstanding`
+              : ""}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-2">
+          <span className="text-sm font-medium tabular-nums">
+            {formatPeso(group.total)}
+          </span>
+          {expanded ? (
+            <ChevronDownIcon className="size-4 text-muted-foreground" />
+          ) : (
+            <ChevronRightIcon className="size-4 text-muted-foreground" />
+          )}
+        </span>
+      </button>
+
+      {expanded ? (
+        <ul className="flex flex-col gap-2 border-t p-2">
+          {group.takes.map((take) => (
+            <PersonalTakeRow key={take.id} take={take} />
+          ))}
+        </ul>
       ) : null}
     </li>
   );
@@ -304,6 +424,10 @@ export default function PersonalTakesSheet({
   const drawerOpen = openState.value;
 
   const [showAll, setShowAll] = useState(false);
+  // Grouped by debtor is the default view — one row per person instead of
+  // one per take reads much faster once there are more than a handful of
+  // takes, and pairs naturally with the total below ("who owes how much").
+  const [groupByDebtor, setGroupByDebtor] = useState(true);
   // Client-side, over the already-fetched (bounded) list — same reasoning
   // ItemsBrowser's search follows: no server round trip needed for a list
   // this size, and it composes for free with the Outstanding/All chip.
@@ -332,6 +456,12 @@ export default function PersonalTakesSheet({
 
   const visible = (showAll ? takes : outstanding).filter(matches);
   const filtersActive = needle !== "" || fromDate !== "" || toDate !== "";
+  // Reflects exactly what's on screen — respects search/date AND the
+  // Outstanding/All choice, so with the default Outstanding view this reads
+  // as "how much stock is out there unpaid" (what's actually been lost so
+  // far), and switching to All adds back everything already settled too.
+  const visibleTotal = visible.reduce((sum, take) => sum + take.total, 0);
+  const debtorGroups = buildDebtorGroups(visible);
 
   return (
     <Drawer
@@ -407,6 +537,30 @@ export default function PersonalTakesSheet({
                 />
               </div>
 
+              <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1">
+                <FilterChip
+                  label="Grouped by name"
+                  active={groupByDebtor}
+                  onClick={() => setGroupByDebtor(true)}
+                />
+                <FilterChip
+                  label="Individual"
+                  active={!groupByDebtor}
+                  onClick={() => setGroupByDebtor(false)}
+                />
+              </div>
+
+              {visible.length > 0 ? (
+                <div className="mb-3 rounded-lg border bg-muted/30 p-3">
+                  <p className="text-xs text-muted-foreground">
+                    {showAll ? "Total, all takes" : "Total outstanding"}
+                  </p>
+                  <p className="text-lg font-semibold tabular-nums">
+                    {formatPeso(visibleTotal)}
+                  </p>
+                </div>
+              ) : null}
+
               {visible.length === 0 ? (
                 <EmptyState
                   title={
@@ -415,6 +569,12 @@ export default function PersonalTakesSheet({
                       : "Nothing outstanding — all settled up."
                   }
                 />
+              ) : groupByDebtor ? (
+                <ul className="flex flex-col gap-2">
+                  {debtorGroups.map((group) => (
+                    <DebtorGroupRow key={group.key} group={group} />
+                  ))}
+                </ul>
               ) : (
                 <ul className="flex flex-col gap-2">
                   {visible.map((take) => (

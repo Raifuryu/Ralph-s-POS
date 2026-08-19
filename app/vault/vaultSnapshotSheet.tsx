@@ -29,7 +29,7 @@ import VaultCard from "../vaultCard";
 import { recordSnapshot, type VaultSnapshotState } from "./actions";
 
 const initialState: VaultSnapshotState = { error: null };
-const HISTORY_PAGE_SIZE = 20;
+const HISTORY_PAGE_SIZE = 7;
 
 export type TodaySnapshot = {
   cash_amount: number;
@@ -147,13 +147,17 @@ export default function VaultSnapshotSheet({
   );
 
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
-  // Client-side, over the already-fetched (bounded) history — same
-  // reasoning PersonalTakesSheet's own date filter follows: no server round
-  // trip needed for a list this size.
-  const [filterDay, setFilterDay] = useState("");
-  const filteredHistory = filterDay
-    ? history.filter((entry) => entry.day === filterDay)
-    : history;
+  // Client-side, over the already-fetched (bounded) history — same From/To
+  // range pattern PersonalTakesSheet's own date filter uses: no server
+  // round trip needed for a list this size.
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const dateFilterActive = fromDate !== "" || toDate !== "";
+  const filteredHistory = history.filter((entry) => {
+    if (fromDate && entry.day < fromDate) return false;
+    if (toDate && entry.day > toDate) return false;
+    return true;
+  });
 
   return (
     <Drawer
@@ -181,12 +185,13 @@ export default function VaultSnapshotSheet({
             uses for its own quick-amount chips. */}
         <div className="min-h-0 flex-1 overflow-y-auto p-4 pt-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <VaultCard balances={currentBalances} compact />
+            <VaultCard balances={currentBalances} showTotal compact />
             <IncomeBreakdownCard
               title="Today's income"
               store={todayStoreGross}
               storeProfit={todayStoreMargin}
               eService={todayEServiceFees}
+              showIncomeRow
               compact
             />
           </div>
@@ -209,27 +214,46 @@ export default function VaultSnapshotSheet({
 
             {history.length > 0 ? (
               <div className="flex items-end gap-2">
-                <div className="flex flex-1 flex-col gap-1">
-                  <Label htmlFor="snapshot-history-day" className="text-xs">
-                    Jump to a day
-                  </Label>
-                  <Input
-                    id="snapshot-history-day"
-                    type="date"
-                    value={filterDay}
-                    onChange={(event) => {
-                      setFilterDay(event.target.value);
-                      setVisibleCount(HISTORY_PAGE_SIZE);
-                    }}
-                  />
+                <div className="grid flex-1 grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="snapshot-history-from" className="text-xs">
+                      From
+                    </Label>
+                    <Input
+                      id="snapshot-history-from"
+                      type="date"
+                      value={fromDate}
+                      max={toDate || undefined}
+                      onChange={(event) => {
+                        setFromDate(event.target.value);
+                        setVisibleCount(HISTORY_PAGE_SIZE);
+                      }}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="snapshot-history-to" className="text-xs">
+                      To
+                    </Label>
+                    <Input
+                      id="snapshot-history-to"
+                      type="date"
+                      value={toDate}
+                      min={fromDate || undefined}
+                      onChange={(event) => {
+                        setToDate(event.target.value);
+                        setVisibleCount(HISTORY_PAGE_SIZE);
+                      }}
+                    />
+                  </div>
                 </div>
-                {filterDay ? (
+                {dateFilterActive ? (
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
                     onClick={() => {
-                      setFilterDay("");
+                      setFromDate("");
+                      setToDate("");
                       setVisibleCount(HISTORY_PAGE_SIZE);
                     }}
                   >
@@ -246,7 +270,7 @@ export default function VaultSnapshotSheet({
               </p>
             ) : filteredHistory.length === 0 ? (
               <p className="text-xs text-muted-foreground">
-                No snapshot recorded for that day.
+                No snapshots match this date range.
               </p>
             ) : (
               <ul className="flex flex-col gap-2">

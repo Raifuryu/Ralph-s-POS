@@ -67,7 +67,21 @@ function createPool(): mysql.Pool {
   // ...) still relies on the Node process's own TZ env var to parse a
   // timezone-less string correctly — see the Dockerfile/package.json
   // scripts, both set to Asia/Manila too, so both ends agree.
+  //
+  // Every table in mariadb/schema.sql is declared COLLATE=utf8mb4_unicode_ci,
+  // but mysql2 doesn't know that — without an explicit collation set here,
+  // it negotiates whatever collation the server offers first for utf8mb4
+  // (commonly utf8mb4_general_ci), and binds every `?` string parameter
+  // with THAT collation. Comparing a parameter against a real column then
+  // hits MariaDB's "Illegal mix of collations" error — not on every query,
+  // only ones that actually compare a bound parameter against an ENUM/
+  // VARCHAR column (e.g. `WHERE account = ?` against vault_entries.account),
+  // which is why this stayed hidden until adjustVaultBalance became the
+  // first such comparison actually exercised in production. SET NAMES here
+  // forces the session's own collation to match the schema's, so
+  // parameters and columns always agree.
   pool.on("connection", (connection) => {
+    connection.query("SET NAMES utf8mb4 COLLATE utf8mb4_unicode_ci");
     connection.query("SET time_zone = '+08:00'");
   });
 

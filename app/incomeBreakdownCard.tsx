@@ -45,6 +45,7 @@ export default function IncomeBreakdownCard({
   eService,
   storeProfit,
   personalTake,
+  showIncomeRow = false,
   compact = false,
   className,
 }: {
@@ -68,6 +69,13 @@ export default function IncomeBreakdownCard({
       personal take isn't income (see checkoutForm.tsx: no payment method,
       no tender, no income posted for one). Omitted (or 0) hides the line. */
   personalTake?: number;
+  /** Adds an explicit "Income" row in the footer, right above "Total
+      profit" — the same gross figure the headline already shows, just
+      named. Off by default (the headline number already IS this, no need
+      to repeat it in most places this card appears); the Vault snapshot
+      sheet turns it on so Income and Total profit sit named side by side
+      rather than relying on an unlabeled headline. */
+  showIncomeRow?: boolean;
   /** Tighter padding and a smaller headline number — see MoneyBreakdownCard. */
   compact?: boolean;
   className?: string;
@@ -121,8 +129,18 @@ export default function IncomeBreakdownCard({
       total={total}
       rows={rows}
       footer={
-        totalProfit !== undefined || (personalTake ?? 0) > 0 ? (
+        showIncomeRow || totalProfit !== undefined || (personalTake ?? 0) > 0 ? (
           <div className="flex flex-col gap-1">
+            {showIncomeRow ? (
+              <p className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="font-medium text-muted-foreground">
+                  Income
+                </span>
+                <span className="font-semibold tabular-nums">
+                  {formatPeso(total)}
+                </span>
+              </p>
+            ) : null}
             {totalProfit !== undefined ? (
               <p className="flex items-baseline justify-between gap-2 text-xs">
                 <span className="font-medium text-muted-foreground">
