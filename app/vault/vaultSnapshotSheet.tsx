@@ -180,8 +180,19 @@ export default function VaultSnapshotSheet({
 
   // Defaults to Today — Yesterday exists for exactly one scenario (closing
   // out last night's count after midnight has already rolled the date
-  // over), not a routine choice.
+  // over), not a routine choice. Once today already has a row, that window
+  // has passed — the chooser hides itself (see !today below) and this
+  // snaps back to "today" rather than leaving a stale "yesterday" selection
+  // behind. Adjusted during render off a tracked-prop comparison, same
+  // "derived state resets when a prop changes" idiom openState above uses —
+  // not a useEffect, which would cause an extra post-commit render for a
+  // value already known synchronously here.
   const [targetDay, setTargetDay] = useState<TargetDay>("today");
+  const [trackedToday, setTrackedToday] = useState(today);
+  if (trackedToday !== today) {
+    setTrackedToday(today);
+    if (today) setTargetDay("today");
+  }
   const relevantSnapshot = targetDay === "yesterday" ? yesterday : today;
 
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
@@ -333,33 +344,44 @@ export default function VaultSnapshotSheet({
         </div>
 
         <form action={formAction}>
-          <div className="flex flex-col gap-2 border-t p-4 pb-2">
-            <Label className="text-xs">Record as</Label>
-            <Tabs
-              value={targetDay}
-              onValueChange={(value) => setTargetDay(value as TargetDay)}
-            >
-              <TabsList className="w-full">
-                <TabsTrigger value="today" className="flex-1">
-                  Today
-                </TabsTrigger>
-                <TabsTrigger value="yesterday" className="flex-1">
-                  Yesterday
-                </TabsTrigger>
-              </TabsList>
-            </Tabs>
-            {targetDay === "yesterday" ? (
-              <p className="text-xs text-muted-foreground">
-                Still uses the current balances and today&rsquo;s figures
-                above — only choose Yesterday if nothing&rsquo;s happened yet
-                today (e.g. recording last night&rsquo;s close right after
-                midnight).
-              </p>
-            ) : null}
-          </div>
+          {/* Only offered while today has nothing recorded yet — that's the
+              one window "yesterday" is actually for (catching up on a
+              missed close right after midnight). Once today is saved, the
+              choice is moot and the picker just gets in the way. */}
+          {!today ? (
+            <div className="flex flex-col gap-2 border-t p-4 pb-2">
+              <Label className="text-xs">Record as</Label>
+              <Tabs
+                value={targetDay}
+                onValueChange={(value) => setTargetDay(value as TargetDay)}
+              >
+                <TabsList className="w-full">
+                  <TabsTrigger value="today" className="flex-1">
+                    Today
+                  </TabsTrigger>
+                  <TabsTrigger value="yesterday" className="flex-1">
+                    Yesterday
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+              {targetDay === "yesterday" ? (
+                <p className="text-xs text-muted-foreground">
+                  Still uses the current balances and today&rsquo;s figures
+                  above — only choose Yesterday if nothing&rsquo;s happened
+                  yet today (e.g. recording last night&rsquo;s close right
+                  after midnight).
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <input type="hidden" name="target_day" value={targetDay} />
 
-          <DrawerFooter className="flex-row items-center justify-end gap-2 p-4 pt-0 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <DrawerFooter
+            className={cn(
+              "flex-row items-center justify-end gap-2 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]",
+              today ? "border-t" : "pt-0"
+            )}
+          >
             <DrawerClose
               className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
             >
