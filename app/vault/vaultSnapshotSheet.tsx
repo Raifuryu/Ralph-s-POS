@@ -37,6 +37,10 @@ export type TodaySnapshot = {
   maya_amount: number;
   total_money: number;
   profit: number;
+  /** Gross revenue (before cost) for that store-day — null for a row saved
+      before this column existed, shown as a real gap rather than a guessed
+      0 (see the column's own comment in mariadb/schema.sql). */
+  income: number | null;
   updated_at: string;
 };
 
@@ -50,11 +54,18 @@ export type SnapshotHistoryEntry = {
   maya: number;
   totalMoney: number;
   profit: number;
+  /** Null for a snapshot recorded before the income column existed — see
+      TodaySnapshot's own comment. */
+  income: number | null;
 };
 
-/** One past snapshot — tap to expand into its cash/gcash/maya breakdown,
-    same "collapsed summary, tap for detail" interaction RestockHistorySheet
-    uses for its own receipts. */
+/** One past snapshot — tap to expand into its cash/gcash/maya breakdown
+    (plus their combined total), same "collapsed summary, tap for detail"
+    interaction RestockHistorySheet uses for its own receipts. The
+    collapsed line leads with income (what came in that day) rather than
+    the money-on-hand total — the total is still there, just one tap away,
+    since it's a balance rather than a day-specific figure and reads better
+    alongside the per-account breakdown than next to profit. */
 function SnapshotHistoryRow({ entry }: { entry: SnapshotHistoryEntry }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -71,8 +82,10 @@ function SnapshotHistoryRow({ entry }: { entry: SnapshotHistoryEntry }) {
             {friendlyDayLabel(storeDateFromKey(entry.day))}
           </span>
           <span className="block text-xs text-muted-foreground">
-            {formatPeso(entry.totalMoney)} total · {formatPeso(entry.profit)}{" "}
-            profit
+            {entry.income !== null
+              ? `${formatPeso(entry.income)} income · `
+              : ""}
+            {formatPeso(entry.profit)} profit
           </span>
         </span>
         {expanded ? (
@@ -94,6 +107,10 @@ function SnapshotHistoryRow({ entry }: { entry: SnapshotHistoryEntry }) {
           <div className="flex items-center justify-between">
             <span className="text-muted-foreground">Maya</span>
             <span className="tabular-nums">{formatPeso(entry.maya)}</span>
+          </div>
+          <div className="mt-1 flex items-center justify-between border-t pt-1 font-medium">
+            <span>Total</span>
+            <span className="tabular-nums">{formatPeso(entry.totalMoney)}</span>
           </div>
         </div>
       ) : null}
@@ -185,7 +202,7 @@ export default function VaultSnapshotSheet({
             uses for its own quick-amount chips. */}
         <div className="min-h-0 flex-1 overflow-y-auto p-4 pt-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <VaultCard balances={currentBalances} showTotal compact />
+            <VaultCard balances={currentBalances} compact />
             <IncomeBreakdownCard
               title="Today's income"
               store={todayStoreGross}

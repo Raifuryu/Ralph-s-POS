@@ -84,6 +84,7 @@ export default async function VaultPage({
     maya_amount: number;
     total_money: number;
     profit: number;
+    income: number | null;
   }[];
 
   try {
@@ -141,7 +142,7 @@ export default async function VaultPage({
         // fetching, unlike the ?debts-gated queries above, since it also
         // decides the snapshot button's own label ("Record" vs "Update").
         queryRows<TodaySnapshot>(
-          `SELECT cash_amount, gcash_amount, maya_amount, total_money, profit, updated_at
+          `SELECT cash_amount, gcash_amount, maya_amount, total_money, profit, income, updated_at
            FROM vault_snapshots WHERE snapshot_day = CURDATE()`
         ),
         // The snapshot sheet's own preview — deliberately "today" rather
@@ -188,8 +189,9 @@ export default async function VaultPage({
               maya_amount: number;
               total_money: number;
               profit: number;
+              income: number | null;
             }>(
-              `SELECT snapshot_day, cash_amount, gcash_amount, maya_amount, total_money, profit
+              `SELECT snapshot_day, cash_amount, gcash_amount, maya_amount, total_money, profit, income
                FROM vault_snapshots
                WHERE snapshot_day < CURDATE()
                ORDER BY snapshot_day DESC
@@ -250,6 +252,10 @@ export default async function VaultPage({
         maya_amount: Number(todaySnapshotRows[0].maya_amount),
         total_money: Number(todaySnapshotRows[0].total_money),
         profit: Number(todaySnapshotRows[0].profit),
+        income:
+          todaySnapshotRows[0].income !== null
+            ? Number(todaySnapshotRows[0].income)
+            : null,
         updated_at: todaySnapshotRows[0].updated_at,
       }
     : null;
@@ -271,6 +277,7 @@ export default async function VaultPage({
     maya: Number(row.maya_amount),
     totalMoney: Number(row.total_money),
     profit: Number(row.profit),
+    income: row.income !== null ? Number(row.income) : null,
   }));
 
   const todayStoreGross = Number(todayStoreRows[0]?.gross ?? 0);

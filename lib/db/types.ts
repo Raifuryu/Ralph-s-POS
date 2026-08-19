@@ -173,6 +173,7 @@ export type Database = {
           maya_amount: number;
           total_money: number;
           profit: number;
+          income: number | null;
           created_by: string;
           created_at: string;
           updated_at: string;

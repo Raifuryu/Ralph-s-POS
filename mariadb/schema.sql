@@ -295,6 +295,11 @@ CREATE TABLE vault_snapshots (
   maya_amount  DECIMAL(12,2) NOT NULL,
   total_money  DECIMAL(12,2) NOT NULL,
   profit       DECIMAL(12,2) NOT NULL,
+  -- Gross revenue (store + e-service, before cost) for that store-day —
+  -- added after `profit`, so rows recorded before this column existed are
+  -- NULL rather than a guessed/backfilled 0; the History row shows that gap
+  -- honestly instead of implying a $0 income day.
+  income       DECIMAL(12,2),
   created_by   CHAR(36)      NOT NULL,
   created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
