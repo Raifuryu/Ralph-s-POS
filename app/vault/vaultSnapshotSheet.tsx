@@ -24,12 +24,18 @@ import { type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import IncomeBreakdownCard, { type EServiceFees } from "../incomeBreakdownCard";
 import VaultCard from "../vaultCard";
 import { recordSnapshot, type VaultSnapshotState } from "./actions";
 
 const initialState: VaultSnapshotState = { error: null };
 const HISTORY_PAGE_SIZE = 7;
+
+/** Which store-day the recorded snapshot gets filed under — see the
+    warning copy near the Today/Yesterday chooser in the form below for why
+    "yesterday" only produces a correct reading right after midnight. */
+type TargetDay = "today" | "yesterday";
 
 export type TodaySnapshot = {
   cash_amount: number;
@@ -120,19 +126,25 @@ function SnapshotHistoryRow({ entry }: { entry: SnapshotHistoryEntry }) {
 
 /**
  * The whole-vault snapshot: one tap, no typing — captures the 3 account
- * balances exactly as vault_balance already computes them, plus today's
- * profit-so-far, as a single row for today (see recordSnapshot — tapping
- * again the same day just overwrites it, so there's only ever one snapshot
- * per day and the latest tap always prevails). The preview reuses the exact
- * same Money on hand / Income cards the Sales dashboard shows (VaultCard +
- * IncomeBreakdownCard) — this IS that same pair, just always scoped to
- * today and shown a tap away instead of at the top of the page. Below that,
- * every earlier day's saved snapshot is browsable (History). URL-driven
- * (?snapshot) like the other Vault/Inventory sheets.
+ * balances exactly as vault_balance already computes them, plus that day's
+ * profit/income so far, as a single row (see recordSnapshot — tapping again
+ * for the same target day just overwrites it, so there's only ever one
+ * snapshot per day and the latest tap always prevails). Files under today by
+ * default; the Today/Yesterday chooser near the submit button exists only
+ * for closing out last night's count after midnight — the balances read are
+ * always the CURRENT live ones, never reconstructed, so "Yesterday" only
+ * produces a correct reading before anything's happened yet today. The
+ * preview reuses the exact same Money on hand / Income cards the Sales
+ * dashboard shows (VaultCard + IncomeBreakdownCard) — this IS that same
+ * pair, just always scoped to today and shown a tap away instead of at the
+ * top of the page. Below that, every earlier day's saved snapshot is
+ * browsable (History). URL-driven (?snapshot) like the other Vault/
+ * Inventory sheets.
  */
 export default function VaultSnapshotSheet({
   open,
   today,
+  yesterday,
   currentBalances,
   todayStoreGross,
   todayStoreMargin,
@@ -141,6 +153,9 @@ export default function VaultSnapshotSheet({
 }: {
   open: boolean;
   today: TodaySnapshot | null;
+  /** Whether yesterday already has a saved row — only used to word the
+      description/button correctly when the Yesterday tab is selected. */
+  yesterday: TodaySnapshot | null;
   currentBalances: Map<MoneyAccount, number>;
   todayStoreGross: number;
   todayStoreMargin: number;
@@ -162,6 +177,12 @@ export default function VaultSnapshotSheet({
     recordSnapshot,
     initialState
   );
+
+  // Defaults to Today — Yesterday exists for exactly one scenario (closing
+  // out last night's count after midnight has already rolled the date
+  // over), not a routine choice.
+  const [targetDay, setTargetDay] = useState<TargetDay>("today");
+  const relevantSnapshot = targetDay === "yesterday" ? yesterday : today;
 
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
   // Client-side, over the already-fetched (bounded) history — same From/To
@@ -189,9 +210,9 @@ export default function VaultSnapshotSheet({
         <DrawerHeader>
           <DrawerTitle>Vault snapshot</DrawerTitle>
           <DrawerDescription>
-            {today
-              ? `Already recorded today (last updated ${formatDateTime(today.updated_at)}) — recording again replaces it with the current figures below.`
-              : "Saves the figures below as today's snapshot — one per day, the latest tap always prevails."}
+            {relevantSnapshot
+              ? `Already recorded for ${targetDay} (last updated ${formatDateTime(relevantSnapshot.updated_at)}) — recording again replaces it with the current figures below.`
+              : `Saves the figures below as ${targetDay === "yesterday" ? "yesterday's" : "today's"} snapshot — one per day, the latest tap always prevails.`}
           </DrawerDescription>
         </DrawerHeader>
 
@@ -220,7 +241,8 @@ export default function VaultSnapshotSheet({
           ) : null}
           {state.result ? (
             <p role="status" className="mt-3 text-sm text-success">
-              Snapshot saved.
+              Snapshot saved for{" "}
+              {friendlyDayLabel(storeDateFromKey(state.result.day))}.
             </p>
           ) : null}
 
@@ -311,7 +333,33 @@ export default function VaultSnapshotSheet({
         </div>
 
         <form action={formAction}>
-          <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <div className="flex flex-col gap-2 border-t p-4 pb-2">
+            <Label className="text-xs">Record as</Label>
+            <Tabs
+              value={targetDay}
+              onValueChange={(value) => setTargetDay(value as TargetDay)}
+            >
+              <TabsList className="w-full">
+                <TabsTrigger value="today" className="flex-1">
+                  Today
+                </TabsTrigger>
+                <TabsTrigger value="yesterday" className="flex-1">
+                  Yesterday
+                </TabsTrigger>
+              </TabsList>
+            </Tabs>
+            {targetDay === "yesterday" ? (
+              <p className="text-xs text-muted-foreground">
+                Still uses the current balances and today&rsquo;s figures
+                above — only choose Yesterday if nothing&rsquo;s happened yet
+                today (e.g. recording last night&rsquo;s close right after
+                midnight).
+              </p>
+            ) : null}
+          </div>
+          <input type="hidden" name="target_day" value={targetDay} />
+
+          <DrawerFooter className="flex-row items-center justify-end gap-2 p-4 pt-0 pb-[calc(1rem+env(safe-area-inset-bottom))]">
             <DrawerClose
               className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
             >
@@ -320,7 +368,7 @@ export default function VaultSnapshotSheet({
             <Button type="submit" size="sm" disabled={isPending}>
               {isPending
                 ? "Recording…"
-                : today
+                : relevantSnapshot
                   ? "Update snapshot"
                   : "Record snapshot"}
             </Button>

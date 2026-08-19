@@ -15,6 +15,7 @@ import { adjustVaultBalance } from "@/lib/mysql/operations/adjustVaultBalance";
 import {
   recordVaultSnapshot,
   type VaultSnapshotResult,
+  type VaultSnapshotTargetDay,
 } from "@/lib/mysql/operations/recordVaultSnapshot";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
@@ -176,21 +177,22 @@ export type VaultSnapshotState = {
 
 /** Whole-vault snapshot — one tap, no typing: the 3 account balances are
     read straight off vault_balance (see recordVaultSnapshot), the same
-    figures the account cards themselves already show, plus today's profit
-    so far. Saved as one row per store-day — a second tap the same day just
-    overwrites the first. */
-// useActionState requires this exact (prevState, formData) shape even
-// though neither is read below: there's nothing left to type once the
-// balances come straight from vault_balance instead of the form.
-/* eslint-disable @typescript-eslint/no-unused-vars */
+    figures the account cards themselves already show, plus that day's
+    profit/income so far. `target_day` picks which store-day the row is
+    filed under ("today" or "yesterday" — see VaultSnapshotSheet's own
+    warning copy on why "yesterday" only makes sense right after midnight,
+    before anything's happened yet today). Saved as one row per store-day —
+    a second tap for the same target day just overwrites the first. */
 export async function recordSnapshot(
   _prev: VaultSnapshotState,
-  _formData: FormData
+  formData: FormData
 ): Promise<VaultSnapshotState> {
-  /* eslint-enable @typescript-eslint/no-unused-vars */
+  const targetDay: VaultSnapshotTargetDay =
+    formData.get("target_day") === "yesterday" ? "yesterday" : "today";
+
   try {
     const user = await requireCurrentUser();
-    const result = await recordVaultSnapshot(user.id);
+    const result = await recordVaultSnapshot(targetDay, user.id);
     revalidatePath("/vault");
     revalidatePath("/");
     return { error: null, result };

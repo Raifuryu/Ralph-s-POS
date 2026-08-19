@@ -75,6 +75,7 @@ export default async function VaultPage({
   let storeMarginRows: { store_margin: number }[];
   let eServiceFeeRows: { total_fee: number }[];
   let todaySnapshotRows: TodaySnapshot[];
+  let yesterdaySnapshotRows: TodaySnapshot[];
   let todayStoreRows: { gross: number; margin: number }[];
   let todayEServiceRows: { wallet: MoneyAccount | null; fee: number }[];
   let snapshotHistoryRows: {
@@ -97,6 +98,7 @@ export default async function VaultPage({
       storeMarginRows,
       eServiceFeeRows,
       todaySnapshotRows,
+      yesterdaySnapshotRows,
       todayStoreRows,
       todayEServiceRows,
       snapshotHistoryRows,
@@ -145,6 +147,15 @@ export default async function VaultPage({
           `SELECT cash_amount, gcash_amount, maya_amount, total_money, profit, income, updated_at
            FROM vault_snapshots WHERE snapshot_day = CURDATE()`
         ),
+        // Same, one day back — only needed once the sheet's own Today/
+        // Yesterday chooser is actually visible, so gated like the rest of
+        // the sheet-only queries below.
+        showSnapshot
+          ? queryRows<TodaySnapshot>(
+              `SELECT cash_amount, gcash_amount, maya_amount, total_money, profit, income, updated_at
+               FROM vault_snapshots WHERE snapshot_day = CURDATE() - INTERVAL 1 DAY`
+            )
+          : Promise.resolve([]),
         // The snapshot sheet's own preview — deliberately "today" rather
         // than this page's from/to filter, since the sheet always snapshots
         // right now regardless of what window happens to be selected below.
@@ -245,20 +256,20 @@ export default async function VaultPage({
   const windowProfit =
     Number(storeMarginRows[0]?.store_margin ?? 0) + Number(eServiceFeeRows[0]?.total_fee ?? 0);
 
-  const todaySnapshot: TodaySnapshot | null = todaySnapshotRows[0]
-    ? {
-        cash_amount: Number(todaySnapshotRows[0].cash_amount),
-        gcash_amount: Number(todaySnapshotRows[0].gcash_amount),
-        maya_amount: Number(todaySnapshotRows[0].maya_amount),
-        total_money: Number(todaySnapshotRows[0].total_money),
-        profit: Number(todaySnapshotRows[0].profit),
-        income:
-          todaySnapshotRows[0].income !== null
-            ? Number(todaySnapshotRows[0].income)
-            : null,
-        updated_at: todaySnapshotRows[0].updated_at,
-      }
-    : null;
+  function mapSnapshotRow(row: TodaySnapshot | undefined): TodaySnapshot | null {
+    if (!row) return null;
+    return {
+      cash_amount: Number(row.cash_amount),
+      gcash_amount: Number(row.gcash_amount),
+      maya_amount: Number(row.maya_amount),
+      total_money: Number(row.total_money),
+      profit: Number(row.profit),
+      income: row.income !== null ? Number(row.income) : null,
+      updated_at: row.updated_at,
+    };
+  }
+  const todaySnapshot = mapSnapshotRow(todaySnapshotRows[0]);
+  const yesterdaySnapshot = mapSnapshotRow(yesterdaySnapshotRows[0]);
 
   const balances = new Map(
     balanceRows
@@ -358,6 +369,7 @@ export default async function VaultPage({
       <VaultSnapshotSheet
         open={showSnapshot}
         today={todaySnapshot}
+        yesterday={yesterdaySnapshot}
         currentBalances={balances}
         todayStoreGross={todayStoreGross}
         todayStoreMargin={todayStoreMargin}
