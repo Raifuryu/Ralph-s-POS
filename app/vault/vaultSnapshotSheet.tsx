@@ -24,18 +24,17 @@ import { type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import IncomeBreakdownCard, { type EServiceFees } from "../incomeBreakdownCard";
 import VaultCard from "../vaultCard";
 import { recordSnapshot, type VaultSnapshotState } from "./actions";
 
 const initialState: VaultSnapshotState = { error: null };
 const HISTORY_PAGE_SIZE = 7;
-
-/** Which store-day the recorded snapshot gets filed under — see the
-    warning copy near the Today/Yesterday chooser in the form below for why
-    "yesterday" only produces a correct reading right after midnight. */
-type TargetDay = "today" | "yesterday";
 
 export type TodaySnapshot = {
   cash_amount: number;
@@ -129,17 +128,19 @@ function SnapshotHistoryRow({ entry }: { entry: SnapshotHistoryEntry }) {
  * balances exactly as vault_balance already computes them, plus that day's
  * profit/income so far, as a single row (see recordSnapshot — tapping again
  * for the same target day just overwrites it, so there's only ever one
- * snapshot per day and the latest tap always prevails). Files under today by
- * default; the Today/Yesterday chooser near the submit button exists only
- * for closing out last night's count after midnight — the balances read are
- * always the CURRENT live ones, never reconstructed, so "Yesterday" only
- * produces a correct reading before anything's happened yet today. The
- * preview reuses the exact same Money on hand / Income cards the Sales
- * dashboard shows (VaultCard + IncomeBreakdownCard) — this IS that same
- * pair, just always scoped to today and shown a tap away instead of at the
- * top of the page. Below that, every earlier day's saved snapshot is
- * browsable (History). URL-driven (?snapshot) like the other Vault/
- * Inventory sheets.
+ * snapshot per day and the latest tap always prevails). Files under today
+ * by default; while today has nothing recorded yet, the "Record snapshot"
+ * button opens a small popup instead of submitting directly, letting you
+ * also pick Yesterday — for closing out last night's count after midnight
+ * has already rolled the date over. The balances read are always the
+ * CURRENT live ones, never reconstructed, so "Yesterday" only produces a
+ * correct reading before anything's happened yet today (see the popup's own
+ * warning copy). The preview reuses the exact same Money on hand / Income
+ * cards the Sales dashboard shows (VaultCard + IncomeBreakdownCard) — this
+ * IS that same pair, just always scoped to today and shown a tap away
+ * instead of at the top of the page. Below that, every earlier day's saved
+ * snapshot is browsable (History). URL-driven (?snapshot) like the other
+ * Vault/Inventory sheets.
  */
 export default function VaultSnapshotSheet({
   open,
@@ -154,7 +155,7 @@ export default function VaultSnapshotSheet({
   open: boolean;
   today: TodaySnapshot | null;
   /** Whether yesterday already has a saved row — only used to word the
-      description/button correctly when the Yesterday tab is selected. */
+      popup's Yesterday button correctly ("Update" vs "Record"). */
   yesterday: TodaySnapshot | null;
   currentBalances: Map<MoneyAccount, number>;
   todayStoreGross: number;
@@ -177,23 +178,6 @@ export default function VaultSnapshotSheet({
     recordSnapshot,
     initialState
   );
-
-  // Defaults to Today — Yesterday exists for exactly one scenario (closing
-  // out last night's count after midnight has already rolled the date
-  // over), not a routine choice. Once today already has a row, that window
-  // has passed — the chooser hides itself (see !today below) and this
-  // snaps back to "today" rather than leaving a stale "yesterday" selection
-  // behind. Adjusted during render off a tracked-prop comparison, same
-  // "derived state resets when a prop changes" idiom openState above uses —
-  // not a useEffect, which would cause an extra post-commit render for a
-  // value already known synchronously here.
-  const [targetDay, setTargetDay] = useState<TargetDay>("today");
-  const [trackedToday, setTrackedToday] = useState(today);
-  if (trackedToday !== today) {
-    setTrackedToday(today);
-    if (today) setTargetDay("today");
-  }
-  const relevantSnapshot = targetDay === "yesterday" ? yesterday : today;
 
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
   // Client-side, over the already-fetched (bounded) history — same From/To
@@ -221,9 +205,9 @@ export default function VaultSnapshotSheet({
         <DrawerHeader>
           <DrawerTitle>Vault snapshot</DrawerTitle>
           <DrawerDescription>
-            {relevantSnapshot
-              ? `Already recorded for ${targetDay} (last updated ${formatDateTime(relevantSnapshot.updated_at)}) — recording again replaces it with the current figures below.`
-              : `Saves the figures below as ${targetDay === "yesterday" ? "yesterday's" : "today's"} snapshot — one per day, the latest tap always prevails.`}
+            {today
+              ? `Already recorded today (last updated ${formatDateTime(today.updated_at)}) — recording again replaces it with the current figures below.`
+              : "Saves the figures below as today's snapshot — one per day, the latest tap always prevails."}
           </DrawerDescription>
         </DrawerHeader>
 
@@ -343,59 +327,75 @@ export default function VaultSnapshotSheet({
           </div>
         </div>
 
-        <form action={formAction}>
-          {/* Only offered while today has nothing recorded yet — that's the
-              one window "yesterday" is actually for (catching up on a
-              missed close right after midnight). Once today is saved, the
-              choice is moot and the picker just gets in the way. */}
-          {!today ? (
-            <div className="flex flex-col gap-2 border-t p-4 pb-2">
-              <Label className="text-xs">Record as</Label>
-              <Tabs
-                value={targetDay}
-                onValueChange={(value) => setTargetDay(value as TargetDay)}
-              >
-                <TabsList className="w-full">
-                  <TabsTrigger value="today" className="flex-1">
-                    Today
-                  </TabsTrigger>
-                  <TabsTrigger value="yesterday" className="flex-1">
-                    Yesterday
-                  </TabsTrigger>
-                </TabsList>
-              </Tabs>
-              {targetDay === "yesterday" ? (
-                <p className="text-xs text-muted-foreground">
-                  Still uses the current balances and today&rsquo;s figures
-                  above — only choose Yesterday if nothing&rsquo;s happened
-                  yet today (e.g. recording last night&rsquo;s close right
-                  after midnight).
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-          <input type="hidden" name="target_day" value={targetDay} />
-
-          <DrawerFooter
-            className={cn(
-              "flex-row items-center justify-end gap-2 p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]",
-              today ? "border-t" : "pt-0"
-            )}
+        <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <DrawerClose
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
           >
-            <DrawerClose
-              className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
-            >
-              Close
-            </DrawerClose>
-            <Button type="submit" size="sm" disabled={isPending}>
-              {isPending
-                ? "Recording…"
-                : relevantSnapshot
-                  ? "Update snapshot"
-                  : "Record snapshot"}
-            </Button>
-          </DrawerFooter>
-        </form>
+            Close
+          </DrawerClose>
+
+          {today ? (
+            // Unambiguous once today already has a row — nothing to choose,
+            // just resubmit the current figures onto that same row.
+            <form action={formAction}>
+              <input type="hidden" name="target_day" value="today" />
+              <Button type="submit" size="sm" disabled={isPending}>
+                {isPending ? "Recording…" : "Update snapshot"}
+              </Button>
+            </form>
+          ) : (
+            // A popup, not a pre-selected tab — you only decide Today vs
+            // Yesterday at the moment you actually record, and each choice
+            // is its own tiny form (fixed hidden target_day, not a shared
+            // submit button differentiated by value) for the same reason
+            // the personal-take settle buttons are two forms: React 19
+            // doesn't reliably preserve which button was the submitter when
+            // several share one form.
+            <Popover>
+              <PopoverTrigger
+                disabled={isPending}
+                className={cn(buttonVariants({ size: "sm" }))}
+              >
+                {isPending ? "Recording…" : "Record snapshot"}
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-56">
+                <p className="mb-1 px-2 pt-1 text-xs font-medium text-muted-foreground">
+                  Record snapshot for
+                </p>
+                <div className="flex flex-col gap-1 p-1">
+                  <form action={formAction}>
+                    <input type="hidden" name="target_day" value="today" />
+                    <Button
+                      type="submit"
+                      size="sm"
+                      className="w-full"
+                      disabled={isPending}
+                    >
+                      Today
+                    </Button>
+                  </form>
+                  <form action={formAction}>
+                    <input type="hidden" name="target_day" value="yesterday" />
+                    <Button
+                      type="submit"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      disabled={isPending}
+                    >
+                      {yesterday ? "Update yesterday" : "Yesterday"}
+                    </Button>
+                  </form>
+                </div>
+                <p className="px-2 pb-1 text-xs text-muted-foreground">
+                  Yesterday still uses the current balances/figures above —
+                  only choose it if nothing&rsquo;s happened yet today (e.g.
+                  right after midnight).
+                </p>
+              </PopoverContent>
+            </Popover>
+          )}
+        </DrawerFooter>
       </DrawerContent>
     </Drawer>
   );
