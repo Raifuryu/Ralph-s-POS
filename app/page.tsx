@@ -204,14 +204,22 @@ export default async function Home({
   // from products.cost at sale time). Older/never-restocked lines have no
   // cost recorded, so they're tracked separately and excluded rather than
   // assumed to be 100% margin.
+  // storeCogs is the flip side of storeMargin — what those same known-cost
+  // lines actually cost to stock (quantity × the unit_cost snapshot from
+  // sale time), shown on the card as its own "Invested" line so the reader
+  // can see income, invested, and profit as three separate numbers instead
+  // of only the netted-together margin.
   let storeMargin = 0;
+  let storeCogs = 0;
   let storeRevenueWithUnknownCost = 0;
   for (const t of sales) {
     if (t.is_personal_take || t.voided_at) continue;
     for (const item of t.transaction_items) {
       const lineRevenue = Number(item.line_total);
       if (item.unit_cost !== null) {
-        storeMargin += lineRevenue - Number(item.unit_cost) * item.quantity;
+        const lineCost = Number(item.unit_cost) * item.quantity;
+        storeMargin += lineRevenue - lineCost;
+        storeCogs += lineCost;
       } else {
         storeRevenueWithUnknownCost += lineRevenue;
       }
@@ -293,6 +301,7 @@ export default async function Home({
             store={storeTotal}
             eService={eServiceFees}
             storeProfit={storeMargin}
+            invested={storeCogs}
             compact
           />
         </div>

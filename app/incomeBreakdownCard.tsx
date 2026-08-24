@@ -44,6 +44,7 @@ export default function IncomeBreakdownCard({
   storeLabel = "Store",
   eService,
   storeProfit,
+  invested,
   personalTake,
   showIncomeRow = false,
   compact = false,
@@ -64,6 +65,12 @@ export default function IncomeBreakdownCard({
       already pure profit since the principal is a pass-through). Omit to
       fall back to plain gross everywhere, and skip the profit line. */
   storeProfit?: number;
+  /** What the sold, known-cost lines actually cost to stock (the flip side
+      of storeProfit — revenue minus this equals it) — e.g. storeCogs.
+      Shown as its own muted "Invested" footer line, above Total profit, so
+      income/invested/profit read as three separate numbers instead of only
+      the netted margin. Omit to hide the line. */
+  invested?: number;
   /** Value of stock taken out without a sale — shown as its own footer
       line, never folded into `store`/`total`/the proportion bar, since a
       personal take isn't income (see checkoutForm.tsx: no payment method,
@@ -129,7 +136,10 @@ export default function IncomeBreakdownCard({
       total={total}
       rows={rows}
       footer={
-        showIncomeRow || totalProfit !== undefined || (personalTake ?? 0) > 0 ? (
+        showIncomeRow ||
+        invested !== undefined ||
+        totalProfit !== undefined ||
+        (personalTake ?? 0) > 0 ? (
           <div className="flex flex-col gap-1">
             {showIncomeRow ? (
               <p className="flex items-baseline justify-between gap-2 text-xs">
@@ -138,6 +148,14 @@ export default function IncomeBreakdownCard({
                 </span>
                 <span className="font-semibold tabular-nums">
                   {formatPeso(total)}
+                </span>
+              </p>
+            ) : null}
+            {invested !== undefined ? (
+              <p className="flex items-baseline justify-between gap-2 text-xs">
+                <span className="text-muted-foreground">Invested</span>
+                <span className="tabular-nums text-muted-foreground">
+                  {formatPeso(invested)}
                 </span>
               </p>
             ) : null}

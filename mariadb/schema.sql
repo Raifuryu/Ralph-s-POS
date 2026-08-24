@@ -332,6 +332,15 @@ GROUP BY ti.product_id;
 -- unnest(enum_range()) + LEFT JOIN LATERAL; MariaDB gets the same result via
 -- a 3-row literal account list + a correlated subquery for "the latest count"
 -- and another for "movements since it".
+--
+-- The literals below are COLLATE-pinned explicitly — a view's string
+-- literals otherwise freeze whatever collation_connection happened to be in
+-- effect the moment CREATE VIEW ran, not the querying session's own
+-- collation, which caused a real "Illegal mix of collations" error once
+-- anything outside the view (e.g. a bound `?` parameter, correctly
+-- utf8mb4_unicode_ci per lib/mysql/pool.ts's SET NAMES) got compared
+-- against acct.account. Pinning it here makes the view's own output
+-- collation-stable regardless of session state at creation time.
 CREATE VIEW vault_balance AS
 SELECT
   acct.account,
@@ -346,9 +355,9 @@ SELECT
   AS DECIMAL(12,2)) AS balance,
   lc.created_at AS last_counted_at
 FROM (
-  SELECT 'cash' AS account
-  UNION ALL SELECT 'gcash'
-  UNION ALL SELECT 'maya'
+  SELECT 'cash' COLLATE utf8mb4_unicode_ci AS account
+  UNION ALL SELECT 'gcash' COLLATE utf8mb4_unicode_ci
+  UNION ALL SELECT 'maya' COLLATE utf8mb4_unicode_ci
 ) acct
 LEFT JOIN (
   SELECT ve.account, ve.amount, ve.seq, ve.created_at

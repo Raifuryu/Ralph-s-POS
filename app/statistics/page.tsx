@@ -831,6 +831,7 @@ export default async function StatisticsPage({
             subtitle={subtitle}
             store={storeTotal}
             eService={eServiceFees}
+            invested={storeCogs}
             personalTake={personalTakesValue}
           />
           <PaymentBreakdownCard
