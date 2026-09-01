@@ -12,12 +12,16 @@ import {
 } from "@/lib/mysql/operations/settlePersonalTake";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
 import { adjustVaultBalance } from "@/lib/mysql/operations/adjustVaultBalance";
+import { adjustFundBalance } from "@/lib/mysql/operations/adjustFundBalance";
 import {
   recordVaultSnapshot,
   type VaultSnapshotResult,
   type VaultSnapshotTargetDay,
 } from "@/lib/mysql/operations/recordVaultSnapshot";
-import { transferFund as transferFundOperation } from "@/lib/mysql/operations/transferFund";
+import {
+  transferFund as transferFundOperation,
+  transferFundsToAccount,
+} from "@/lib/mysql/operations/transferFund";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
 import {
@@ -25,6 +29,8 @@ import {
   isProfitFund,
   MONEY_ACCOUNTS,
   MONEY_ACCOUNT_LABELS,
+  PROFIT_FUNDS,
+  PROFIT_FUND_LABELS,
   type MoneyAccount,
   type ProfitFund,
 } from "@/lib/types";
@@ -45,6 +51,11 @@ export type VaultCountState = {
 function parseAccount(raw: FormDataEntryValue | null): MoneyAccount | null {
   const value = String(raw ?? "");
   return isMoneyAccount(value) ? value : null;
+}
+
+function parseFund(raw: FormDataEntryValue | null): ProfitFund | null {
+  const value = String(raw ?? "");
+  return isProfitFund(value) ? value : null;
 }
 
 /** Money leaving the box. The note is required — the DB enforces it too. */
@@ -93,6 +104,66 @@ export async function cashIn(
   await pool.query(
     "INSERT INTO vault_entries (id, entry_type, account, amount, note, created_by) VALUES (?, 'deposit', ?, ?, ?, ?)",
     [randomUUID(), account, amount, note, user.id]
+  );
+
+  revalidatePath("/vault");
+  revalidatePath("/");
+  return { error: null, ok: true };
+}
+
+/** Money leaving a fund directly, without transferring it into an account
+    first — e.g. paying a supplier straight from For Restock. Same shape as
+    cashOut, just tagged with `fund` instead of a real account (`account`
+    is required but doesn't matter here — see adjustFundBalance's own
+    comment on the placeholder). No balance check, matching cashOut's own
+    "the owner knows what they're doing" trust level for a manual entry. */
+export async function cashOutFund(
+  _prev: VaultMoveState,
+  formData: FormData
+): Promise<VaultMoveState> {
+  const fund = parseFund(formData.get("fund"));
+  if (!fund) return { error: "Pick which fund the money leaves." };
+
+  const amount = parseMoney(formData.get("amount"), { requirePositive: true });
+  if (amount === "bad" || amount === null) {
+    return { error: "Enter an amount above zero." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim();
+  if (!note) return { error: "Say what the money was taken for." };
+
+  const user = await requireCurrentUser();
+  await pool.query(
+    "INSERT INTO vault_entries (id, entry_type, account, fund, amount, note, created_by) VALUES (?, 'withdrawal', 'cash', ?, ?, ?, ?)",
+    [randomUUID(), fund, -amount, note, user.id]
+  );
+
+  revalidatePath("/vault");
+  revalidatePath("/");
+  return { error: null, ok: true };
+}
+
+/** Money added to a fund directly, outside of a sale/service fee — e.g.
+    correcting or seeding a fund's balance. Same shape as cashIn, just
+    tagged with `fund` instead of a real account. */
+export async function cashInFund(
+  _prev: VaultMoveState,
+  formData: FormData
+): Promise<VaultMoveState> {
+  const fund = parseFund(formData.get("fund"));
+  if (!fund) return { error: "Pick which fund the money goes into." };
+
+  const amount = parseMoney(formData.get("amount"), { requirePositive: true });
+  if (amount === "bad" || amount === null) {
+    return { error: "Enter an amount above zero." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+
+  const user = await requireCurrentUser();
+  await pool.query(
+    "INSERT INTO vault_entries (id, entry_type, account, fund, amount, note, created_by) VALUES (?, 'deposit', 'cash', ?, ?, ?, ?)",
+    [randomUUID(), fund, amount, note, user.id]
   );
 
   revalidatePath("/vault");
@@ -178,6 +249,43 @@ export async function adjustBalance(
   }
 }
 
+export type FundAdjustState = {
+  error: string | null;
+  result?: {
+    fund: ProfitFund;
+    previousBalance: number;
+    targetBalance: number;
+    delta: number;
+  };
+};
+
+/** Corrects one fund's balance to whatever it's supposed to actually be —
+    the mirror of adjustBalance, targeting adjustFundBalance instead. */
+export async function adjustFund(
+  _prev: FundAdjustState,
+  formData: FormData
+): Promise<FundAdjustState> {
+  const fund = parseFund(formData.get("fund"));
+  if (!fund) return { error: "Pick which fund to adjust." };
+
+  const targetBalance = parseMoney(formData.get("target_balance"));
+  if (targetBalance === "bad" || targetBalance === null) {
+    return { error: "Enter the correct balance (0 or more, up to centavos)." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await adjustFundBalance({ fund, targetBalance, note }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
 export type VaultSnapshotState = {
   error: string | null;
   result?: VaultSnapshotResult;
@@ -246,6 +354,48 @@ export async function transferFund(
   try {
     const user = await requireCurrentUser();
     const result = await transferFundOperation({ fund: fundRaw, splits }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type TransferToAccountState = {
+  error: string | null;
+  result?: { account: MoneyAccount; transferred: number };
+};
+
+/** The mirror of transferFund, started from an account's own sheet instead
+    of a fund's — see transferFundsToAccount's own doc comment.
+    `split_profit`/`split_reinvest` are read straight off the form's
+    per-fund inputs, same convention transferFund's own split_* fields
+    already use. */
+export async function transferToAccount(
+  _prev: TransferToAccountState,
+  formData: FormData
+): Promise<TransferToAccountState> {
+  const account = parseAccount(formData.get("account"));
+  if (!account) return { error: "Pick which account to transfer into." };
+
+  const splits: { fund: ProfitFund; amount: number }[] = [];
+  for (const fund of PROFIT_FUNDS) {
+    const amount = parseMoney(formData.get(`split_${fund}`), { allowBlank: true });
+    if (amount === "bad") {
+      return { error: `Enter a valid amount for ${PROFIT_FUND_LABELS[fund]}.` };
+    }
+    if (amount !== null && amount > 0) {
+      splits.push({ fund, amount });
+    }
+  }
+  if (splits.length === 0) {
+    return { error: "Enter at least one amount to transfer." };
+  }
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await transferFundsToAccount({ account, splits }, user.id);
     revalidatePath("/vault");
     revalidatePath("/");
     return { error: null, result };

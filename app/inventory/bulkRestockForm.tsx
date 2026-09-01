@@ -20,30 +20,16 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { costFor, costPerPieceFor, sellingPriceFor, toNumber, totalFor } from "@/lib/pricing";
-import {
-  MONEY_ACCOUNT_LABELS,
-  PROFIT_FUND_LABELS,
-  type Category,
-  type MoneyAccount,
-  type Product,
-  type ProfitFund,
-} from "@/lib/types";
+import type { Category, MoneyAccount, Product, ProfitFund } from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
+import RestockPaymentSheet, {
+  autoFillReinvest,
+  emptyPayment,
+  PAYMENT_SOURCES,
+} from "./restockPaymentSheet";
 
 const initialState: InventoryState = { error: null };
-
-type PaymentSource = MoneyAccount | ProfitFund;
-
-/** Cash/GCash/Maya first (physical), then the two funds — Profit and For
-    Restock can pay for a restock directly, no transfer needed first (see
-    recordBulkRestock's own doc comment). */
-const PAYMENT_SOURCES: { value: PaymentSource; label: string }[] = [
-  { value: "cash", label: MONEY_ACCOUNT_LABELS.cash },
-  { value: "gcash", label: MONEY_ACCOUNT_LABELS.gcash },
-  { value: "maya", label: MONEY_ACCOUNT_LABELS.maya },
-  { value: "profit", label: PROFIT_FUND_LABELS.profit },
-  { value: "reinvest", label: PROFIT_FUND_LABELS.reinvest },
-];
+const BULK_RESTOCK_FORM_ID = "bulk-restock-form";
 
 // Owners fill this out while walking around the mall picking up stock — a
 // long, interruptible session (phone locks, the sheet gets closed by
@@ -626,28 +612,12 @@ export default function BulkRestockForm({
     initialState
   );
 
-  function balanceFor(source: PaymentSource): number {
-    if (source === "profit" || source === "reinvest") {
-      return fundBalances.get(source) ?? 0;
-    }
-    return vaultBalances.get(source) ?? 0;
-  }
-
-  // Optional whole-batch "paid with" split — collapsed by default so a
-  // restock that isn't being tracked against a fund/account doesn't have to
-  // look at 5 extra fields it'll never fill in.
-  const [showPayment, setShowPayment] = useState(false);
-  const [paidWith, setPaidWith] = useState<Record<PaymentSource, string>>({
-    cash: "",
-    gcash: "",
-    maya: "",
-    profit: "",
-    reinvest: "",
-  });
-  const paidTotal = PAYMENT_SOURCES.reduce(
-    (sum, source) => sum + (toNumber(paidWith[source.value]) || 0),
-    0
-  );
+  // Required whole-batch "paid with" split, edited in its own nested sheet
+  // (RestockPaymentSheet) — state lives up here since the hidden `payment`
+  // input below and the auto-fill on open both need it too. The sheet's own
+  // submit-disabled check computes its own paymentTotal(paidWith).
+  const [paidWith, setPaidWith] = useState(emptyPayment());
+  const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
   // Fixed key for the initial line (not crypto.randomUUID()) — this runs
   // during SSR too, and a random key here would mismatch on hydration since
   // it's rendered into id/htmlFor attributes. Lines added later via "Add
@@ -807,7 +777,9 @@ export default function BulkRestockForm({
   const hasIncompleteLine = lines.some((line) => !isLineComplete(line));
 
   return (
+    <>
     <form
+      id={BULK_RESTOCK_FORM_ID}
       action={formAction}
       onSubmit={() => {
         // Only reachable via the submit button, which is disabled while any
@@ -900,75 +872,6 @@ export default function BulkRestockForm({
           <PlusIcon data-icon="inline-start" />
           Add another item
         </Button>
-
-        <div className="flex flex-col gap-2 rounded-lg border p-2.5">
-          <button
-            type="button"
-            onClick={() => setShowPayment((v) => !v)}
-            aria-expanded={showPayment}
-            className="flex items-center justify-between gap-2 text-left text-sm font-medium"
-          >
-            <span>
-              Paid with{" "}
-              <span className="font-normal text-muted-foreground">
-                (optional)
-              </span>
-            </span>
-            {showPayment ? (
-              <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
-            ) : (
-              <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
-            )}
-          </button>
-          {showPayment ? (
-            <div className="flex flex-col gap-2 pt-1">
-              <p className="text-xs text-muted-foreground">
-                Records where this purchase&rsquo;s money actually came
-                from — doesn&rsquo;t have to cover the whole total, and For
-                Restock/Profit can be spent from directly, no transfer
-                needed first.
-              </p>
-              {PAYMENT_SOURCES.map((source) => (
-                <div key={source.value} className="flex flex-col gap-1">
-                  <Label htmlFor={`pay-${source.value}`} className="text-xs">
-                    {source.label}{" "}
-                    <span className="font-normal text-muted-foreground">
-                      ({formatPeso(balanceFor(source.value))} available)
-                    </span>
-                  </Label>
-                  <Input
-                    id={`pay-${source.value}`}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    inputMode="decimal"
-                    placeholder="0.00"
-                    value={paidWith[source.value]}
-                    onChange={(event) =>
-                      setPaidWith((prev) => ({
-                        ...prev,
-                        [source.value]: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
-              ))}
-              <p className="text-xs text-muted-foreground">
-                Paid:{" "}
-                <span className="font-medium text-foreground">
-                  {formatPeso(paidTotal)}
-                </span>{" "}
-                of {formatPeso(total)}
-                {paidTotal > total ? (
-                  <span className="text-destructive">
-                    {" "}
-                    — more than the total
-                  </span>
-                ) : null}
-              </p>
-            </div>
-          ) : null}
-        </div>
       </div>
 
       {state.error ? (
@@ -1006,18 +909,46 @@ export default function BulkRestockForm({
             Cancel
           </Button>
           <Button
-            type="submit"
-            disabled={
-              isPending ||
-              lines.length === 0 ||
-              hasIncompleteLine ||
-              paidTotal > total
-            }
+            type="button"
+            disabled={isPending || lines.length === 0 || hasIncompleteLine}
+            onClick={() => {
+              // Pre-fills For Restock up to whatever it actually has —
+              // once, only while the field is still untouched, so
+              // reopening the sheet after the owner has already typed
+              // something (even 0) never clobbers it. The remainder is
+              // deliberately left for them to assign themselves (see
+              // RestockPaymentSheet's own doc comment).
+              if (paidWith.reinvest.trim() === "") {
+                const amount = autoFillReinvest(
+                  total,
+                  fundBalances.get("reinvest") ?? 0
+                );
+                if (amount > 0) {
+                  setPaidWith((prev) => ({
+                    ...prev,
+                    reinvest: amount.toFixed(2),
+                  }));
+                }
+              }
+              setPaymentSheetOpen(true);
+            }}
           >
-            {isPending ? "Recording…" : "Record purchase"}
+            Continue
           </Button>
         </div>
       </DrawerFooter>
     </form>
+    <RestockPaymentSheet
+      open={paymentSheetOpen}
+      onOpenChange={setPaymentSheetOpen}
+      formId={BULK_RESTOCK_FORM_ID}
+      total={total}
+      vaultBalances={vaultBalances}
+      fundBalances={fundBalances}
+      paidWith={paidWith}
+      onChange={setPaidWith}
+      isPending={isPending}
+    />
+    </>
   );
 }

@@ -13,6 +13,7 @@ import {
   SALES_FILTERS,
   type MoneyAccount,
   type Product,
+  type ProfitFund,
   type SalesEntry,
   type Service,
   type ServiceTransaction,
@@ -124,10 +125,11 @@ export default async function Home({
   let topSellers: { product_id: string; units_sold: number }[];
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
+  let fundRows: { fund: ProfitFund; balance: number }[];
   let sales: TransactionWithItems[];
 
   try {
-    [transactions, serviceList, products, topSellers, services, vaultRows] =
+    [transactions, serviceList, products, topSellers, services, vaultRows, fundRows] =
       await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
@@ -151,6 +153,13 @@ export default async function Home({
         ),
         queryRows<{ account: MoneyAccount; balance: number }>(
           "SELECT account, balance FROM vault_balance"
+        ),
+        // Display-only, per the owner's own request — shown on this card's
+        // footer purely as a front-end lens on the same money already
+        // counted above, nothing here writes anything back (see
+        // VaultCard's own comment on why it's a footer, not more rows).
+        queryRows<{ fund: ProfitFund; balance: number }>(
+          "SELECT fund, balance FROM vault_fund_balance"
         ),
       ]);
 
@@ -254,6 +263,10 @@ export default async function Home({
   for (const row of vaultRows) {
     if (row.account) vault.set(row.account, Number(row.balance ?? 0));
   }
+  const funds = new Map<ProfitFund, number>();
+  for (const row of fundRows) {
+    if (row.fund) funds.set(row.fund, Number(row.balance ?? 0));
+  }
 
   // Same reasoning as storeMargin: counted over the whole filtered window via
   // `sales`, not just the visible page.
@@ -294,7 +307,7 @@ export default async function Home({
             two headline cards — equal weight, stacked on mobile, side by
             side from sm up. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <VaultCard balances={vault} compact />
+          <VaultCard balances={vault} funds={funds} compact />
           <IncomeBreakdownCard
             title={incomeTitle}
             subtitle={incomeSubtitle}

@@ -1,12 +1,16 @@
 import Link from "next/link";
 
 import { PageError, PageShell } from "@/components/pageShell";
-import { SummaryCard } from "@/components/summaryCard";
 import { Button } from "@/components/ui/button";
-import { formatPeso, rangeSubtitle } from "@/lib/format";
+import { formatPeso } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
-import { PROFIT_FUNDS, type MoneyAccount, type ProfitFund } from "@/lib/types";
+import {
+  PROFIT_FUNDS,
+  PROFIT_FUND_LABELS,
+  type MoneyAccount,
+  type ProfitFund,
+} from "@/lib/types";
 import { type EServiceFees } from "../incomeBreakdownCard";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
@@ -52,31 +56,11 @@ export default async function VaultPage({
   const showDebts = params.debts !== undefined;
   const showSnapshot = params.snapshot !== undefined;
 
-  // Same from_ts/to_ts the ledger below is already filtered by — real
-  // profit (price - known cost, plus e-service fees, never gross revenue),
-  // same definition Statistics uses. `created_at` is unambiguous in both
-  // queries below (transaction_items has no column of that name), so one
-  // WHERE fragment/params pair covers both.
-  const profitDateConditions: string[] = [];
-  const profitDateParams: string[] = [];
-  if (params.from_ts) {
-    profitDateConditions.push("created_at >= ?");
-    profitDateParams.push(params.from_ts);
-  }
-  if (params.to_ts) {
-    profitDateConditions.push("created_at <= ?");
-    profitDateParams.push(params.to_ts);
-  }
-  const profitDateWhere =
-    profitDateConditions.length > 0 ? `AND ${profitDateConditions.join(" AND ")}` : "";
-
   let balanceRows: VaultBalanceRow[];
   let fundBalanceRows: { fund: ProfitFund; balance: number }[];
   let fundBreakdownRows: { fund: ProfitFund; account: MoneyAccount; amount: number }[];
   let ledgerPage: Awaited<ReturnType<typeof fetchVaultLedgerPage>>;
   let personalTakeRows: Omit<PersonalTake, "items">[];
-  let storeMarginRows: { store_margin: number }[];
-  let eServiceFeeRows: { total_fee: number }[];
   let todaySnapshotRows: TodaySnapshot[];
   let yesterdaySnapshotRows: TodaySnapshot[];
   let todayStoreRows: { gross: number; margin: number }[];
@@ -100,8 +84,6 @@ export default async function VaultPage({
       fundBreakdownRows,
       ledgerPage,
       personalTakeRows,
-      storeMarginRows,
-      eServiceFeeRows,
       todaySnapshotRows,
       yesterdaySnapshotRows,
       todayStoreRows,
@@ -139,27 +121,6 @@ export default async function VaultPage({
              LIMIT ${PERSONAL_TAKES_LIMIT}`
             )
           : Promise.resolve([]),
-        // Cost-unknown lines (never restocked through the app) are excluded
-        // from both sides rather than assumed to be 100% margin — same rule
-        // every other profit figure in this app follows.
-        queryRows<{ store_margin: number }>(
-          `SELECT COALESCE(SUM(
-             CASE WHEN ti.unit_cost IS NOT NULL
-               THEN ti.line_total - ti.unit_cost * ti.quantity
-               ELSE 0
-             END
-           ), 0) AS store_margin
-           FROM transaction_items ti
-           JOIN transactions t ON t.id = ti.transaction_id
-           WHERE t.is_personal_take = 0 AND t.voided_at IS NULL ${profitDateWhere}`,
-          profitDateParams
-        ),
-        queryRows<{ total_fee: number }>(
-          `SELECT COALESCE(SUM(fee), 0) AS total_fee
-           FROM service_transactions
-           WHERE voided_at IS NULL ${profitDateWhere}`,
-          profitDateParams
-        ),
         // Cheap single-row lookup (UNIQUE(snapshot_day)) — always worth
         // fetching, unlike the ?debts-gated queries above, since it also
         // decides the snapshot button's own label ("Record" vs "Update").
@@ -273,9 +234,6 @@ export default async function VaultPage({
     }
   }
 
-  const windowProfit =
-    Number(storeMarginRows[0]?.store_margin ?? 0) + Number(eServiceFeeRows[0]?.total_fee ?? 0);
-
   function mapSnapshotRow(row: TodaySnapshot | undefined): TodaySnapshot | null {
     if (!row) return null;
     return {
@@ -338,14 +296,15 @@ export default async function VaultPage({
     <PageShell>
       <h1 className="text-xl font-semibold">Vault</h1>
 
-      {/* Tap a card to cash in/out — or adjust — that account; nothing left
-          to pick */}
+      {/* Tap a card to cash in/out, adjust, or transfer into that account;
+          nothing left to pick */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {ACCOUNTS.map((account) => (
           <AccountSheet
             key={account}
             account={account}
             balance={balances.get(account) ?? 0}
+            fundBalances={fundBalances}
           />
         ))}
       </div>
@@ -365,19 +324,31 @@ export default async function VaultPage({
         ))}
       </div>
 
-      {/* Total on hand is all-time (same as the three cards above); Profit
-          is the one figure here that respects the date filter below, since
-          it's the one meant to answer "how much did this window make." */}
-      <SummaryCard
-        label="Total on hand"
-        value={formatPeso(totalOnHand)}
-        breakdown={[
-          {
-            label: `Profit · ${rangeSubtitle(params.from, params.to)}`,
-            value: formatPeso(windowProfit),
-          },
-        ]}
-      />
+      {/* Total on hand, plain — not another card, since the three account
+          cards and two fund cards above already carry that weight; this is
+          just the running total those five numbers add up to. The two fund
+          balances underneath answer "how much money do we actually have"
+          at a glance, same all-time balances the fund cards above already
+          show, just gathered here too. */}
+      <div className="flex flex-col gap-1">
+        <p className="text-sm text-muted-foreground">Total on hand</p>
+        <p className="text-2xl font-semibold tabular-nums">
+          {formatPeso(totalOnHand)}
+        </p>
+        <div className="flex flex-col gap-0.5">
+          {PROFIT_FUNDS.map((fund) => (
+            <p
+              key={fund}
+              className="flex items-baseline justify-between text-xs text-muted-foreground"
+            >
+              <span>{PROFIT_FUND_LABELS[fund]}</span>
+              <span className="tabular-nums">
+                {formatPeso(fundBalances.get(fund) ?? 0)}
+              </span>
+            </p>
+          ))}
+        </div>
+      </div>
 
       <div className="flex flex-wrap gap-2">
         <Button
