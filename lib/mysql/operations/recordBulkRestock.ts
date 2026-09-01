@@ -1,6 +1,13 @@
 import { randomUUID } from "node:crypto";
 
+import { formatPeso } from "@/lib/format";
 import { withTransaction } from "@/lib/mysql/pool";
+import {
+  MONEY_ACCOUNT_LABELS,
+  PROFIT_FUND_LABELS,
+  type MoneyAccount,
+  type ProfitFund,
+} from "@/lib/types";
 import { placeholders, queryConn, roundMoney } from "./helpers";
 import { recordRestock } from "./recordRestock";
 
@@ -17,6 +24,21 @@ export type BulkRestockLine = {
   description: string | null;
 };
 
+/** Where a restock's payment came from — either of the two Vault funds
+    (deducted directly, no transfer needed first: buying stock is literally
+    what Reinvest exists for) or a physical account (a plain, ordinary
+    withdrawal). See vault_entries.fund's own comment in
+    mariadb/schema.sql for why a fund can be spent from without ever
+    touching cash/gcash/maya. */
+export type RestockPaymentSource = MoneyAccount | ProfitFund;
+export type RestockPaymentSplit = { source: RestockPaymentSource; amount: number };
+
+const FUND_SOURCES = new Set<RestockPaymentSource>(["profit", "reinvest"]);
+
+function isFundSource(source: RestockPaymentSource): source is ProfitFund {
+  return FUND_SOURCES.has(source);
+}
+
 /** Port of record_bulk_restock(). Every line either restocks + re-prices an
     existing product (product_id set) or creates one and restocks it in the
     same step (product_id null) — every line always restocks, there's no
@@ -26,11 +48,20 @@ export type BulkRestockLine = {
     downstream). Line-shape validation is re-implemented here as plain TS
     checks in the same order the original SQL ran them (each with its own
     EXISTS check), so the first violation found produces the same error
-    message a caller would have seen before. */
+    message a caller would have seen before.
+ *
+ * `payment` is optional and covers the WHOLE batch, not per line — one
+ * combined split across however many sources the owner picked (e.g. ₱300
+ * from Reinvest + ₱200 topped off from Cash once Reinvest alone fell
+ * short), deducted for real from each source. It doesn't have to add up to
+ * the batch's total cost: whatever isn't attributed to a source is simply
+ * left with no vault effect at all, same as omitting `payment` entirely —
+ * this is a bookkeeping aid, not a hard requirement to reconcile every
+ * peso spent. */
 export async function recordBulkRestock(
-  params: { items: BulkRestockLine[] },
+  params: { items: BulkRestockLine[]; payment?: RestockPaymentSplit[] },
   cashierId: string
-): Promise<{ items: { productId: string; restockId: string }[] }> {
+): Promise<{ items: { productId: string; restockId: string }[]; totalCost: number }> {
   const { items } = params;
   if (!items || items.length === 0) {
     throw new Error("Cart is empty");
@@ -71,6 +102,30 @@ export async function recordBulkRestock(
       throw new Error("Each item can only appear once in a single bulk restock");
     }
     seen.add(id);
+  }
+
+  // Collapse duplicate sources — picking the same source twice in the split
+  // form dedupes rather than errors, same convention transferFund/checkout
+  // already follow for their own duplicate-entry cases.
+  const paymentSplits = new Map<RestockPaymentSource, number>();
+  for (const split of params.payment ?? []) {
+    const amount = roundMoney(split.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Each payment amount must be more than 0");
+    }
+    paymentSplits.set(
+      split.source,
+      roundMoney((paymentSplits.get(split.source) ?? 0) + amount)
+    );
+  }
+  const totalCost = roundMoney(items.reduce((sum, line) => sum + line.cost, 0));
+  const totalPaid = roundMoney(
+    [...paymentSplits.values()].reduce((sum, amount) => sum + amount, 0)
+  );
+  if (totalPaid > totalCost) {
+    throw new Error(
+      `The payment split (${formatPeso(totalPaid)}) is more than the batch's total cost (${formatPeso(totalCost)})`
+    );
   }
 
   return withTransaction(async (conn) => {
@@ -127,6 +182,53 @@ export async function recordBulkRestock(
       result.push({ productId, restockId });
     }
 
-    return { items: result };
+    // Payment, one withdrawal-style row per source — checked against that
+    // exact source's own current balance inside this same transaction, same
+    // "no row to lock, so read-then-validate right here" tradeoff
+    // transferFund/adjustVaultBalance already accept at this app's scale.
+    // Every 'withdrawal' needs a note (vault_entries' own CHECK), so one's
+    // always supplied here regardless of what the caller passed in.
+    for (const [source, amount] of paymentSplits) {
+      if (isFundSource(source)) {
+        const rows = await queryConn<{ balance: number }>(
+          conn,
+          "SELECT balance FROM vault_fund_balance WHERE fund = ?",
+          [source]
+        );
+        const balance = roundMoney(rows[0]?.balance ?? 0);
+        if (amount > balance) {
+          throw new Error(
+            `${PROFIT_FUND_LABELS[source]} only has ${formatPeso(balance)} available`
+          );
+        }
+        // `account` is required (NOT NULL) but doesn't matter for balance
+        // purposes here — this row is excluded from every account's balance
+        // by having `fund` set at all (see vault_balance's own comment).
+        // 'cash' is just a placeholder value, same reasoning
+        // transferFund's fund-leaving leg already uses.
+        await conn.query(
+          "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note) VALUES (?, 'withdrawal', ?, 'cash', ?, ?, ?)",
+          [randomUUID(), -amount, source, cashierId, "Restock payment"]
+        );
+      } else {
+        const rows = await queryConn<{ balance: number }>(
+          conn,
+          "SELECT balance FROM vault_balance WHERE account = ?",
+          [source]
+        );
+        const balance = roundMoney(rows[0]?.balance ?? 0);
+        if (amount > balance) {
+          throw new Error(
+            `${MONEY_ACCOUNT_LABELS[source]} only has ${formatPeso(balance)} available`
+          );
+        }
+        await conn.query(
+          "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'withdrawal', ?, ?, ?, ?)",
+          [randomUUID(), -amount, source, cashierId, "Restock payment"]
+        );
+      }
+    }
+
+    return { items: result, totalCost };
   });
 }

@@ -20,10 +20,30 @@ import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { costFor, costPerPieceFor, sellingPriceFor, toNumber, totalFor } from "@/lib/pricing";
-import type { Category, Product } from "@/lib/types";
+import {
+  MONEY_ACCOUNT_LABELS,
+  PROFIT_FUND_LABELS,
+  type Category,
+  type MoneyAccount,
+  type Product,
+  type ProfitFund,
+} from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
 
 const initialState: InventoryState = { error: null };
+
+type PaymentSource = MoneyAccount | ProfitFund;
+
+/** Cash/GCash/Maya first (physical), then the two funds — Profit and For
+    Restock can pay for a restock directly, no transfer needed first (see
+    recordBulkRestock's own doc comment). */
+const PAYMENT_SOURCES: { value: PaymentSource; label: string }[] = [
+  { value: "cash", label: MONEY_ACCOUNT_LABELS.cash },
+  { value: "gcash", label: MONEY_ACCOUNT_LABELS.gcash },
+  { value: "maya", label: MONEY_ACCOUNT_LABELS.maya },
+  { value: "profit", label: PROFIT_FUND_LABELS.profit },
+  { value: "reinvest", label: PROFIT_FUND_LABELS.reinvest },
+];
 
 // Owners fill this out while walking around the mall picking up stock — a
 // long, interruptible session (phone locks, the sheet gets closed by
@@ -593,13 +613,40 @@ function CartLineCard({
 export default function BulkRestockForm({
   products,
   categories,
+  vaultBalances,
+  fundBalances,
 }: {
   products: Product[];
   categories: Category[];
+  vaultBalances: Map<MoneyAccount, number>;
+  fundBalances: Map<ProfitFund, number>;
 }) {
   const [state, formAction, isPending] = useActionState(
     bulkRestock,
     initialState
+  );
+
+  function balanceFor(source: PaymentSource): number {
+    if (source === "profit" || source === "reinvest") {
+      return fundBalances.get(source) ?? 0;
+    }
+    return vaultBalances.get(source) ?? 0;
+  }
+
+  // Optional whole-batch "paid with" split — collapsed by default so a
+  // restock that isn't being tracked against a fund/account doesn't have to
+  // look at 5 extra fields it'll never fill in.
+  const [showPayment, setShowPayment] = useState(false);
+  const [paidWith, setPaidWith] = useState<Record<PaymentSource, string>>({
+    cash: "",
+    gcash: "",
+    maya: "",
+    profit: "",
+    reinvest: "",
+  });
+  const paidTotal = PAYMENT_SOURCES.reduce(
+    (sum, source) => sum + (toNumber(paidWith[source.value]) || 0),
+    0
   );
   // Fixed key for the initial line (not crypto.randomUUID()) — this runs
   // during SSR too, and a random key here would mismatch on hydration since
@@ -795,6 +842,15 @@ export default function BulkRestockForm({
           }))
         )}
       />
+      <input
+        type="hidden"
+        name="payment"
+        value={JSON.stringify(
+          PAYMENT_SOURCES.filter((source) => toNumber(paidWith[source.value]) > 0).map(
+            (source) => ({ source: source.value, amount: paidWith[source.value] })
+          )
+        )}
+      />
 
       {hasContent ? (
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -844,6 +900,75 @@ export default function BulkRestockForm({
           <PlusIcon data-icon="inline-start" />
           Add another item
         </Button>
+
+        <div className="flex flex-col gap-2 rounded-lg border p-2.5">
+          <button
+            type="button"
+            onClick={() => setShowPayment((v) => !v)}
+            aria-expanded={showPayment}
+            className="flex items-center justify-between gap-2 text-left text-sm font-medium"
+          >
+            <span>
+              Paid with{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </span>
+            {showPayment ? (
+              <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
+            ) : (
+              <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
+            )}
+          </button>
+          {showPayment ? (
+            <div className="flex flex-col gap-2 pt-1">
+              <p className="text-xs text-muted-foreground">
+                Records where this purchase&rsquo;s money actually came
+                from — doesn&rsquo;t have to cover the whole total, and For
+                Restock/Profit can be spent from directly, no transfer
+                needed first.
+              </p>
+              {PAYMENT_SOURCES.map((source) => (
+                <div key={source.value} className="flex flex-col gap-1">
+                  <Label htmlFor={`pay-${source.value}`} className="text-xs">
+                    {source.label}{" "}
+                    <span className="font-normal text-muted-foreground">
+                      ({formatPeso(balanceFor(source.value))} available)
+                    </span>
+                  </Label>
+                  <Input
+                    id={`pay-${source.value}`}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    inputMode="decimal"
+                    placeholder="0.00"
+                    value={paidWith[source.value]}
+                    onChange={(event) =>
+                      setPaidWith((prev) => ({
+                        ...prev,
+                        [source.value]: event.target.value,
+                      }))
+                    }
+                  />
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground">
+                Paid:{" "}
+                <span className="font-medium text-foreground">
+                  {formatPeso(paidTotal)}
+                </span>{" "}
+                of {formatPeso(total)}
+                {paidTotal > total ? (
+                  <span className="text-destructive">
+                    {" "}
+                    — more than the total
+                  </span>
+                ) : null}
+              </p>
+            </div>
+          ) : null}
+        </div>
       </div>
 
       {state.error ? (
@@ -882,7 +1007,12 @@ export default function BulkRestockForm({
           </Button>
           <Button
             type="submit"
-            disabled={isPending || lines.length === 0 || hasIncompleteLine}
+            disabled={
+              isPending ||
+              lines.length === 0 ||
+              hasIncompleteLine ||
+              paidTotal > total
+            }
           >
             {isPending ? "Recording…" : "Record purchase"}
           </Button>

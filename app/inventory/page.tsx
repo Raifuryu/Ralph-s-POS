@@ -25,6 +25,7 @@ import {
   type Category,
   type MoneyAccount,
   type Product,
+  type ProfitFund,
   type Service,
 } from "@/lib/types";
 import BulkRestockSheet from "./bulkRestockSheet";
@@ -127,6 +128,7 @@ export default async function InventoryPage({
   // drives both the open state and the fetch below, so they can't disagree.
   const historyId = params.history || undefined;
   const showRestockHistory = params.restocks !== undefined;
+  const showBulkRestock = params.bulk !== undefined;
 
   let products: Product[];
   let categories: Category[];
@@ -134,10 +136,20 @@ export default async function InventoryPage({
   let restocks: RestockRow[];
   let items: ProductSaleRow[];
   let restockHistoryRows: (RestockReceiptLine & { cashier_id: string })[];
+  let vaultBalanceRows: { account: MoneyAccount; balance: number }[];
+  let fundBalanceRows: { fund: ProfitFund; balance: number }[];
 
   try {
-    [products, categories, serviceList, restocks, items, restockHistoryRows] =
-      await Promise.all([
+    [
+      products,
+      categories,
+      serviceList,
+      restocks,
+      items,
+      restockHistoryRows,
+      vaultBalanceRows,
+      fundBalanceRows,
+    ] = await Promise.all([
         queryRows<Product>(`SELECT ${PRODUCT_COLUMNS} FROM products ORDER BY name`),
         queryRows<Category>(
           "SELECT id, name, sort_order, created_at FROM categories ORDER BY sort_order"
@@ -173,6 +185,19 @@ export default async function InventoryPage({
              LIMIT ${RESTOCK_HISTORY_LIMIT}`
             )
           : Promise.resolve([]),
+        // The bulk restock form's own "paid with" balances — only worth
+        // fetching while that sheet is actually open, same reasoning as
+        // history/restocks above.
+        showBulkRestock
+          ? queryRows<{ account: MoneyAccount; balance: number }>(
+              "SELECT account, balance FROM vault_balance"
+            )
+          : Promise.resolve([]),
+        showBulkRestock
+          ? queryRows<{ fund: ProfitFund; balance: number }>(
+              "SELECT fund, balance FROM vault_fund_balance"
+            )
+          : Promise.resolve([]),
       ]);
   } catch (err) {
     return (
@@ -201,7 +226,14 @@ export default async function InventoryPage({
     : undefined;
   const showHistory = historyId !== undefined;
 
-  const showBulkRestock = params.bulk !== undefined;
+  const vaultBalances = new Map(
+    vaultBalanceRows
+      .filter((row): row is typeof row & { account: MoneyAccount } => row.account !== null)
+      .map((row) => [row.account, Number(row.balance ?? 0)])
+  );
+  const fundBalances = new Map(
+    fundBalanceRows.map((row) => [row.fund, Number(row.balance ?? 0)])
+  );
 
   // Sales attributed to a batch = this product's revenue from the batch's
   // created_at onward. An earlier batch's window overlaps a later batch's,
@@ -396,6 +428,8 @@ export default async function InventoryPage({
           open={showBulkRestock}
           products={products}
           categories={categories}
+          vaultBalances={vaultBalances}
+          fundBalances={fundBalances}
         />
 
         <RestockHistorySheet open={showRestockHistory} receipts={restockReceipts} />

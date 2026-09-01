@@ -10,7 +10,7 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
-import type { Category, Product } from "@/lib/types";
+import type { Category, MoneyAccount, Product, ProfitFund } from "@/lib/types";
 import BulkRestockForm from "./bulkRestockForm";
 
 /**
@@ -21,10 +21,17 @@ export default function BulkRestockSheet({
   open,
   products,
   categories,
+  vaultBalances,
+  fundBalances,
 }: {
   open: boolean;
   products: Product[];
   categories: Category[];
+  /** Current Cash/GCash/Maya and Profit/For Restock balances — shown as
+      hints next to the form's own optional "paid with" split, so a cashier
+      can see what's actually available before typing an amount. */
+  vaultBalances: Map<MoneyAccount, number>;
+  fundBalances: Map<ProfitFund, number>;
 }) {
   const router = useRouter();
 
@@ -60,7 +67,12 @@ export default function BulkRestockSheet({
           </DrawerDescription>
         </DrawerHeader>
         <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <BulkRestockForm products={products} categories={categories} />
+          <BulkRestockForm
+            products={products}
+            categories={categories}
+            vaultBalances={vaultBalances}
+            fundBalances={fundBalances}
+          />
         </div>
       </DrawerContent>
     </Drawer>

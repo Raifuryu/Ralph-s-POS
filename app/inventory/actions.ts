@@ -6,7 +6,17 @@ import { redirect } from "next/navigation";
 import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney, parseWholeNumber } from "@/lib/money";
 import { pool } from "@/lib/mysql/pool";
-import { recordBulkRestock, type BulkRestockLine } from "@/lib/mysql/operations/recordBulkRestock";
+import {
+  recordBulkRestock,
+  type BulkRestockLine,
+  type RestockPaymentSplit,
+  type RestockPaymentSource,
+} from "@/lib/mysql/operations/recordBulkRestock";
+import { isMoneyAccount, isProfitFund } from "@/lib/types";
+
+function isRestockPaymentSource(value: string): value is RestockPaymentSource {
+  return isMoneyAccount(value) || isProfitFund(value);
+}
 
 export type InventoryState = { error: string | null };
 
@@ -211,9 +221,37 @@ export async function bulkRestock(
     });
   }
 
+  // Optional whole-batch "paid with" split — see recordBulkRestock's own
+  // doc comment on why this doesn't have to add up to the batch total.
+  let rawPayment: unknown;
+  try {
+    rawPayment = JSON.parse(String(formData.get("payment") ?? "[]"));
+  } catch {
+    return { error: "Could not read the payment split." };
+  }
+  if (!Array.isArray(rawPayment)) {
+    return { error: "Could not read the payment split." };
+  }
+  const payment: RestockPaymentSplit[] = [];
+  for (const entry of rawPayment) {
+    const line = (entry ?? {}) as Record<string, unknown>;
+    const source = typeof line.source === "string" ? line.source : "";
+    if (!isRestockPaymentSource(source)) {
+      return { error: "Payment split has an invalid source." };
+    }
+    const amount = parseMoney(String(line.amount ?? ""), { requirePositive: true });
+    if (amount === "bad" || amount === null) {
+      return { error: "Each payment amount must be more than 0." };
+    }
+    payment.push({ source, amount });
+  }
+
   try {
     const user = await requireCurrentUser();
-    await recordBulkRestock({ items }, user.id);
+    await recordBulkRestock(
+      { items, payment: payment.length > 0 ? payment : undefined },
+      user.id
+    );
   } catch (err) {
     return { error: (err as Error).message };
   }
