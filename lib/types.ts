@@ -13,6 +13,7 @@ export type Service = Tables<"services">;
 export type ServiceTransaction = Tables<"service_transactions">;
 export type VaultEntry = Tables<"vault_entries">;
 export type VaultSnapshot = Tables<"vault_snapshots">;
+export type VaultFundBalance = Tables<"vault_fund_balance">;
 export type Transaction = Tables<"transactions">;
 export type TransactionItem = Tables<"transaction_items">;
 
@@ -96,6 +97,7 @@ export const VAULT_ENTRY_TYPE_LABELS: Record<VaultEntryType, string> = {
   count: "Count",
   void: "Void",
   adjustment: "Adjustment",
+  transfer: "Transfer",
 };
 
 /** The three places money lives: the physical box and the two wallets. */
@@ -109,8 +111,26 @@ export const MONEY_ACCOUNT_LABELS: Record<MoneyAccount, string> = {
   maya: "Maya",
 };
 
+/** The two Vault "funds" — orthogonal to MONEY_ACCOUNTS above, see
+    vault_entries.fund's own comment in mariadb/schema.sql for why this
+    isn't just a 4th/5th account. Every sale/service fee lands here first;
+    it only becomes real Cash/GCash/Maya balance once explicitly
+    transferred (see transferFund). */
+export const PROFIT_FUNDS = Constants.public.Enums.profit_fund;
+
+export type ProfitFund = (typeof PROFIT_FUNDS)[number];
+
+export const PROFIT_FUND_LABELS: Record<ProfitFund, string> = {
+  profit: "Profit",
+  reinvest: "For Restock",
+};
+
 export function isMoneyAccount(value: string): value is MoneyAccount {
   return (MONEY_ACCOUNTS as readonly string[]).includes(value);
+}
+
+export function isProfitFund(value: string): value is ProfitFund {
+  return (PROFIT_FUNDS as readonly string[]).includes(value);
 }
 
 /**

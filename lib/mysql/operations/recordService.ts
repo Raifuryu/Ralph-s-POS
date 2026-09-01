@@ -169,7 +169,12 @@ export async function recordService(
     ]
   );
 
-  async function postVaultEntry(amount: number, account: MoneyAccount, note?: string) {
+  async function postVaultEntry(
+    amount: number,
+    account: MoneyAccount,
+    fund: "profit" | "reinvest" | null,
+    note?: string
+  ) {
     // Re-rounded even though every caller already passes rounded operands
     // — summing two clean 2-decimal values (principal + fee) can still
     // land on a double with noise past the centavo, same reasoning as
@@ -177,21 +182,33 @@ export async function recordService(
     const rounded = roundMoney(amount);
     if (rounded === 0) return;
     await conn.query(
-      "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, created_by, note) VALUES (?, 'service', ?, ?, ?, ?, ?)",
-      [randomUUID(), rounded, id, account, cashierId, note ?? null]
+      "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, fund, created_by, note) VALUES (?, 'service', ?, ?, ?, ?, ?, ?)",
+      [randomUUID(), rounded, id, account, fund, cashierId, note ?? null]
     );
   }
 
+  // `fee` is the only part of a service that's actually store income — the
+  // fund-split below tags only the fee posting with 'profit' (100%, no
+  // 'reinvest' portion: a service has no COGS to recover, same reasoning
+  // IncomeBreakdownCard already applies). `principal` is a pure pass-
+  // through (the customer's own money moving through, e.g. a GCash load's
+  // face value) — never income, so it's posted with no fund at all rather
+  // than guessed into either bucket. Previously principal and fee were
+  // combined into one posting where they landed in the same account; they
+  // now post as two separate rows so the fee's fund tag doesn't have to
+  // apply to the whole combined amount.
   if (service.cash_flow === "in") {
-    await postVaultEntry(principal + fee, paymentAccount);
-    if (service.wallet !== null) await postVaultEntry(-principal, service.wallet);
+    await postVaultEntry(principal, paymentAccount, null);
+    await postVaultEntry(fee, paymentAccount, "profit");
+    if (service.wallet !== null) await postVaultEntry(-principal, service.wallet, null);
   } else if (service.wallet !== null && feeInWallet) {
-    await postVaultEntry(-principal, paymentAccount);
-    await postVaultEntry(principal + fee, service.wallet);
+    await postVaultEntry(-principal, paymentAccount, null);
+    await postVaultEntry(principal, service.wallet, null);
+    await postVaultEntry(fee, service.wallet, "profit");
   } else {
-    await postVaultEntry(-principal, paymentAccount);
-    if (fee !== 0) await postVaultEntry(fee, paymentAccount, "Fee received in cash");
-    if (service.wallet !== null) await postVaultEntry(principal, service.wallet);
+    await postVaultEntry(-principal, paymentAccount, null);
+    if (fee !== 0) await postVaultEntry(fee, paymentAccount, "profit", "Fee received in cash");
+    if (service.wallet !== null) await postVaultEntry(principal, service.wallet, null);
   }
 
   return id;

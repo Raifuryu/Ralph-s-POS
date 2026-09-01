@@ -6,11 +6,13 @@ import { queryConn } from "./helpers";
 
 /** Port of void_transaction(). Restores stock via a single multi-table
     UPDATE...JOIN (MariaDB's equivalent of the original's UPDATE...FROM),
-    then posts a reversing 'void' vault_entries row — but only when the
-    original sale actually posted one: a fully-discounted sale (total = 0)
-    or a personal take never did, so voiding either must not try to reverse
-    a row that was never created (vault_entries' own CHECK requires
-    amount <> 0 for a 'void' row). */
+    then posts a reversing 'void' row for each 'sale' row the original
+    checkout() actually posted — a sale can be split across up to two rows
+    now (see checkout()'s own fund-split comment), so this reverses
+    whatever's actually on record rather than recomputing a lump sum from
+    transaction.total; a fully-discounted sale (total = 0) or a personal
+    take posted none, so this naturally finds nothing to reverse for either
+    without needing its own special case. */
 export async function voidTransaction(
   params: { transactionId: string; reason?: string | null },
   userId: string
@@ -22,12 +24,10 @@ export async function voidTransaction(
     const rows = await queryConn<{
       voided_at: string | null;
       is_personal_take: boolean;
-      total: number;
-      payment_method: MoneyAccount | null;
       settled_at: string | null;
     }>(
       conn,
-      "SELECT voided_at, is_personal_take, total, payment_method, settled_at FROM transactions WHERE id = ? FOR UPDATE",
+      "SELECT voided_at, is_personal_take, settled_at FROM transactions WHERE id = ? FOR UPDATE",
       [transactionId]
     );
     const transaction = rows[0];
@@ -60,10 +60,27 @@ export async function voidTransaction(
       [transactionId]
     );
 
-    if (!transaction.is_personal_take && transaction.total > 0) {
+    const saleEntries = await queryConn<{
+      amount: number;
+      account: MoneyAccount;
+      fund: "profit" | "reinvest" | null;
+    }>(
+      conn,
+      "SELECT amount, account, fund FROM vault_entries WHERE transaction_id = ? AND entry_type = 'sale'",
+      [transactionId]
+    );
+    for (const entry of saleEntries) {
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, created_by, note) VALUES (?, 'void', ?, ?, ?, ?, ?)",
-        [randomUUID(), -transaction.total, transactionId, transaction.payment_method, userId, "Void reversal"]
+        "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, fund, created_by, note) VALUES (?, 'void', ?, ?, ?, ?, ?, ?)",
+        [
+          randomUUID(),
+          -Number(entry.amount),
+          transactionId,
+          entry.account,
+          entry.fund,
+          userId,
+          "Void reversal",
+        ]
       );
     }
   });

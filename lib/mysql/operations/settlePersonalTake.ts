@@ -117,9 +117,29 @@ export async function settlePersonalTake(
     const note = debtorName
       ? `Personal take settled${suffix} — ${debtorName}`
       : `Personal take settled${suffix}`;
-    await conn.query(
-      "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, created_by, note) VALUES (?, 'deposit', ?, ?, ?, ?, ?)",
-      [randomUUID(), amount, transactionId, account, userId, note]
-    );
+
+    // Same fund split reasoning as checkout()'s own sale posting: at cost
+    // (the default), the whole settlement is pure cost recovery — 100%
+    // 'reinvest', nothing to 'profit'. At selling price, whatever's above
+    // the take's own cost-based total IS real profit (the debtor paid full
+    // retail instead of just reimbursing cost), so that excess goes to
+    // 'profit' while the cost portion still goes to 'reinvest'.
+    // reinvestPortion is capped at `amount` for the same reason checkout()
+    // caps it at `total` — full cost recovery takes priority over showing
+    // a profit that isn't really there.
+    const reinvestPortion = roundMoney(Math.min(transaction.total, amount));
+    const profitPortion = roundMoney(amount - reinvestPortion);
+    if (reinvestPortion > 0) {
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, fund, created_by, note) VALUES (?, 'deposit', ?, ?, ?, 'reinvest', ?, ?)",
+        [randomUUID(), reinvestPortion, transactionId, account, userId, note]
+      );
+    }
+    if (profitPortion > 0) {
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, fund, created_by, note) VALUES (?, 'deposit', ?, ?, ?, 'profit', ?, ?)",
+        [randomUUID(), profitPortion, transactionId, account, userId, note]
+      );
+    }
   });
 }

@@ -7,23 +7,30 @@ import { recordRestock } from "./recordRestock";
 export type BulkRestockLine = {
   productId: string | null;
   name: string | null;
-  quantity: number | null;
-  cost: number | null;
+  /** Always required now — a product can no longer be registered without
+      being restocked in the same step, so every line always both creates
+      (or re-prices) a product AND restocks it. */
+  quantity: number;
+  cost: number;
   price: number;
   categoryId: string | null;
   description: string | null;
 };
 
 /** Port of record_bulk_restock(). Every line either restocks + re-prices an
-    existing product (product_id set) or creates one, optionally stocking it
-    too (product_id null). Line-shape validation is re-implemented here as
-    plain TS checks in the same order the original SQL ran them (each with
-    its own EXISTS check), so the first violation found produces the same
-    error message a caller would have seen before. */
+    existing product (product_id set) or creates one and restocks it in the
+    same step (product_id null) — every line always restocks, there's no
+    "register without stocking" shortcut anymore (see this file's own
+    history: that shortcut was how a product could end up with an unknown
+    cost, which then had to be special-cased in every profit figure
+    downstream). Line-shape validation is re-implemented here as plain TS
+    checks in the same order the original SQL ran them (each with its own
+    EXISTS check), so the first violation found produces the same error
+    message a caller would have seen before. */
 export async function recordBulkRestock(
   params: { items: BulkRestockLine[] },
   cashierId: string
-): Promise<{ items: { productId: string; restockId: string | null }[] }> {
+): Promise<{ items: { productId: string; restockId: string }[] }> {
   const { items } = params;
   if (!items || items.length === 0) {
     throw new Error("Cart is empty");
@@ -40,29 +47,16 @@ export async function recordBulkRestock(
     }
   }
 
-  // Existing-item lines are always a restock: quantity + cost are required.
+  // Every line restocks — quantity + cost are always required, whether it's
+  // an existing product or a brand-new one.
   for (const line of items) {
     if (
-      line.productId !== null &&
-      (line.quantity === null || line.quantity <= 0 || line.cost === null || line.cost < 0)
+      !Number.isInteger(line.quantity) ||
+      line.quantity <= 0 ||
+      !Number.isFinite(line.cost) ||
+      line.cost < 0
     ) {
-      throw new Error("Each restocked item needs a quantity of at least 1 and a cost of 0 or more");
-    }
-  }
-
-  // New-item lines may register without stocking (quantity and cost both
-  // null) or restock alongside creation (both present and valid) — never a
-  // mix of only one.
-  for (const line of items) {
-    if (line.productId === null) {
-      const quantityGiven = line.quantity !== null;
-      const costGiven = line.cost !== null;
-      if (
-        quantityGiven !== costGiven ||
-        (quantityGiven && (line.quantity! <= 0 || line.cost! < 0))
-      ) {
-        throw new Error("A new item needs both a quantity and a cost, or neither");
-      }
+      throw new Error("Each item needs a quantity of at least 1 and a cost of 0 or more");
     }
   }
 
@@ -97,9 +91,10 @@ export async function recordBulkRestock(
     }
 
     // Apply each line in submitted order: existing → re-price then restock;
-    // new → create (stock starts NULL/untracked either way) then restock
-    // only if quantity/cost were given.
-    const result: { productId: string; restockId: string | null }[] = [];
+    // new → create (stock starts NULL, COALESCE'd to 0 inside recordRestock)
+    // then restock. Every line restocks now — there's no longer a
+    // create-without-stocking branch.
+    const result: { productId: string; restockId: string }[] = [];
     for (const line of items) {
       const name = line.name?.trim() || null;
       const description = line.description?.trim() || null;
@@ -122,15 +117,12 @@ export async function recordBulkRestock(
         );
       }
 
-      let restockId: string | null = null;
-      if (line.quantity !== null) {
-        restockId = await recordRestock(conn, {
-          productId,
-          quantity: line.quantity,
-          cost: line.cost!,
-          cashierId,
-        });
-      }
+      const restockId = await recordRestock(conn, {
+        productId,
+        quantity: line.quantity,
+        cost: line.cost,
+        cashierId,
+      });
 
       result.push({ productId, restockId });
     }

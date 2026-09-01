@@ -24,7 +24,11 @@ export type VaultEntryTypeEnum =
   | "withdrawal"
   | "count"
   | "void"
-  | "adjustment";
+  | "adjustment"
+  | "transfer";
+/** The two Vault "funds" — an orthogonal dimension to MoneyAccountEnum, see
+    vault_entries.fund's own comment in mariadb/schema.sql. */
+export type ProfitFundEnum = "profit" | "reinvest";
 
 export type Database = {
   public: {
@@ -162,6 +166,7 @@ export type Database = {
           created_by: string;
           created_at: string;
           account: MoneyAccountEnum;
+          fund: ProfitFundEnum | null;
         };
       };
       vault_snapshots: {
@@ -191,12 +196,19 @@ export type Database = {
           last_counted_at: string | null;
         };
       };
+      vault_fund_balance: {
+        Row: {
+          fund: ProfitFundEnum;
+          balance: number;
+        };
+      };
     };
     Enums: {
       cash_flow: CashFlow;
       money_account: MoneyAccountEnum;
       service_pricing_mode: ServicePricingModeEnum;
       vault_entry_type: VaultEntryTypeEnum;
+      profit_fund: ProfitFundEnum;
     };
   };
 };
@@ -227,7 +239,9 @@ export const Constants = {
         "count",
         "void",
         "adjustment",
+        "transfer",
       ] as const,
+      profit_fund: ["profit", "reinvest"] as const,
     },
   },
 } as const;

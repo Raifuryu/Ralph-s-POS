@@ -123,17 +123,14 @@ function hasAnyContent(line: CartLine): boolean {
 }
 
 /** A line is ready to submit — also doubles as "safe to auto-collapse",
-    since there's nothing left to fill in. */
+    since there's nothing left to fill in. Quantity and cost are required
+    for every line now, new item or existing — see bulkRestock's own doc
+    comment for why a product can no longer be registered without one. */
 function isLineComplete(line: CartLine): boolean {
   if (line.productId === null && !line.newName.trim()) return false;
   if (!line.price) return false;
   const costValue = line.costMode === "individual" ? line.costPerItem : line.cost;
-  if (line.productId !== null) {
-    return Boolean(line.quantity) && Boolean(costValue);
-  }
-  const hasQty = line.quantity.trim() !== "";
-  const hasCost = costValue.trim() !== "";
-  return hasQty === hasCost;
+  return Boolean(line.quantity) && Boolean(costValue);
 }
 
 /** Effective total cost for a line regardless of costMode — informational
@@ -147,10 +144,9 @@ function totalCostFor(line: CartLine): number {
 }
 
 /** Total-cost STRING for the submitted cart payload — "" when either input
-    needed to compute it (in the active cost mode) hasn't been filled in yet.
-    Unlike totalCostFor, blank must stay blank here: the server reads a blank
-    quantity + blank cost together as "register this item without stocking
-    it yet," and a stray "0" would break that. */
+    needed to compute it (in the active cost mode) hasn't been filled in yet;
+    the submit button stays disabled until every line is complete (see
+    isLineComplete), so a blank value never actually reaches the server. */
 function costPayloadFor(line: CartLine): string {
   if (line.costMode === "individual") {
     if (line.quantity.trim() === "" || line.costPerItem.trim() === "") return "";
@@ -215,11 +211,12 @@ function CartLineCard({
       (line.productId ? line.productName : line.newName.trim()) || "New item";
     const price = toNumber(line.price);
     const totalCost = totalCostFor(line);
+    // A complete line always has both a quantity and a cost now (see
+    // isLineComplete) — there's no more "registered but not stocked" state
+    // to show a fallback summary for.
     const summary = !isLineComplete(line)
       ? "Incomplete — tap to finish"
-      : qty > 0 && totalCost > 0
-        ? `${qty} pc${qty === 1 ? "" : "s"} · ${formatPeso(totalCost)} → ${formatPeso(price)}`
-        : `${formatPeso(price)} · not stocked yet`;
+      : `${qty} pc${qty === 1 ? "" : "s"} · ${formatPeso(totalCost)} → ${formatPeso(price)}`;
 
     return (
       <div className="flex items-center gap-2 rounded-lg border bg-card p-2.5">
@@ -509,8 +506,8 @@ function CartLineCard({
             step="1"
             min="0"
             inputMode="numeric"
-            required={line.productId !== null}
-            placeholder={line.productId === null ? "Optional" : "6"}
+            required
+            placeholder="6"
             value={line.quantity}
             onChange={(event) => handleQuantityChange(event.target.value)}
           />
@@ -526,8 +523,8 @@ function CartLineCard({
               step="0.01"
               min="0"
               inputMode="decimal"
-              required={line.productId !== null || qty > 0}
-              placeholder={line.productId === null ? "Optional" : "15.00"}
+              required
+              placeholder="15.00"
               value={line.costPerItem}
               onChange={(event) => handleCostPerItemChange(event.target.value)}
             />
@@ -543,8 +540,8 @@ function CartLineCard({
               step="0.01"
               min="0"
               inputMode="decimal"
-              required={line.productId !== null || qty > 0}
-              placeholder={line.productId === null ? "Optional" : "60.00"}
+              required
+              placeholder="60.00"
               value={line.cost}
               onChange={(event) => handleCostChange(event.target.value)}
             />

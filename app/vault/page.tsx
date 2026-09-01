@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { formatPeso, rangeSubtitle } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
-import { type MoneyAccount } from "@/lib/types";
+import { PROFIT_FUNDS, type MoneyAccount, type ProfitFund } from "@/lib/types";
 import { type EServiceFees } from "../incomeBreakdownCard";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
+import FundCard from "./fundCard";
 import PersonalTakesSheet, { type PersonalTake } from "./personalTakesSheet";
 import VaultLedgerClient from "./vaultLedgerClient";
 import VaultSnapshotSheet, {
@@ -70,6 +71,8 @@ export default async function VaultPage({
     profitDateConditions.length > 0 ? `AND ${profitDateConditions.join(" AND ")}` : "";
 
   let balanceRows: VaultBalanceRow[];
+  let fundBalanceRows: { fund: ProfitFund; balance: number }[];
+  let fundBreakdownRows: { fund: ProfitFund; account: MoneyAccount; amount: number }[];
   let ledgerPage: Awaited<ReturnType<typeof fetchVaultLedgerPage>>;
   let personalTakeRows: Omit<PersonalTake, "items">[];
   let storeMarginRows: { store_margin: number }[];
@@ -93,6 +96,8 @@ export default async function VaultPage({
     // independent of this page's date/search filters and pagination.
     [
       balanceRows,
+      fundBalanceRows,
+      fundBreakdownRows,
       ledgerPage,
       personalTakeRows,
       storeMarginRows,
@@ -104,6 +109,21 @@ export default async function VaultPage({
       snapshotHistoryRows,
     ] = await Promise.all([
         queryRows<VaultBalanceRow>("SELECT account, balance FROM vault_balance"),
+        queryRows<{ fund: ProfitFund; balance: number }>(
+          "SELECT fund, balance FROM vault_fund_balance"
+        ),
+        // "Where this fund's money originally came from" — FundCard's
+        // starting suggestion for a transfer, not the fund balance itself
+        // (that's vault_fund_balance above, which ignores `account`
+        // entirely). HAVING > 0 drops an account a fund never actually
+        // touched, or one it's already fully transferred back out of.
+        queryRows<{ fund: ProfitFund; account: MoneyAccount; amount: number }>(
+          `SELECT fund, account, SUM(amount) AS amount
+           FROM vault_entries
+           WHERE fund IS NOT NULL
+           GROUP BY fund, account
+           HAVING SUM(amount) > 0`
+        ),
         fetchVaultLedgerPage(filters, 0),
         // Independent of everything above (keyed only by ?debts), and only
         // worth fetching when that sheet is actually open — same "don't pay
@@ -281,6 +301,19 @@ export default async function VaultPage({
     0
   );
 
+  const fundBalances = new Map(
+    fundBalanceRows.map((row) => [row.fund, Number(row.balance ?? 0)])
+  );
+  const fundBreakdowns = new Map<ProfitFund, Map<MoneyAccount, number>>();
+  for (const row of fundBreakdownRows) {
+    let byAccount = fundBreakdowns.get(row.fund);
+    if (!byAccount) {
+      byAccount = new Map();
+      fundBreakdowns.set(row.fund, byAccount);
+    }
+    byAccount.set(row.account, Number(row.amount));
+  }
+
   const snapshotHistory: SnapshotHistoryEntry[] = snapshotHistoryRows.map((row) => ({
     day: row.snapshot_day,
     cash: Number(row.cash_amount),
@@ -313,6 +346,21 @@ export default async function VaultPage({
             key={account}
             account={account}
             balance={balances.get(account) ?? 0}
+          />
+        ))}
+      </div>
+
+      {/* Every sale/service fee lands here first, not in the accounts above
+          — tap a card to transfer some of it into Cash/GCash/Maya, the only
+          way it becomes physically spendable (see mariadb/schema.sql's own
+          comment on vault_entries.fund). */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {PROFIT_FUNDS.map((fund) => (
+          <FundCard
+            key={fund}
+            fund={fund}
+            balance={fundBalances.get(fund) ?? 0}
+            breakdown={fundBreakdowns.get(fund) ?? new Map()}
           />
         ))}
       </div>

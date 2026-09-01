@@ -249,7 +249,7 @@ CREATE TABLE service_transactions (
 CREATE TABLE vault_entries (
   id                     CHAR(36)      NOT NULL PRIMARY KEY,
   seq                    BIGINT        NOT NULL AUTO_INCREMENT,
-  entry_type             ENUM('sale','service','deposit','withdrawal','count','void','adjustment') NOT NULL,
+  entry_type             ENUM('sale','service','deposit','withdrawal','count','void','adjustment','transfer') NOT NULL,
   amount                 DECIMAL(12,2) NOT NULL,
   expected               DECIMAL(12,2),
   transaction_id         CHAR(36),
@@ -258,6 +258,17 @@ CREATE TABLE vault_entries (
   created_by             CHAR(36)      NOT NULL,
   created_at             TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   account                ENUM('cash','gcash','maya') NOT NULL,
+  -- Which of the two Vault "funds" this entry counts toward — an ORTHOGONAL
+  -- dimension to `account` above, not a second physical location: the same
+  -- peso is always in exactly one real account (cash/gcash/maya) AND,
+  -- separately, earmarked for one purpose. Named `fund` rather than
+  -- "wallet" specifically to avoid colliding with the pre-existing, unrelated
+  -- MoneyAccount-typed "wallet" concept already used elsewhere (services.wallet,
+  -- service_transactions.wallet) — this is not that. NULL for entries with
+  -- no real earmarking (a 'count' reading, a manual 'adjustment', the
+  -- pass-through principal leg of a service). See vault_fund_balance below
+  -- for the summed-by-fund view.
+  fund                   ENUM('profit','reinvest'),
   CONSTRAINT vault_entries_seq_key UNIQUE (seq),
   CONSTRAINT vault_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT vault_entries_service_transaction_id_fkey FOREIGN KEY (service_transaction_id) REFERENCES service_transactions(id) ON DELETE SET NULL,
@@ -270,6 +281,10 @@ CREATE TABLE vault_entries (
     OR (entry_type = 'service' AND amount <> 0)
     OR (entry_type = 'void' AND amount <> 0)
     OR (entry_type = 'adjustment' AND amount <> 0)
+    -- Two rows per transfer, opposite signs — the fund-leaving leg
+    -- (negative, fund set) and the account-arriving leg (positive, fund
+    -- NULL). See vault_balance/vault_fund_balance's own comments.
+    OR (entry_type = 'transfer' AND amount <> 0)
   ),
   CONSTRAINT vault_entries_withdrawal_note_check CHECK (entry_type <> 'withdrawal' OR LENGTH(TRIM(COALESCE(note, ''))) > 0),
   INDEX vault_entries_account_seq_idx (account, seq DESC),
@@ -333,6 +348,14 @@ GROUP BY ti.product_id;
 -- a 3-row literal account list + a correlated subquery for "the latest count"
 -- and another for "movements since it".
 --
+-- `v.fund IS NULL` is the key exclusion: a 'sale'/'service'/settlement entry
+-- with a fund set represents money earmarked for Profit/Reinvest, not yet
+-- physically in this account — it only reaches Cash/GCash/Maya via an
+-- explicit 'transfer' (see vault_fund_balance below), whose account-arriving
+-- leg is itself posted with fund NULL. So this account balance means
+-- "money actually transferred/deposited here," not "everything ever sold
+-- through this payment method" — see vault_entries.fund's own comment.
+--
 -- The literals below are COLLATE-pinned explicitly — a view's string
 -- literals otherwise freeze whatever collation_connection happened to be in
 -- effect the moment CREATE VIEW ran, not the querying session's own
@@ -349,6 +372,7 @@ SELECT
       SELECT SUM(v.amount)
       FROM vault_entries v
       WHERE v.entry_type <> 'count'
+        AND v.fund IS NULL
         AND v.account = acct.account
         AND v.seq > COALESCE(lc.seq, 0)
     ), 0)
@@ -369,3 +393,21 @@ LEFT JOIN (
       WHERE ve2.entry_type = 'count' AND ve2.account = ve.account
     )
 ) lc ON lc.account = acct.account;
+
+-- The mirror image of vault_balance, for the two Vault "funds" instead of
+-- the three physical accounts — no count/anchor mechanism needed here (a
+-- fund isn't something you physically count), just a plain sum. Includes
+-- every entry with that fund set, regardless of what `account` says (that
+-- column is just "where this money originally came from/is headed," not
+-- part of the fund balance itself) — sale/service/settlement postings, void
+-- reversals, and the fund-leaving leg of a 'transfer'.
+CREATE VIEW vault_fund_balance AS
+SELECT
+  f.fund,
+  CAST(COALESCE(SUM(ve.amount), 0) AS DECIMAL(12,2)) AS balance
+FROM (
+  SELECT 'profit' COLLATE utf8mb4_unicode_ci AS fund
+  UNION ALL SELECT 'reinvest' COLLATE utf8mb4_unicode_ci
+) f
+LEFT JOIN vault_entries ve ON ve.fund = f.fund
+GROUP BY f.fund;

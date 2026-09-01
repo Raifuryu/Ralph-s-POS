@@ -32,15 +32,27 @@ export async function voidServiceTransaction(
       [userId, reason, serviceTransactionId]
     );
 
-    const original = await queryConn<{ amount: number; account: MoneyAccount }>(
+    const original = await queryConn<{
+      amount: number;
+      account: MoneyAccount;
+      fund: "profit" | "reinvest" | null;
+    }>(
       conn,
-      "SELECT amount, account FROM vault_entries WHERE service_transaction_id = ?",
+      "SELECT amount, account, fund FROM vault_entries WHERE service_transaction_id = ?",
       [serviceTransactionId]
     );
     for (const entry of original) {
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, created_by, note) VALUES (?, 'void', ?, ?, ?, ?, ?)",
-        [randomUUID(), -entry.amount, serviceTransactionId, entry.account, userId, "Void reversal"]
+        "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, fund, created_by, note) VALUES (?, 'void', ?, ?, ?, ?, ?, ?)",
+        [
+          randomUUID(),
+          -entry.amount,
+          serviceTransactionId,
+          entry.account,
+          entry.fund,
+          userId,
+          "Void reversal",
+        ]
       );
     }
   });

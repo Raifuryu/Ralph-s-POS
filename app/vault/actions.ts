@@ -17,9 +17,17 @@ import {
   type VaultSnapshotResult,
   type VaultSnapshotTargetDay,
 } from "@/lib/mysql/operations/recordVaultSnapshot";
+import { transferFund as transferFundOperation } from "@/lib/mysql/operations/transferFund";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
-import { isMoneyAccount, type MoneyAccount } from "@/lib/types";
+import {
+  isMoneyAccount,
+  isProfitFund,
+  MONEY_ACCOUNTS,
+  MONEY_ACCOUNT_LABELS,
+  type MoneyAccount,
+  type ProfitFund,
+} from "@/lib/types";
 import type { LedgerEntry } from "./ledger";
 
 export type VaultMoveState = { error: string | null; ok?: boolean };
@@ -193,6 +201,51 @@ export async function recordSnapshot(
   try {
     const user = await requireCurrentUser();
     const result = await recordVaultSnapshot(targetDay, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type TransferFundState = {
+  error: string | null;
+  result?: { fund: ProfitFund; transferred: number; remainingBalance: number };
+};
+
+/** Moves money out of a fund (Profit/For Restock) into one or more physical
+    accounts — see transferFund's own doc comment for why this is the only
+    way a fund's balance ever becomes real Cash/GCash/Maya. `split_cash`/
+    `split_gcash`/`split_maya` are read straight off the form's per-account
+    inputs — see FundCard, which pre-fills them from that fund's own
+    "where it came from" breakdown but leaves them fully editable. */
+export async function transferFund(
+  _prev: TransferFundState,
+  formData: FormData
+): Promise<TransferFundState> {
+  const fundRaw = String(formData.get("fund") ?? "");
+  if (!isProfitFund(fundRaw)) {
+    return { error: "Pick which fund to transfer from." };
+  }
+
+  const splits: { account: MoneyAccount; amount: number }[] = [];
+  for (const account of MONEY_ACCOUNTS) {
+    const amount = parseMoney(formData.get(`split_${account}`), { allowBlank: true });
+    if (amount === "bad") {
+      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[account]}.` };
+    }
+    if (amount !== null && amount > 0) {
+      splits.push({ account, amount });
+    }
+  }
+  if (splits.length === 0) {
+    return { error: "Enter at least one amount to transfer." };
+  }
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await transferFundOperation({ fund: fundRaw, splits }, user.id);
     revalidatePath("/vault");
     revalidatePath("/");
     return { error: null, result };

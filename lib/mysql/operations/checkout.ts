@@ -116,7 +116,14 @@ export async function checkout(
   // unit_cost is still stored as null on the line below, so the gap stays
   // visible rather than silently rounding down to a complete-looking
   // number.
+  // reinvestRaw tracks what portion of the sale corresponds to recovering
+  // the store's own cost, for the Vault's "For Restock" fund split below —
+  // known-cost lines contribute their cost, unknown-cost lines contribute
+  // their whole revenue (conservative: with no known margin, none of it is
+  // assumed to be profit, same "don't assume 100%" rule the rest of this
+  // function already follows for `total` itself).
   let total = 0;
+  let reinvestRaw = 0;
   const lines = cart.map((line) => {
     const product = productById.get(line.productId)!;
     if (personalTake) {
@@ -134,7 +141,10 @@ export async function checkout(
     // cost rounding).
     const discount = roundMoney(Math.min(line.discountAmount, subtotal));
     const surcharge = roundMoney(line.surchargeAmount);
-    total += subtotal + surcharge - discount;
+    const lineRevenue = subtotal + surcharge - discount;
+    total += lineRevenue;
+    reinvestRaw +=
+      product.cost !== null ? product.cost * line.quantity : lineRevenue;
     return { ...line, product, discount, surcharge };
   });
   total = roundMoney(total);
@@ -189,11 +199,31 @@ export async function checkout(
   // was sold, so nothing enters the vault. A fully-discounted sale (total =
   // 0) posts nothing either — vault_entries' own CHECK requires amount > 0
   // for a 'sale' row.
+  //
+  // The total is split into two rows by `fund` — not a second physical
+  // account, both still land in the same paymentMethod, just tagged with
+  // what the money is earmarked for (see mariadb/schema.sql's own comment
+  // on vault_entries.fund). reinvestPortion is capped at `total` so a
+  // heavily-discounted sale (revenue less than cost) never produces a
+  // negative profitPortion — full cost recovery takes priority over
+  // showing a profit that isn't really there. Either portion can land on
+  // exactly 0 (e.g. an all-known-cost sale sold at zero margin), in which
+  // case that row is simply skipped — 'sale' rows require amount > 0.
   if (!personalTake && total > 0) {
-    await conn.query(
-      "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, created_by) VALUES (?, 'sale', ?, ?, ?, ?)",
-      [randomUUID(), total, transactionId, paymentMethod, cashierId]
-    );
+    const reinvestPortion = roundMoney(Math.min(reinvestRaw, total));
+    const profitPortion = roundMoney(total - reinvestPortion);
+    if (reinvestPortion > 0) {
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, fund, created_by) VALUES (?, 'sale', ?, ?, ?, 'reinvest', ?)",
+        [randomUUID(), reinvestPortion, transactionId, paymentMethod, cashierId]
+      );
+    }
+    if (profitPortion > 0) {
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, transaction_id, account, fund, created_by) VALUES (?, 'sale', ?, ?, ?, 'profit', ?)",
+        [randomUUID(), profitPortion, transactionId, paymentMethod, cashierId]
+      );
+    }
   }
 
   return transactionId;
