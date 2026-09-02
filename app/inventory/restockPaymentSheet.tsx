@@ -13,7 +13,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { formatPeso } from "@/lib/format";
-import { toNumber } from "@/lib/pricing";
+import { roundMoney, toNumber } from "@/lib/pricing";
 import {
   MONEY_ACCOUNT_LABELS,
   PROFIT_FUND_LABELS,
@@ -38,10 +38,16 @@ export function emptyPayment(): Record<PaymentSource, string> {
   return { cash: "", gcash: "", maya: "", profit: "", reinvest: "" };
 }
 
+// Rounded once at the end — summing several already-2-decimal amounts (up
+// to 5 sources here) can still drift into e.g. 1886.6500000000003, which
+// then fails the exact-match check against `total` even though it's the
+// same peso amount (see roundMoney's own comment in lib/pricing.ts).
 export function paymentTotal(paidWith: Record<PaymentSource, string>): number {
-  return PAYMENT_SOURCES.reduce(
-    (sum, source) => sum + (toNumber(paidWith[source.value]) || 0),
-    0
+  return roundMoney(
+    PAYMENT_SOURCES.reduce(
+      (sum, source) => sum + (toNumber(paidWith[source.value]) || 0),
+      0
+    )
   );
 }
 
@@ -51,7 +57,7 @@ export function paymentTotal(paidWith: Record<PaymentSource, string>): number {
     default) and available for a caller to recompute if `total`/balance
     change before the field's been touched. */
 export function autoFillReinvest(total: number, available: number): number {
-  return Math.max(0, Math.min(total, available));
+  return roundMoney(Math.max(0, Math.min(total, available)));
 }
 
 /**

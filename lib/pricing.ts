@@ -6,6 +6,20 @@ export function toNumber(value: string): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+/** Client-side twin of lib/mysql/operations/helpers.ts's own roundMoney —
+    duplicated rather than imported, since that file lives under
+    lib/mysql/operations and this one needs to stay safe to pull into a
+    "use client" component. Summing several already-2-decimal amounts (e.g.
+    a cart's per-line costs, or a payment split across 5 sources) can still
+    drift into a value like 1886.6500000000003 — comparing that against a
+    typed "1886.65" then fails a strict `!==` check even though they're the
+    same peso amount. Rounding both sides through this before comparing
+    keeps that comparison exact, same reasoning every server-side money
+    comparison in this app already follows. */
+export function roundMoney(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
 export const MARKUP = 0.2;
 
 /** Selling price rounded UP to the centavo, so the markup is never short

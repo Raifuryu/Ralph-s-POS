@@ -19,7 +19,14 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
-import { costFor, costPerPieceFor, sellingPriceFor, toNumber, totalFor } from "@/lib/pricing";
+import {
+  costFor,
+  costPerPieceFor,
+  roundMoney,
+  sellingPriceFor,
+  toNumber,
+  totalFor,
+} from "@/lib/pricing";
 import type { Category, MoneyAccount, Product, ProfitFund } from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
 import RestockPaymentSheet, {
@@ -759,7 +766,11 @@ export default function BulkRestockForm({
 
   const hasContent = lines.some(hasAnyContent);
 
-  const total = lines.reduce((sum, line) => sum + totalCostFor(line), 0);
+  // Rounded once here — summing several already-2-decimal line costs can
+  // still drift into e.g. 1886.6500000000003, which then fails the payment
+  // sheet's own exact-match check even though it's the same peso amount
+  // (see roundMoney's own comment in lib/pricing.ts).
+  const total = roundMoney(lines.reduce((sum, line) => sum + totalCostFor(line), 0));
   const pieceCount = lines.reduce(
     (sum, line) => sum + toNumber(line.quantity),
     0
