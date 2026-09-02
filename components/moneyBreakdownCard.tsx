@@ -33,6 +33,7 @@ export function MoneyBreakdownCard({
   subtitle,
   total,
   rows,
+  afterRows,
   footer,
   href,
   linkLabel = "View →",
@@ -43,9 +44,16 @@ export function MoneyBreakdownCard({
   subtitle?: string;
   total: number;
   rows: BreakdownRow[];
-  /** Rendered below the row breakdown, set apart by its own divider —
-      for a derived figure that doesn't belong in the additive rows/bar
-      above (e.g. a profit line next to rows that are all gross amounts). */
+  /** Rendered directly after the row breakdown, no divider of its own —
+      for a line that's still part of the same additive group as `rows`
+      (e.g. a "Total" restating their sum) but shouldn't be counted as one
+      more proportion-bar segment. Sits above `footer`'s own divider, not
+      folded into it. */
+  afterRows?: React.ReactNode;
+  /** Rendered below the row breakdown (and afterRows, if any), set apart by
+      its own divider — for a derived figure that doesn't belong in the
+      additive rows/bar above (e.g. a profit line next to rows that are all
+      gross amounts). */
   footer?: React.ReactNode;
   /** If set, a small link to view the full breakdown elsewhere. */
   href?: string;
@@ -186,6 +194,10 @@ export function MoneyBreakdownCard({
               </div>
             ))}
           </div>
+
+          {afterRows ? (
+            <div className="mt-3 flex flex-col gap-1">{afterRows}</div>
+          ) : null}
 
           {footer ? (
             <div className="mt-3 border-t pt-2">{footer}</div>

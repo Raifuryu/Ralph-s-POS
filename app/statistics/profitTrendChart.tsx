@@ -5,6 +5,9 @@ import { useState } from "react";
 import { ESERVICE_COLOR, STORE_COLOR } from "@/app/incomeBreakdownCard";
 import { EmptyState } from "@/components/emptyState";
 import { formatPeso } from "@/lib/format";
+import ProfitTrendTableSheet, {
+  type DailyProfitRow,
+} from "./profitTrendTableSheet";
 import { SeriesLegend, toggleSeries, type Series } from "./seriesLegend";
 
 export type ProfitBucket = {
@@ -50,10 +53,16 @@ export default function ProfitTrendChart({
   title,
   subtitle,
   buckets,
+  dailyRows,
 }: {
   title: string;
   subtitle?: string;
   buckets: ProfitBucket[];
+  /** Real per-day figures behind this chart — passed straight through to
+      ProfitTrendTableSheet's own trigger button below, rendered here so
+      "view the table" sits right where the chart it's a detail view of
+      does. */
+  dailyRows: DailyProfitRow[];
 }) {
   const [visible, setVisible] = useState<Set<Series>>(
     () => new Set(["store", "eService"])
@@ -75,10 +84,13 @@ export default function ProfitTrendChart({
             <p className="mt-0.5 text-xs text-muted-foreground">{subtitle}</p>
           ) : null}
         </div>
-        <SeriesLegend
-          visible={visible}
-          onToggle={(series) => setVisible((prev) => toggleSeries(prev, series))}
-        />
+        <div className="flex shrink-0 items-center gap-1">
+          <SeriesLegend
+            visible={visible}
+            onToggle={(series) => setVisible((prev) => toggleSeries(prev, series))}
+          />
+          <ProfitTrendTableSheet rows={dailyRows} />
+        </div>
       </div>
 
       {maxTotal === 0 ? (

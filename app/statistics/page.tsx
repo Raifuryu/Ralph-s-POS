@@ -29,6 +29,7 @@ import PaymentBreakdownCard from "./paymentBreakdownCard";
 import ProductAnalysis, { type ProductTimeStats } from "./productAnalysis";
 import ProductScopeFilter from "./productScopeFilter";
 import ProfitTrendChart, { type ProfitBucket } from "./profitTrendChart";
+import { type DailyProfitRow } from "./profitTrendTableSheet";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
 const TRANSACTION_COLUMNS =
@@ -82,51 +83,74 @@ function LoadError({ message }: { message: string }) {
   );
 }
 
-/** Buckets sale + service PROFIT (not revenue) by store-day into a
-    chart-ready series. A sale's contribution is its margin, summed only
-    over line items with a known unit_cost AND accepted by `matchesItem`
-    (the page's category/product filter — see matchesItemFilter) — same
-    "cost unknown lines are excluded, not assumed 100% margin" rule the
-    Gross profit KPI and every other profit figure on this page already
-    follows. An e-service's contribution is its fee as-is, since the fee
-    already IS its margin (no COGS to subtract); `services` has already had
-    the page's own Service filter applied by the caller (effectiveServiceList
-    below), so this needs no e-service-specific filtering of its own. Bounds
-    come from the requested from/to date keys when both are set, else from
-    the data's own earliest/latest timestamp (so "all time" on a young store
-    doesn't try to render decades of empty bars). Widens buckets past
-    MAX_BARS so long ranges stay readable. */
-function buildProfitBuckets(
+type ProfitPoint = {
+  ts: number;
+  store: number;
+  eService: number;
+  /** Cost recovered on this point's known-cost lines — the reinvest side
+      of checkout.ts's own per-sale fund split (reinvestPortion). Zero for
+      an e-service point: the fee already IS its margin, no COGS to
+      recover. */
+  cost: number;
+};
+
+/** One point per (unvoided, non-personal-take) sale or service, filtered by
+    the page's category/product/service scope — shared by buildProfitBuckets
+    (the chart, width-capped and grouped by store-day) and
+    buildDailyProfitRows (the "Table" sheet, one real row per day). A sale's
+    margin/cost are summed only over line items with a known unit_cost AND
+    accepted by `matchesItem` — same "cost unknown lines are excluded, not
+    assumed 100% margin" rule the Gross profit KPI and every other profit
+    figure on this page already follows. `services` has already had the
+    page's own Service filter applied by the caller (effectiveServiceList),
+    so this needs no e-service-specific filtering of its own. */
+function buildProfitPoints(
   sales: TransactionWithItems[],
   services: ServiceRevenuePoint[],
-  fromKey: string | undefined,
-  toKey: string | undefined,
   matchesItem: (item: TransactionItem) => boolean
-): ProfitBucket[] {
-  const points = [
+): ProfitPoint[] {
+  return [
     ...sales
       .filter((t) => !t.is_personal_take && !t.voided_at)
       .map((t) => {
         let margin = 0;
+        let cost = 0;
         for (const item of t.transaction_items) {
           if (!matchesItem(item)) continue;
           if (item.unit_cost !== null) {
-            margin += Number(item.line_total) - Number(item.unit_cost) * item.quantity;
+            const lineCost = Number(item.unit_cost) * item.quantity;
+            margin += Number(item.line_total) - lineCost;
+            cost += lineCost;
           }
         }
         return {
           ts: new Date(t.created_at).getTime(),
           store: margin,
           eService: 0,
+          cost,
         };
       }),
     ...services.map((s) => ({
       ts: new Date(s.created_at).getTime(),
       store: 0,
       eService: Number(s.fee),
+      cost: 0,
     })),
   ];
+}
 
+/** Buckets `points`' store+eService PROFIT (not revenue, and not `cost` —
+    the chart only ever shows the store/e-service margin split, see its own
+    STORE_COLOR/ESERVICE_COLOR stacking) by store-day into a chart-ready
+    series. Bounds come from the requested from/to date keys when both are
+    set, else from the data's own earliest/latest timestamp (so "all time"
+    on a young store doesn't try to render decades of empty bars). Widens
+    buckets past MAX_BARS so long ranges stay readable. */
+function buildProfitBuckets(
+  points: ProfitPoint[],
+  fromKey: string | undefined,
+  toKey: string | undefined
+): ProfitBucket[] {
   let startDate: Date;
   let endDate: Date;
   if (fromKey && toKey) {
@@ -177,6 +201,39 @@ function buildProfitBuckets(
   }
 
   return buckets;
+}
+
+/** Real per-day rows for the "Table" sheet under the Profit trend chart —
+    unlike buildProfitBuckets, never widens past a single day regardless of
+    range length, since a scrollable table doesn't share the chart's
+    fixed-bar-width constraint. Newest first, same order every other
+    history-style sheet in this app uses. Days with nothing matching the
+    current filters (profit and forRestock both zero) are dropped rather
+    than shown as an empty row — the chart still renders a zero-height bar
+    for them, but a bare "₱0.00 / ₱0.00" table row carries no information
+    and would just be noise to scroll past. */
+function buildDailyProfitRows(points: ProfitPoint[]): DailyProfitRow[] {
+  const byDay = new Map<string, { ts: number; profit: number; forRestock: number }>();
+  for (const point of points) {
+    const key = storeDayKey(new Date(point.ts));
+    const profit = point.store + point.eService;
+    const existing = byDay.get(key);
+    if (existing) {
+      existing.profit += profit;
+      existing.forRestock += point.cost;
+    } else {
+      byDay.set(key, { ts: point.ts, profit, forRestock: point.cost });
+    }
+  }
+  return [...byDay.entries()]
+    .filter(([, v]) => v.profit !== 0 || v.forRestock !== 0)
+    .sort((a, b) => b[1].ts - a[1].ts)
+    .map(([key, v]) => ({
+      key,
+      label: formatShortDate(storeDateFromKey(key)),
+      profit: v.profit,
+      forRestock: v.forRestock,
+    }));
 }
 
 export default async function StatisticsPage({
@@ -723,13 +780,13 @@ export default async function StatisticsPage({
     .map(([name, v]) => ({ key: name, name, units: v.units, revenue: v.revenue }))
     .sort((a, b) => b.revenue - a.revenue);
 
-  const buckets = buildProfitBuckets(
+  const profitPoints = buildProfitPoints(
     sales,
     effectiveServiceList,
-    params.from,
-    params.to,
     matchesItemFilter
   );
+  const buckets = buildProfitBuckets(profitPoints, params.from, params.to);
+  const dailyProfitRows = buildDailyProfitRows(profitPoints);
 
   const peakHour = hourlyTraffic.reduce((best, b) =>
     b.store + b.eService > best.store + best.eService ? b : best
@@ -817,7 +874,12 @@ export default async function StatisticsPage({
           />
         </div>
 
-        <ProfitTrendChart title="Profit trend" subtitle={subtitle} buckets={buckets} />
+        <ProfitTrendChart
+          title="Profit trend"
+          subtitle={subtitle}
+          buckets={buckets}
+          dailyRows={dailyProfitRows}
+        />
 
         <HourlyTrafficChart
           title="Busiest times of day"

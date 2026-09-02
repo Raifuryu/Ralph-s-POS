@@ -407,10 +407,17 @@ function TransferForm({
 export default function FundCard({
   fund,
   balance,
+  today,
   breakdown,
 }: {
   fund: ProfitFund;
   balance: number;
+  /** This fund's net change today (every entry dated today, whatever its
+      type — see page.tsx's own todayFundRows query) — shown alongside the
+      all-time balance so "how much came in today" doesn't require opening
+      the ledger. Can land negative if a same-day cash-out/transfer outpaced
+      what came in. */
+  today: number;
   breakdown: Map<MoneyAccount, number>;
 }) {
   const label = PROFIT_FUND_LABELS[fund];
@@ -422,6 +429,9 @@ export default function FundCard({
         <p className="text-sm text-muted-foreground">{label}</p>
         <p className="mt-1 text-2xl font-semibold tabular-nums">
           {formatPeso(balance)}
+        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          ({formatPeso(today)} today)
         </p>
       </DrawerTrigger>
 

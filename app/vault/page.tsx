@@ -59,6 +59,7 @@ export default async function VaultPage({
   let balanceRows: VaultBalanceRow[];
   let fundBalanceRows: { fund: ProfitFund; balance: number }[];
   let fundBreakdownRows: { fund: ProfitFund; account: MoneyAccount; amount: number }[];
+  let todayFundRows: { fund: ProfitFund; amount: number }[];
   let ledgerPage: Awaited<ReturnType<typeof fetchVaultLedgerPage>>;
   let personalTakeRows: Omit<PersonalTake, "items">[];
   let todaySnapshotRows: TodaySnapshot[];
@@ -82,6 +83,7 @@ export default async function VaultPage({
       balanceRows,
       fundBalanceRows,
       fundBreakdownRows,
+      todayFundRows,
       ledgerPage,
       personalTakeRows,
       todaySnapshotRows,
@@ -105,6 +107,18 @@ export default async function VaultPage({
            WHERE fund IS NOT NULL
            GROUP BY fund, account
            HAVING SUM(amount) > 0`
+        ),
+        // Today's net change to each fund — every entry dated today,
+        // whatever its type (sale/service earnings, but also a same-day
+        // cash-out/adjustment/transfer if one happened), same "SUM(amount)
+        // grouped by fund" shape as vault_fund_balance itself, just scoped
+        // to CURDATE(). Un-gated (unlike the snapshot-only queries below) —
+        // FundCard always shows this once the card itself renders.
+        queryRows<{ fund: ProfitFund; amount: number }>(
+          `SELECT fund, COALESCE(SUM(amount), 0) AS amount
+           FROM vault_entries
+           WHERE fund IS NOT NULL AND DATE(created_at) = CURDATE()
+           GROUP BY fund`
         ),
         fetchVaultLedgerPage(filters, 0),
         // Independent of everything above (keyed only by ?debts), and only
@@ -262,6 +276,9 @@ export default async function VaultPage({
   const fundBalances = new Map(
     fundBalanceRows.map((row) => [row.fund, Number(row.balance ?? 0)])
   );
+  const todayFundTotals = new Map(
+    todayFundRows.map((row) => [row.fund, Number(row.amount ?? 0)])
+  );
   const fundBreakdowns = new Map<ProfitFund, Map<MoneyAccount, number>>();
   for (const row of fundBreakdownRows) {
     let byAccount = fundBreakdowns.get(row.fund);
@@ -319,6 +336,7 @@ export default async function VaultPage({
             key={fund}
             fund={fund}
             balance={fundBalances.get(fund) ?? 0}
+            today={todayFundTotals.get(fund) ?? 0}
             breakdown={fundBreakdowns.get(fund) ?? new Map()}
           />
         ))}

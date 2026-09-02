@@ -42,6 +42,12 @@ export default function VaultCard({
       title="Money on hand"
       total={total}
       rows={rows}
+      afterRows={
+        <p className="flex items-baseline justify-between gap-2 text-xs font-medium">
+          <span>Total</span>
+          <span className="tabular-nums">{formatPeso(total)}</span>
+        </p>
+      }
       href="/vault"
       linkLabel="Vault →"
       compact={compact}
