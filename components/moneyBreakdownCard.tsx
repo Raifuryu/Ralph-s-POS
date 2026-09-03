@@ -37,6 +37,7 @@ export function MoneyBreakdownCard({
   title,
   subtitle,
   total,
+  headlineNote,
   rows,
   afterRows,
   footer,
@@ -48,6 +49,11 @@ export function MoneyBreakdownCard({
   title: string;
   subtitle?: string;
   total: number;
+  /** A small greyed-out annotation right beside the headline total itself
+      (same line, not below it — that's `subtitle`) — e.g. VaultCard's own
+      "was ₱X" showing what the total was before today's incoming
+      transfers. */
+  headlineNote?: React.ReactNode;
   rows: BreakdownRow[];
   /** Rendered directly after the row breakdown, no divider of its own —
       for a line that's still part of the same additive group as `rows`
@@ -108,13 +114,20 @@ export function MoneyBreakdownCard({
         className="mt-1 flex w-full items-center justify-between gap-2 text-left"
       >
         <span className="flex flex-col">
-          <span
-            className={cn(
-              "font-semibold tabular-nums",
-              compact ? "text-lg" : "text-2xl"
-            )}
-          >
-            {formatPeso(total)}
+          <span className="flex items-baseline gap-2">
+            <span
+              className={cn(
+                "font-semibold tabular-nums",
+                compact ? "text-lg" : "text-2xl"
+              )}
+            >
+              {formatPeso(total)}
+            </span>
+            {headlineNote ? (
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {headlineNote}
+              </span>
+            ) : null}
           </span>
           {subtitle ? (
             <span className="mt-0.5 text-xs text-muted-foreground">

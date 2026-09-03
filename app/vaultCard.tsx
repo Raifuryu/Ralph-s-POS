@@ -44,10 +44,24 @@ export default function VaultCard({
   });
   const total = rows.reduce((sum, row) => sum + row.value, 0);
 
+  // What the total was before today's incoming transfers — shown beside
+  // the headline so e.g. "₱20,692.56 was ₱20,392.56" reads as "GCash's
+  // ₱300 transfer today is included in that number." Hidden when nothing
+  // transferred in today (todayTransfersIn omitted or all-zero), same "no
+  // note over nothing" rule this card's row-level notes already follow.
+  const transferredInSum = ACCOUNT_ORDER.reduce(
+    (sum, account) => sum + (todayTransfersIn?.get(account) ?? 0),
+    0
+  );
+  const totalBeforeTransfers = total - transferredInSum;
+
   return (
     <MoneyBreakdownCard
       title="Money on hand"
       total={total}
+      headlineNote={
+        transferredInSum !== 0 ? `was ${formatPeso(totalBeforeTransfers)}` : undefined
+      }
       rows={rows}
       afterRows={
         <p className="flex items-baseline justify-between gap-2 text-xs font-medium">
@@ -71,8 +85,8 @@ export default function VaultCard({
                 className="flex items-baseline justify-between gap-2 text-xs"
               >
                 <span className="text-muted-foreground">{item.label}</span>
-                <span className="font-medium tabular-nums">
-                  {formatPeso(item.amount)}
+                <span className="font-medium tabular-nums text-destructive">
+                  −{formatPeso(item.amount)}
                 </span>
               </p>
             ))}
