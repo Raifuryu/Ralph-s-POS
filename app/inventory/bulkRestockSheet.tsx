@@ -23,6 +23,7 @@ export default function BulkRestockSheet({
   categories,
   vaultBalances,
   fundBalances,
+  wallets,
 }: {
   open: boolean;
   products: Product[];
@@ -32,6 +33,9 @@ export default function BulkRestockSheet({
       can see what's actually available before typing an amount. */
   vaultBalances: Map<MoneyAccount, number>;
   fundBalances: Map<ProfitFund, number>;
+  /** Active wallets only, with their current balance — same "hint" purpose
+      as vaultBalances/fundBalances above. */
+  wallets: { id: string; name: string; balance: number }[];
 }) {
   const router = useRouter();
 
@@ -72,6 +76,7 @@ export default function BulkRestockSheet({
             categories={categories}
             vaultBalances={vaultBalances}
             fundBalances={fundBalances}
+            wallets={wallets}
           />
         </div>
       </DrawerContent>

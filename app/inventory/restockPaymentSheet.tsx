@@ -15,39 +15,57 @@ import { Label } from "@/components/ui/label";
 import { formatPeso } from "@/lib/format";
 import { roundMoney, toNumber } from "@/lib/pricing";
 import {
+  isMoneyAccount,
   MONEY_ACCOUNT_LABELS,
   PROFIT_FUND_LABELS,
   type MoneyAccount,
   type ProfitFund,
 } from "@/lib/types";
 
-export type PaymentSource = MoneyAccount | ProfitFund;
+/** A wallet's id (open-ended, see wallets' own comment in
+    mariadb/schema.sql) alongside the two fixed account/fund unions — same
+    "plain string, disambiguated by helper" convention
+    recordBulkRestock.ts's own RestockPaymentSource follows. */
+export type PaymentSource = string;
+
+export type PaymentSourceOption = { value: PaymentSource; label: string };
 
 /** Cash/GCash/Maya first (physical), then the two funds — Profit and For
     Restock can pay for a restock directly, no transfer needed first (see
-    recordBulkRestock's own doc comment). */
-export const PAYMENT_SOURCES: { value: PaymentSource; label: string }[] = [
-  { value: "cash", label: MONEY_ACCOUNT_LABELS.cash },
-  { value: "gcash", label: MONEY_ACCOUNT_LABELS.gcash },
-  { value: "maya", label: MONEY_ACCOUNT_LABELS.maya },
-  { value: "profit", label: PROFIT_FUND_LABELS.profit },
-  { value: "reinvest", label: PROFIT_FUND_LABELS.reinvest },
-];
-
-export function emptyPayment(): Record<PaymentSource, string> {
-  return { cash: "", gcash: "", maya: "", profit: "", reinvest: "" };
+    recordBulkRestock's own doc comment) — then any active wallet, same
+    "pay directly" capability. Built fresh per render from the page's own
+    active-wallets list rather than a fixed constant, since that list is
+    open-ended now. */
+export function buildPaymentSources(
+  wallets: { id: string; name: string }[]
+): PaymentSourceOption[] {
+  return [
+    { value: "cash", label: MONEY_ACCOUNT_LABELS.cash },
+    { value: "gcash", label: MONEY_ACCOUNT_LABELS.gcash },
+    { value: "maya", label: MONEY_ACCOUNT_LABELS.maya },
+    { value: "profit", label: PROFIT_FUND_LABELS.profit },
+    { value: "reinvest", label: PROFIT_FUND_LABELS.reinvest },
+    ...wallets.map((wallet) => ({ value: wallet.id, label: wallet.name })),
+  ];
 }
 
-// Rounded once at the end — summing several already-2-decimal amounts (up
-// to 5 sources here) can still drift into e.g. 1886.6500000000003, which
-// then fails the exact-match check against `total` even though it's the
-// same peso amount (see roundMoney's own comment in lib/pricing.ts).
-export function paymentTotal(paidWith: Record<PaymentSource, string>): number {
+export function emptyPayment(
+  sources: PaymentSourceOption[]
+): Record<PaymentSource, string> {
+  return Object.fromEntries(sources.map((source) => [source.value, ""]));
+}
+
+// Rounded once at the end — summing several already-2-decimal amounts (as
+// many sources as there are accounts+funds+wallets) can still drift into
+// e.g. 1886.6500000000003, which then fails the exact-match check against
+// `total` even though it's the same peso amount (see roundMoney's own
+// comment in lib/pricing.ts).
+export function paymentTotal(
+  paidWith: Record<PaymentSource, string>,
+  sources: PaymentSourceOption[]
+): number {
   return roundMoney(
-    PAYMENT_SOURCES.reduce(
-      (sum, source) => sum + (toNumber(paidWith[source.value]) || 0),
-      0
-    )
+    sources.reduce((sum, source) => sum + (toNumber(paidWith[source.value]) || 0), 0)
   );
 }
 
@@ -79,8 +97,10 @@ export default function RestockPaymentSheet({
   onOpenChange,
   formId,
   total,
+  sources,
   vaultBalances,
   fundBalances,
+  walletBalances,
   paidWith,
   onChange,
   isPending,
@@ -94,20 +114,27 @@ export default function RestockPaymentSheet({
   /** The batch's total cost — what "fully paid" means here; the confirm
       button stays disabled until the split adds up to exactly this. */
   total: number;
+  /** Cash/GCash/Maya/Profit/For Restock plus every active wallet, in
+      display order — built once by the caller (buildPaymentSources) and
+      shared with its own emptyPayment/paymentTotal calls so both stay in
+      sync with the same list. */
+  sources: PaymentSourceOption[];
   vaultBalances: Map<MoneyAccount, number>;
   fundBalances: Map<ProfitFund, number>;
+  walletBalances: Map<string, number>;
   paidWith: Record<PaymentSource, string>;
   onChange: (next: Record<PaymentSource, string>) => void;
   isPending: boolean;
 }) {
-  const paidTotal = paymentTotal(paidWith);
+  const paidTotal = paymentTotal(paidWith, sources);
   const remaining = Math.max(0, total - paidTotal);
 
   function balanceFor(source: PaymentSource): number {
     if (source === "profit" || source === "reinvest") {
       return fundBalances.get(source) ?? 0;
     }
-    return vaultBalances.get(source) ?? 0;
+    if (isMoneyAccount(source)) return vaultBalances.get(source) ?? 0;
+    return walletBalances.get(source) ?? 0;
   }
 
   return (
@@ -118,13 +145,13 @@ export default function RestockPaymentSheet({
           <DrawerDescription>
             Total needed: {formatPeso(total)}. For Restock is pre-filled up
             to what it has available — assign whatever&rsquo;s left to
-            whichever wallet(s) covered the rest. Profit/For Restock can be
-            spent from directly, no transfer needed first.
+            whichever wallet(s) covered the rest. Profit/For Restock/any
+            wallet can be spent from directly, no transfer needed first.
           </DrawerDescription>
         </DrawerHeader>
         <div className="min-h-0 flex-1 overflow-y-auto p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
           <div className="flex flex-col gap-3">
-            {PAYMENT_SOURCES.map((source) => (
+            {sources.map((source) => (
               <div key={source.value} className="flex flex-col gap-1">
                 <Label htmlFor={`pay-${source.value}`} className="text-xs">
                   {source.label}{" "}
@@ -139,7 +166,7 @@ export default function RestockPaymentSheet({
                   min="0"
                   inputMode="decimal"
                   placeholder="0.00"
-                  value={paidWith[source.value]}
+                  value={paidWith[source.value] ?? ""}
                   onChange={(event) =>
                     onChange({ ...paidWith, [source.value]: event.target.value })
                   }

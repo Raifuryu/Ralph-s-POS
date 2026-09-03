@@ -1,40 +1,58 @@
 import { MoneyBreakdownCard } from "@/components/moneyBreakdownCard";
 import { ACCOUNT_COLORS, ACCOUNT_ORDER } from "@/lib/accountColors";
-import { formatPeso } from "@/lib/format";
+import { formatPeso, formatTime } from "@/lib/format";
 import {
   MONEY_ACCOUNT_LABELS,
-  PROFIT_FUND_LABELS,
+  VAULT_ENTRY_TYPE_LABELS,
   type MoneyAccount,
-  type ProfitFund,
+  type VaultEntry,
 } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+/** The "recent activity" footer's own entry type — deliberately narrower
+    than a full VaultEntry: this card only ever queries for (and only ever
+    shows) cash out/in/adjustment/transfer rows that actually touched
+    Cash/GCash/Maya, see page.tsx's own recentVaultRows query. */
+export type RecentVaultEntry = Pick<
+  VaultEntry,
+  "id" | "entry_type" | "account" | "amount" | "note" | "created_at"
+>;
 
 export default function VaultCard({
   balances,
-  funds,
+  todayAdjustments,
+  recentEntries,
   compact = false,
   className,
 }: {
   balances: Map<MoneyAccount, number>;
-  /** Profit/For Restock fund balances — shown as their own footer lines
-      below the Cash/GCash/Maya breakdown, never folded into `rows`/`total`/
-      the proportion bar above. A fund is a purpose-based lens on the SAME
-      money already counted in Cash/GCash/Maya (see mariadb/schema.sql's own
-      comment on vault_entries.fund), not additional cash — mixing it into
-      the additive rows would double the headline total. Display-only, by
-      design: this card reads straight off vault_fund_balance same as
-      everywhere else funds appear, nothing here writes anything back.
-      Omit to hide the section entirely (only the Sales dashboard shows it
-      today). */
-  funds?: Map<ProfitFund, number>;
+  /** Today's net adjustment per account (entry_type='adjustment', fund IS
+      NULL, DATE(created_at) = CURDATE()) — shown as a small greyed-out
+      figure beside that row's balance, e.g. "₱123,456.00 (₱123.00)", so an
+      adjustment made today doesn't just silently move the headline number.
+      Omitted (or zero) rows show no parenthetical at all — only the Sales
+      dashboard passes this today. */
+  todayAdjustments?: Map<MoneyAccount, number>;
+  /** Up to the 3 latest cash out/in/adjustment/transfer entries today,
+      newest first — replaces this card's old Profit/For Restock footer
+      (that breakdown lives on the Vault page's own fund cards now, with a
+      "today" figure of its own). Omitted or empty hides the footer
+      entirely, same "no divider over nothing" rule the old funds footer
+      followed. Only the Sales dashboard passes this today. */
+  recentEntries?: RecentVaultEntry[];
   compact?: boolean;
   className?: string;
 }) {
-  const rows = ACCOUNT_ORDER.map((account) => ({
-    key: account,
-    label: MONEY_ACCOUNT_LABELS[account],
-    value: balances.get(account) ?? 0,
-    color: ACCOUNT_COLORS[account],
-  }));
+  const rows = ACCOUNT_ORDER.map((account) => {
+    const adjustment = todayAdjustments?.get(account) ?? 0;
+    return {
+      key: account,
+      label: MONEY_ACCOUNT_LABELS[account],
+      value: balances.get(account) ?? 0,
+      color: ACCOUNT_COLORS[account],
+      note: adjustment !== 0 ? formatPeso(adjustment) : undefined,
+    };
+  });
   const total = rows.reduce((sum, row) => sum + row.value, 0);
 
   return (
@@ -53,24 +71,35 @@ export default function VaultCard({
       compact={compact}
       className={className}
       footer={
-        funds ? (
-          <div className="flex flex-col gap-1">
-            <p className="flex items-baseline justify-between gap-2 text-xs">
-              <span className="text-muted-foreground">
-                {PROFIT_FUND_LABELS.profit}
-              </span>
-              <span className="tabular-nums text-muted-foreground">
-                {formatPeso(funds.get("profit") ?? 0)}
-              </span>
+        recentEntries && recentEntries.length > 0 ? (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-xs text-muted-foreground">
+              Today&rsquo;s cash activity
             </p>
-            <p className="flex items-baseline justify-between gap-2 text-xs">
-              <span className="text-muted-foreground">
-                {PROFIT_FUND_LABELS.reinvest}
-              </span>
-              <span className="tabular-nums text-muted-foreground">
-                {formatPeso(funds.get("reinvest") ?? 0)}
-              </span>
-            </p>
+            {recentEntries.map((entry) => {
+              const amount = Number(entry.amount);
+              return (
+                <p
+                  key={entry.id}
+                  className="flex items-baseline justify-between gap-2 text-xs"
+                >
+                  <span className="min-w-0 flex-1 truncate text-muted-foreground">
+                    {VAULT_ENTRY_TYPE_LABELS[entry.entry_type]} ·{" "}
+                    {MONEY_ACCOUNT_LABELS[entry.account]} ·{" "}
+                    {formatTime(entry.created_at)}
+                  </span>
+                  <span
+                    className={cn(
+                      "shrink-0 font-medium tabular-nums",
+                      amount < 0 && "text-destructive"
+                    )}
+                  >
+                    {amount > 0 ? "+" : "−"}
+                    {formatPeso(Math.abs(amount))}
+                  </span>
+                </p>
+              );
+            })}
           </div>
         ) : undefined
       }

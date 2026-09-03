@@ -13,6 +13,7 @@ import {
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
 import { adjustVaultBalance } from "@/lib/mysql/operations/adjustVaultBalance";
 import { adjustFundBalance } from "@/lib/mysql/operations/adjustFundBalance";
+import { adjustWalletBalance } from "@/lib/mysql/operations/adjustWalletBalance";
 import {
   recordVaultSnapshot,
   type VaultSnapshotResult,
@@ -22,6 +23,15 @@ import {
   transferFund as transferFundOperation,
   transferFundsToAccount,
 } from "@/lib/mysql/operations/transferFund";
+import {
+  transferWalletToAccounts,
+  transferWalletsToAccount,
+} from "@/lib/mysql/operations/transferWallet";
+import {
+  createWallet as createWalletOperation,
+  renameWallet as renameWalletOperation,
+  setWalletActive,
+} from "@/lib/mysql/operations/wallets";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import type { VaultLedgerFilters } from "@/lib/vault/ledgerFilters";
 import {
@@ -33,6 +43,7 @@ import {
   PROFIT_FUND_LABELS,
   type MoneyAccount,
   type ProfitFund,
+  type Wallet,
 } from "@/lib/types";
 import type { LedgerEntry } from "./ledger";
 
@@ -56,6 +67,15 @@ function parseAccount(raw: FormDataEntryValue | null): MoneyAccount | null {
 function parseFund(raw: FormDataEntryValue | null): ProfitFund | null {
   const value = String(raw ?? "");
   return isProfitFund(value) ? value : null;
+}
+
+/** A wallet's id is an open-ended UUID (see wallets' own comment), so
+    there's no fixed-union check like isMoneyAccount/isProfitFund — just "is
+    this non-blank at all," same trust level the FK on
+    vault_entries.wallet_id enforces server-side either way. */
+function parseWalletId(raw: FormDataEntryValue | null): string | null {
+  const value = String(raw ?? "").trim();
+  return value || null;
 }
 
 /** Money leaving the box. The note is required — the DB enforces it too. */
@@ -164,6 +184,61 @@ export async function cashInFund(
   await pool.query(
     "INSERT INTO vault_entries (id, entry_type, account, fund, amount, note, created_by) VALUES (?, 'deposit', 'cash', ?, ?, ?, ?)",
     [randomUUID(), fund, amount, note, user.id]
+  );
+
+  revalidatePath("/vault");
+  revalidatePath("/");
+  return { error: null, ok: true };
+}
+
+/** Money leaving a wallet directly — the mirror of cashOutFund, tagged with
+    `wallet_id` instead of `fund`. */
+export async function cashOutWallet(
+  _prev: VaultMoveState,
+  formData: FormData
+): Promise<VaultMoveState> {
+  const walletId = parseWalletId(formData.get("wallet_id"));
+  if (!walletId) return { error: "Pick which wallet the money leaves." };
+
+  const amount = parseMoney(formData.get("amount"), { requirePositive: true });
+  if (amount === "bad" || amount === null) {
+    return { error: "Enter an amount above zero." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim();
+  if (!note) return { error: "Say what the money was taken for." };
+
+  const user = await requireCurrentUser();
+  await pool.query(
+    "INSERT INTO vault_entries (id, entry_type, account, wallet_id, amount, note, created_by) VALUES (?, 'withdrawal', 'cash', ?, ?, ?, ?)",
+    [randomUUID(), walletId, -amount, note, user.id]
+  );
+
+  revalidatePath("/vault");
+  revalidatePath("/");
+  return { error: null, ok: true };
+}
+
+/** Money added to a wallet directly — the mirror of cashInFund, tagged with
+    `wallet_id` instead of `fund`. */
+export async function cashInWallet(
+  _prev: VaultMoveState,
+  formData: FormData
+): Promise<VaultMoveState> {
+  const walletId = parseWalletId(formData.get("wallet_id"));
+  if (!walletId) return { error: "Pick which wallet the money goes into." };
+
+  const amount = parseMoney(formData.get("amount"), { requirePositive: true });
+  if (amount === "bad" || amount === null) {
+    return { error: "Enter an amount above zero." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+
+  const user = await requireCurrentUser();
+  await pool.query(
+    "INSERT INTO vault_entries (id, entry_type, account, wallet_id, amount, note, created_by) VALUES (?, 'deposit', 'cash', ?, ?, ?, ?)",
+    [randomUUID(), walletId, amount, note, user.id]
   );
 
   revalidatePath("/vault");
@@ -286,6 +361,43 @@ export async function adjustFund(
   }
 }
 
+export type WalletAdjustState = {
+  error: string | null;
+  result?: {
+    walletId: string;
+    previousBalance: number;
+    targetBalance: number;
+    delta: number;
+  };
+};
+
+/** Corrects one wallet's balance to whatever it's supposed to actually be —
+    the mirror of adjustFund, targeting adjustWalletBalance instead. */
+export async function adjustWallet(
+  _prev: WalletAdjustState,
+  formData: FormData
+): Promise<WalletAdjustState> {
+  const walletId = parseWalletId(formData.get("wallet_id"));
+  if (!walletId) return { error: "Pick which wallet to adjust." };
+
+  const targetBalance = parseMoney(formData.get("target_balance"));
+  if (targetBalance === "bad" || targetBalance === null) {
+    return { error: "Enter the correct balance (0 or more, up to centavos)." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await adjustWalletBalance({ walletId, targetBalance, note }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
 export type VaultSnapshotState = {
   error: string | null;
   result?: VaultSnapshotResult;
@@ -362,6 +474,47 @@ export async function transferFund(
   }
 }
 
+export type TransferWalletState = {
+  error: string | null;
+  result?: { walletId: string; transferred: number; remainingBalance: number };
+};
+
+/** Moves money out of a wallet into one or more physical accounts — the
+    mirror of transferFund, targeting transferWalletToAccounts instead.
+    `split_cash`/`split_gcash`/`split_maya` are read the same way
+    transferFund's own splits are. */
+export async function transferWalletOut(
+  _prev: TransferWalletState,
+  formData: FormData
+): Promise<TransferWalletState> {
+  const walletId = parseWalletId(formData.get("wallet_id"));
+  if (!walletId) return { error: "Pick which wallet to transfer from." };
+
+  const splits: { account: MoneyAccount; amount: number }[] = [];
+  for (const account of MONEY_ACCOUNTS) {
+    const amount = parseMoney(formData.get(`split_${account}`), { allowBlank: true });
+    if (amount === "bad") {
+      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[account]}.` };
+    }
+    if (amount !== null && amount > 0) {
+      splits.push({ account, amount });
+    }
+  }
+  if (splits.length === 0) {
+    return { error: "Enter at least one amount to transfer." };
+  }
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await transferWalletToAccounts({ walletId, splits }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
 export type TransferToAccountState = {
   error: string | null;
   result?: { account: MoneyAccount; transferred: number };
@@ -371,7 +524,15 @@ export type TransferToAccountState = {
     of a fund's — see transferFundsToAccount's own doc comment.
     `split_profit`/`split_reinvest` are read straight off the form's
     per-fund inputs, same convention transferFund's own split_* fields
-    already use. */
+    already use. Wallet splits ride along as a separate `wallet_splits` JSON
+    field instead — a wallet's id isn't a fixed literal like `profit`/
+    `reinvest`, so there's no fixed `split_<id>` field name to loop over the
+    way MONEY_ACCOUNTS/PROFIT_FUNDS let the fund loop above do (same
+    "JSON field for a dynamic list" convention app/inventory/actions.ts's
+    own bulkRestock already uses for its payment split). Posted as two
+    separate transfers (funds, then wallets) rather than one combined
+    operation — each already validates its own source's balance
+    independently, same as if the owner had submitted them one at a time. */
 export async function transferToAccount(
   _prev: TransferToAccountState,
   formData: FormData
@@ -379,29 +540,119 @@ export async function transferToAccount(
   const account = parseAccount(formData.get("account"));
   if (!account) return { error: "Pick which account to transfer into." };
 
-  const splits: { fund: ProfitFund; amount: number }[] = [];
+  const fundSplits: { fund: ProfitFund; amount: number }[] = [];
   for (const fund of PROFIT_FUNDS) {
     const amount = parseMoney(formData.get(`split_${fund}`), { allowBlank: true });
     if (amount === "bad") {
       return { error: `Enter a valid amount for ${PROFIT_FUND_LABELS[fund]}.` };
     }
     if (amount !== null && amount > 0) {
-      splits.push({ fund, amount });
+      fundSplits.push({ fund, amount });
     }
   }
-  if (splits.length === 0) {
+
+  let walletSplits: { walletId: string; amount: number }[] = [];
+  const walletSplitsRaw = String(formData.get("wallet_splits") ?? "");
+  if (walletSplitsRaw) {
+    try {
+      const parsed: unknown = JSON.parse(walletSplitsRaw);
+      if (!Array.isArray(parsed)) throw new Error("bad shape");
+      walletSplits = parsed.map((entry) => {
+        const walletId = String((entry as { walletId?: unknown }).walletId ?? "");
+        const amount = Number((entry as { amount?: unknown }).amount);
+        if (!walletId || !Number.isFinite(amount) || amount <= 0) {
+          throw new Error("bad entry");
+        }
+        return { walletId, amount };
+      });
+    } catch {
+      return { error: "Something went wrong reading the wallet split." };
+    }
+  }
+
+  if (fundSplits.length === 0 && walletSplits.length === 0) {
     return { error: "Enter at least one amount to transfer." };
   }
 
   try {
     const user = await requireCurrentUser();
-    const result = await transferFundsToAccount({ account, splits }, user.id);
+    let transferred = 0;
+    if (fundSplits.length > 0) {
+      const result = await transferFundsToAccount(
+        { account, splits: fundSplits },
+        user.id
+      );
+      transferred += result.transferred;
+    }
+    if (walletSplits.length > 0) {
+      const result = await transferWalletsToAccount(
+        { account, splits: walletSplits },
+        user.id
+      );
+      transferred += result.transferred;
+    }
     revalidatePath("/vault");
     revalidatePath("/");
+    return { error: null, result: { account, transferred } };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type CreateWalletState = { error: string | null; result?: Wallet };
+
+/** Adds a new owner-managed wallet — see wallets' own comment in
+    mariadb/schema.sql. Just a name; color is auto-assigned server-side
+    (createWallet's own walletColorFor). */
+export async function createWalletAction(
+  _prev: CreateWalletState,
+  formData: FormData
+): Promise<CreateWalletState> {
+  const name = String(formData.get("name") ?? "");
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await createWalletOperation({ name }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/inventory");
     return { error: null, result };
   } catch (err) {
     return { error: (err as Error).message };
   }
+}
+
+export type RenameWalletState = { error: string | null; ok?: boolean };
+
+/** Renames a wallet in place — its id (and every past ledger entry) is
+    untouched, see renameWallet's own comment. */
+export async function renameWalletAction(
+  _prev: RenameWalletState,
+  formData: FormData
+): Promise<RenameWalletState> {
+  const walletId = parseWalletId(formData.get("wallet_id"));
+  if (!walletId) return { error: "Missing wallet." };
+  const name = String(formData.get("name") ?? "");
+
+  try {
+    await renameWalletOperation({ id: walletId, name });
+    revalidatePath("/vault");
+    revalidatePath("/inventory");
+    return { error: null, ok: true };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+/** Archives/unarchives a wallet — a plain fire-and-forget action (no
+    useActionState-driven form on the caller's side, just a button), see
+    setWalletActive's own comment on what `is_active` does. */
+export async function setWalletActiveAction(
+  walletId: string,
+  active: boolean
+): Promise<void> {
+  await setWalletActive({ id: walletId, active });
+  revalidatePath("/vault");
+  revalidatePath("/inventory");
 }
 
 /** Fetches the next batch of ledger rows for VaultLedgerClient's "Load more"

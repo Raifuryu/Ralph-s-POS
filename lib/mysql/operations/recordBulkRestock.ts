@@ -3,10 +3,10 @@ import { randomUUID } from "node:crypto";
 import { formatPeso } from "@/lib/format";
 import { withTransaction } from "@/lib/mysql/pool";
 import {
+  isMoneyAccount,
+  isProfitFund,
   MONEY_ACCOUNT_LABELS,
   PROFIT_FUND_LABELS,
-  type MoneyAccount,
-  type ProfitFund,
 } from "@/lib/types";
 import { placeholders, queryConn, roundMoney } from "./helpers";
 import { recordRestock } from "./recordRestock";
@@ -24,20 +24,19 @@ export type BulkRestockLine = {
   description: string | null;
 };
 
-/** Where a restock's payment came from — either of the two Vault funds
-    (deducted directly, no transfer needed first: buying stock is literally
-    what Reinvest exists for) or a physical account (a plain, ordinary
-    withdrawal). See vault_entries.fund's own comment in
-    mariadb/schema.sql for why a fund can be spent from without ever
-    touching cash/gcash/maya. */
-export type RestockPaymentSource = MoneyAccount | ProfitFund;
+/** Where a restock's payment came from — either of the two Vault funds, an
+    owner-created wallet (both deducted directly, no transfer needed first:
+    buying stock is literally what Reinvest — and any wallet — exists for),
+    or a physical account (a plain, ordinary withdrawal). See
+    vault_entries.fund/wallet_id's own comments in mariadb/schema.sql for why
+    a fund/wallet can be spent from without ever touching cash/gcash/maya.
+    Deliberately a plain string, not a discriminated union — a wallet's id is
+    an open-ended UUID, not a fixed literal like MoneyAccount/ProfitFund, so
+    there's no closed type to union it into; `isProfitFund`/`isMoneyAccount`
+    below tell the two fixed kinds apart, and anything left over is treated
+    as a wallet id (the FK on vault_entries.wallet_id rejects a bogus one). */
+export type RestockPaymentSource = string;
 export type RestockPaymentSplit = { source: RestockPaymentSource; amount: number };
-
-const FUND_SOURCES = new Set<RestockPaymentSource>(["profit", "reinvest"]);
-
-function isFundSource(source: RestockPaymentSource): source is ProfitFund {
-  return FUND_SOURCES.has(source);
-}
 
 /** Port of record_bulk_restock(). Every line either restocks + re-prices an
     existing product (product_id set) or creates one and restocks it in the
@@ -189,7 +188,7 @@ export async function recordBulkRestock(
     // Every 'withdrawal' needs a note (vault_entries' own CHECK), so one's
     // always supplied here regardless of what the caller passed in.
     for (const [source, amount] of paymentSplits) {
-      if (isFundSource(source)) {
+      if (isProfitFund(source)) {
         const rows = await queryConn<{ balance: number }>(
           conn,
           "SELECT balance FROM vault_fund_balance WHERE fund = ?",
@@ -210,7 +209,7 @@ export async function recordBulkRestock(
           "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note) VALUES (?, 'withdrawal', ?, 'cash', ?, ?, ?)",
           [randomUUID(), -amount, source, cashierId, "Restock payment"]
         );
-      } else {
+      } else if (isMoneyAccount(source)) {
         const rows = await queryConn<{ balance: number }>(
           conn,
           "SELECT balance FROM vault_balance WHERE account = ?",
@@ -224,6 +223,26 @@ export async function recordBulkRestock(
         }
         await conn.query(
           "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'withdrawal', ?, ?, ?, ?)",
+          [randomUUID(), -amount, source, cashierId, "Restock payment"]
+        );
+      } else {
+        // Anything left over is a wallet id — same placeholder convention
+        // as the fund branch above (see wallet_id's own comment). A bogus
+        // id (neither a real fund/account literal nor a real wallet) is
+        // caught by the FK on vault_entries.wallet_id itself.
+        const rows = await queryConn<{ balance: number; name: string }>(
+          conn,
+          "SELECT balance, name FROM wallet_balance WHERE wallet_id = ?",
+          [source]
+        );
+        const balance = roundMoney(rows[0]?.balance ?? 0);
+        if (amount > balance) {
+          throw new Error(
+            `${rows[0]?.name ?? "That wallet"} only has ${formatPeso(balance)} available`
+          );
+        }
+        await conn.query(
+          "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'withdrawal', 'cash', ?, ?, ?, ?)",
           [randomUUID(), -amount, source, cashierId, "Restock payment"]
         );
       }

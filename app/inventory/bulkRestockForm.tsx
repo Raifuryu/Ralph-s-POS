@@ -31,8 +31,8 @@ import type { Category, MoneyAccount, Product, ProfitFund } from "@/lib/types";
 import { bulkRestock, type InventoryState } from "./actions";
 import RestockPaymentSheet, {
   autoFillReinvest,
+  buildPaymentSources,
   emptyPayment,
-  PAYMENT_SOURCES,
 } from "./restockPaymentSheet";
 
 const initialState: InventoryState = { error: null };
@@ -608,22 +608,32 @@ export default function BulkRestockForm({
   categories,
   vaultBalances,
   fundBalances,
+  wallets,
 }: {
   products: Product[];
   categories: Category[];
   vaultBalances: Map<MoneyAccount, number>;
   fundBalances: Map<ProfitFund, number>;
+  /** Active wallets only — an archived one can't pay for a restock (see
+      wallets' own comment in mariadb/schema.sql). */
+  wallets: { id: string; name: string; balance: number }[];
 }) {
   const [state, formAction, isPending] = useActionState(
     bulkRestock,
     initialState
   );
 
+  // Cash/GCash/Maya/Profit/For Restock plus every active wallet — shared by
+  // emptyPayment/paymentTotal (via RestockPaymentSheet) and the hidden
+  // `payment` field below, so all three stay in sync with the same list.
+  const paymentSources = buildPaymentSources(wallets);
+  const walletBalances = new Map(wallets.map((wallet) => [wallet.id, wallet.balance]));
+
   // Required whole-batch "paid with" split, edited in its own nested sheet
   // (RestockPaymentSheet) — state lives up here since the hidden `payment`
   // input below and the auto-fill on open both need it too. The sheet's own
   // submit-disabled check computes its own paymentTotal(paidWith).
-  const [paidWith, setPaidWith] = useState(emptyPayment());
+  const [paidWith, setPaidWith] = useState(() => emptyPayment(paymentSources));
   const [paymentSheetOpen, setPaymentSheetOpen] = useState(false);
   // Fixed key for the initial line (not crypto.randomUUID()) — this runs
   // during SSR too, and a random key here would mismatch on hydration since
@@ -829,9 +839,9 @@ export default function BulkRestockForm({
         type="hidden"
         name="payment"
         value={JSON.stringify(
-          PAYMENT_SOURCES.filter((source) => toNumber(paidWith[source.value]) > 0).map(
-            (source) => ({ source: source.value, amount: paidWith[source.value] })
-          )
+          paymentSources
+            .filter((source) => toNumber(paidWith[source.value]) > 0)
+            .map((source) => ({ source: source.value, amount: paidWith[source.value] }))
         )}
       />
 
@@ -954,8 +964,10 @@ export default function BulkRestockForm({
       onOpenChange={setPaymentSheetOpen}
       formId={BULK_RESTOCK_FORM_ID}
       total={total}
+      sources={paymentSources}
       vaultBalances={vaultBalances}
       fundBalances={fundBalances}
+      walletBalances={walletBalances}
       paidWith={paidWith}
       onChange={setPaidWith}
       isPending={isPending}

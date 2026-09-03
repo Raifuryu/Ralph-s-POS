@@ -153,6 +153,16 @@ export type Database = {
           surcharge_amount: number;
         };
       };
+      wallets: {
+        Row: {
+          id: string;
+          name: string;
+          color: string;
+          is_active: boolean;
+          created_by: string;
+          created_at: string;
+        };
+      };
       vault_entries: {
         Row: {
           id: string;
@@ -167,6 +177,7 @@ export type Database = {
           created_at: string;
           account: MoneyAccountEnum;
           fund: ProfitFundEnum | null;
+          wallet_id: string | null;
         };
       };
       vault_snapshots: {
@@ -199,6 +210,15 @@ export type Database = {
       vault_fund_balance: {
         Row: {
           fund: ProfitFundEnum;
+          balance: number;
+        };
+      };
+      wallet_balance: {
+        Row: {
+          wallet_id: string;
+          name: string;
+          color: string;
+          is_active: boolean;
           balance: number;
         };
       };

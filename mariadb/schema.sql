@@ -243,6 +243,31 @@ CREATE TABLE service_transactions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================
+-- wallets — owner-created buckets beyond the fixed Cash/GCash/Maya accounts
+-- and Profit/For Restock funds ("the default 5"). Behaves like a fund, not a
+-- physical account: never a checkout payment method (see
+-- vault_entries.wallet_id's own comment below), just a purpose-based lens on
+-- money that's transferred into/out of it and can pay for a restock
+-- directly. Kept as its own table rather than folded into the fixed
+-- `fund` ENUM — the whole point is an open-ended, owner-managed list, not a
+-- second closed pair. `is_active` false means "archived": it drops out of
+-- every transfer/restock picker, but its id/name/history stay intact (a
+-- FOREIGN KEY from vault_entries, not a delete) so past entries still
+-- resolve to a real name instead of an orphaned id.
+-- =============================================================================
+
+CREATE TABLE wallets (
+  id         CHAR(36)     NOT NULL PRIMARY KEY,
+  name       VARCHAR(50)  NOT NULL,
+  color      VARCHAR(20)  NOT NULL DEFAULT '#6b7280',
+  is_active  TINYINT(1)   NOT NULL DEFAULT 1,
+  created_by CHAR(36)     NOT NULL,
+  created_at TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT wallets_name_unique UNIQUE (name),
+  CONSTRAINT wallets_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =============================================================================
 -- vault_entries
 -- =============================================================================
 
@@ -269,10 +294,21 @@ CREATE TABLE vault_entries (
   -- pass-through principal leg of a service). See vault_fund_balance below
   -- for the summed-by-fund view.
   fund                   ENUM('profit','reinvest'),
+  -- Which owner-created wallet this entry counts toward — a THIRD dimension
+  -- alongside `account`/`fund` above, same "earmarked, not a physical
+  -- location" idea `fund` already follows, just for an open-ended list
+  -- instead of a fixed pair (see wallets' own comment above). Never set
+  -- together with `fund` (vault_entries_fund_wallet_check below) — an entry
+  -- is earmarked for at most one of a built-in fund or a custom wallet, never
+  -- both. NULL `account` isn't an option (NOT NULL), so a wallet-earmarked
+  -- row still carries the same 'cash' placeholder convention `fund` rows use.
+  wallet_id              CHAR(36),
   CONSTRAINT vault_entries_seq_key UNIQUE (seq),
   CONSTRAINT vault_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT vault_entries_service_transaction_id_fkey FOREIGN KEY (service_transaction_id) REFERENCES service_transactions(id) ON DELETE SET NULL,
   CONSTRAINT vault_entries_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
+  CONSTRAINT vault_entries_wallet_id_fkey FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE RESTRICT,
+  CONSTRAINT vault_entries_fund_wallet_check CHECK (fund IS NULL OR wallet_id IS NULL),
   CONSTRAINT vault_entries_type_amount_check CHECK (
     (entry_type = 'count' AND amount >= 0 AND expected IS NOT NULL)
     OR (entry_type = 'sale' AND amount > 0)
@@ -288,7 +324,8 @@ CREATE TABLE vault_entries (
   ),
   CONSTRAINT vault_entries_withdrawal_note_check CHECK (entry_type <> 'withdrawal' OR LENGTH(TRIM(COALESCE(note, ''))) > 0),
   INDEX vault_entries_account_seq_idx (account, seq DESC),
-  INDEX vault_entries_seq_idx (seq DESC)
+  INDEX vault_entries_seq_idx (seq DESC),
+  INDEX vault_entries_wallet_id_seq_idx (wallet_id, seq DESC)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================
@@ -348,13 +385,15 @@ GROUP BY ti.product_id;
 -- a 3-row literal account list + a correlated subquery for "the latest count"
 -- and another for "movements since it".
 --
--- `v.fund IS NULL` is the key exclusion: a 'sale'/'service'/settlement entry
--- with a fund set represents money earmarked for Profit/Reinvest, not yet
--- physically in this account — it only reaches Cash/GCash/Maya via an
--- explicit 'transfer' (see vault_fund_balance below), whose account-arriving
--- leg is itself posted with fund NULL. So this account balance means
--- "money actually transferred/deposited here," not "everything ever sold
--- through this payment method" — see vault_entries.fund's own comment.
+-- `v.fund IS NULL AND v.wallet_id IS NULL` is the key exclusion: a
+-- 'sale'/'service'/settlement entry with a fund or wallet set represents
+-- money earmarked for Profit/Reinvest/a custom wallet, not yet physically in
+-- this account — it only reaches Cash/GCash/Maya via an explicit 'transfer'
+-- (see wallet_balance/vault_fund_balance below), whose account-arriving leg
+-- is itself posted with both fund and wallet_id NULL. So this account
+-- balance means "money actually transferred/deposited here," not
+-- "everything ever sold through this payment method" — see
+-- vault_entries.fund/wallet_id's own comments.
 --
 -- The literals below are COLLATE-pinned explicitly — a view's string
 -- literals otherwise freeze whatever collation_connection happened to be in
@@ -373,6 +412,7 @@ SELECT
       FROM vault_entries v
       WHERE v.entry_type <> 'count'
         AND v.fund IS NULL
+        AND v.wallet_id IS NULL
         AND v.account = acct.account
         AND v.seq > COALESCE(lc.seq, 0)
     ), 0)
@@ -411,3 +451,19 @@ FROM (
 ) f
 LEFT JOIN vault_entries ve ON ve.fund = f.fund
 GROUP BY f.fund;
+
+-- One row per wallet, active or not — a deactivated wallet keeps its balance
+-- reachable (its history isn't erased, see wallets' own comment), it just
+-- drops out of the transfer/restock pickers, which filter on is_active
+-- themselves. Same "plain SUM, no count/anchor" shape as vault_fund_balance
+-- above — a wallet isn't something you physically count either.
+CREATE VIEW wallet_balance AS
+SELECT
+  w.id AS wallet_id,
+  w.name,
+  w.color,
+  w.is_active,
+  CAST(COALESCE(SUM(ve.amount), 0) AS DECIMAL(12,2)) AS balance
+FROM wallets w
+LEFT JOIN vault_entries ve ON ve.wallet_id = w.id
+GROUP BY w.id, w.name, w.color, w.is_active;

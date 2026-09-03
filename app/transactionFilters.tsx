@@ -70,7 +70,18 @@ export default function TransactionFilters({
 
   function apply(next?: Partial<FilterValues>) {
     const values = { q, from, to, ...next };
-    const params = new URLSearchParams();
+    // Starts from whatever's already in the URL (not a fresh
+    // URLSearchParams) — Statistics' own category/product/service filter
+    // and Vault's own wallet filter each write their own param alongside
+    // this component's, and this used to silently drop them the moment
+    // search/date was touched afterward. Only the params this component
+    // itself owns get cleared below; everything else passes through.
+    const params = new URLSearchParams(window.location.search);
+    params.delete("q");
+    params.delete("from");
+    params.delete("from_ts");
+    params.delete("to");
+    params.delete("to_ts");
 
     if (values.q.trim()) params.set("q", values.q.trim());
 
@@ -126,7 +137,17 @@ export default function TransactionFilters({
     setQ("");
     setFrom("");
     setTo("");
-    router.push(basePath);
+    // Same "preserve what this component doesn't own" rule as apply() above
+    // — clearing search/date shouldn't also clear an unrelated category/
+    // wallet filter.
+    const params = new URLSearchParams(window.location.search);
+    params.delete("q");
+    params.delete("from");
+    params.delete("from_ts");
+    params.delete("to");
+    params.delete("to_ts");
+    const qs = params.toString();
+    router.push(qs ? `${basePath}?${qs}` : basePath);
   }
 
   return (

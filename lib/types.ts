@@ -14,6 +14,8 @@ export type ServiceTransaction = Tables<"service_transactions">;
 export type VaultEntry = Tables<"vault_entries">;
 export type VaultSnapshot = Tables<"vault_snapshots">;
 export type VaultFundBalance = Tables<"vault_fund_balance">;
+export type Wallet = Tables<"wallets">;
+export type WalletBalance = Tables<"wallet_balance">;
 export type Transaction = Tables<"transactions">;
 export type TransactionItem = Tables<"transaction_items">;
 
@@ -131,6 +133,28 @@ export function isMoneyAccount(value: string): value is MoneyAccount {
 
 export function isProfitFund(value: string): value is ProfitFund {
   return (PROFIT_FUNDS as readonly string[]).includes(value);
+}
+
+/** Owner-created buckets beyond the fixed 5 (Cash/GCash/Maya/Profit/For
+    Restock) — see wallets' own comment in mariadb/schema.sql. An open-ended
+    list (a real table, not a closed enum like MONEY_ACCOUNTS/PROFIT_FUNDS
+    above), so there's no fixed union type for a wallet's id — just the
+    Wallet row shape itself. */
+const WALLET_COLOR_PALETTE = [
+  "#f97316",
+  "#8b5cf6",
+  "#ec4899",
+  "#0ea5e9",
+  "#eab308",
+  "#14b8a6",
+];
+
+/** Assigns a new wallet a color from a small rotating palette, keyed off
+    how many wallets already exist — no color picker needed in the "Add
+    wallet" form, and two wallets created back to back still land on
+    different colors. */
+export function walletColorFor(existingCount: number): string {
+  return WALLET_COLOR_PALETTE[existingCount % WALLET_COLOR_PALETTE.length];
 }
 
 /**

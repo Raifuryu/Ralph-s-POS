@@ -10,10 +10,12 @@ import {
   PROFIT_FUND_LABELS,
   type MoneyAccount,
   type ProfitFund,
+  type WalletBalance,
 } from "@/lib/types";
 import { type EServiceFees } from "../incomeBreakdownCard";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
+import AddWalletSheet from "./addWalletSheet";
 import FundCard from "./fundCard";
 import PersonalTakesSheet, { type PersonalTake } from "./personalTakesSheet";
 import VaultLedgerClient from "./vaultLedgerClient";
@@ -21,6 +23,8 @@ import VaultSnapshotSheet, {
   type SnapshotHistoryEntry,
   type TodaySnapshot,
 } from "./vaultSnapshotSheet";
+import WalletCard from "./walletCard";
+import WalletFilter from "./walletFilter";
 
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
 
@@ -43,6 +47,8 @@ type SearchParams = {
   to_ts?: string;
   debts?: string;
   snapshot?: string;
+  /** Comma-joined MoneyAccount values — see WalletFilter's own comment. */
+  wallet?: string;
 };
 
 export default async function VaultPage({
@@ -52,7 +58,13 @@ export default async function VaultPage({
 }) {
   const params = await searchParams;
   const q = params.q?.trim() ?? "";
-  const filters = { q, fromTs: params.from_ts, toTs: params.to_ts };
+  // Garbage/stale values (a hand-edited URL) are silently dropped rather
+  // than erroring — same "fall back to no filter" tolerance every other
+  // URL-driven filter in this app follows.
+  const selectedWallets = (params.wallet?.split(",") ?? []).filter(
+    (value): value is MoneyAccount => (ACCOUNTS as string[]).includes(value)
+  );
+  const filters = { q, fromTs: params.from_ts, toTs: params.to_ts, accounts: selectedWallets };
   const showDebts = params.debts !== undefined;
   const showSnapshot = params.snapshot !== undefined;
 
@@ -60,6 +72,7 @@ export default async function VaultPage({
   let fundBalanceRows: { fund: ProfitFund; balance: number }[];
   let fundBreakdownRows: { fund: ProfitFund; account: MoneyAccount; amount: number }[];
   let todayFundRows: { fund: ProfitFund; amount: number }[];
+  let walletBalanceRows: WalletBalance[];
   let ledgerPage: Awaited<ReturnType<typeof fetchVaultLedgerPage>>;
   let personalTakeRows: Omit<PersonalTake, "items">[];
   let todaySnapshotRows: TodaySnapshot[];
@@ -84,6 +97,7 @@ export default async function VaultPage({
       fundBalanceRows,
       fundBreakdownRows,
       todayFundRows,
+      walletBalanceRows,
       ledgerPage,
       personalTakeRows,
       todaySnapshotRows,
@@ -128,6 +142,14 @@ export default async function VaultPage({
              AND entry_type IN ('sale', 'service', 'void')
              AND DATE(created_at) = CURDATE()
            GROUP BY fund`
+        ),
+        // Every owner-created wallet, active or archived, with its balance
+        // in the same row — WalletCard's own grid shows all of them
+        // (archiving isn't deletion, see wallets' own comment); pickers
+        // elsewhere (AccountSheet's Transfer tab, the restock payment
+        // sheet) filter this down to is_active themselves.
+        queryRows<WalletBalance>(
+          "SELECT wallet_id, name, color, is_active, balance FROM wallet_balance ORDER BY name"
         ),
         fetchVaultLedgerPage(filters, 0),
         // Independent of everything above (keyed only by ?debts), and only
@@ -298,6 +320,19 @@ export default async function VaultPage({
     byAccount.set(row.account, Number(row.amount));
   }
 
+  const wallets = walletBalanceRows.map((row) => ({
+    id: row.wallet_id,
+    name: row.name,
+    color: row.color,
+    is_active: row.is_active,
+    balance: Number(row.balance ?? 0),
+  }));
+  // Active only — an archived wallet drops out of every picker (see
+  // wallets' own comment in mariadb/schema.sql), though its own card below
+  // still shows regardless.
+  const activeWallets = wallets.filter((wallet) => wallet.is_active);
+  const walletBalances = new Map(wallets.map((wallet) => [wallet.id, wallet.balance]));
+
   const snapshotHistory: SnapshotHistoryEntry[] = snapshotHistoryRows.map((row) => ({
     day: row.snapshot_day,
     cash: Number(row.cash_amount),
@@ -331,6 +366,8 @@ export default async function VaultPage({
             account={account}
             balance={balances.get(account) ?? 0}
             fundBalances={fundBalances}
+            wallets={activeWallets}
+            walletBalances={walletBalances}
           />
         ))}
       </div>
@@ -349,6 +386,30 @@ export default async function VaultPage({
             breakdown={fundBreakdowns.get(fund) ?? new Map()}
           />
         ))}
+      </div>
+
+      {/* Owner-created wallets beyond the fixed 5 — same "tap to cash in/
+          out, adjust, or transfer" card as Profit/For Restock above, plus a
+          Manage tab for renaming/archiving. Archived wallets still show
+          here (their history stays reachable) but drop out of every other
+          picker. */}
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground">Wallets</p>
+          <AddWalletSheet />
+        </div>
+        {wallets.length > 0 ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {wallets.map((wallet) => (
+              <WalletCard key={wallet.id} wallet={wallet} balance={wallet.balance} />
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            No wallets yet — add one to track money for a specific purpose,
+            separate from Profit/For Restock.
+          </p>
+        )}
       </div>
 
       {/* Total on hand, plain — not another card, since the three account
@@ -403,12 +464,14 @@ export default async function VaultPage({
         searchPlaceholder="e.g. GCash, supplies"
       />
 
+      <WalletFilter initial={selectedWallets} basePath="/vault" />
+
       <VaultLedgerClient
-        key={`${q}|${params.from_ts ?? ""}|${params.to_ts ?? ""}`}
+        key={`${q}|${params.from_ts ?? ""}|${params.to_ts ?? ""}|${selectedWallets.join(",")}`}
         initialEntries={ledgerPage.entries}
         initialTotal={ledgerPage.total}
         filters={filters}
-        filtered={Boolean(q || params.from_ts || params.to_ts)}
+        filtered={Boolean(q || params.from_ts || params.to_ts || selectedWallets.length > 0)}
       />
 
       <PersonalTakesSheet open={showDebts} takes={personalTakes} />

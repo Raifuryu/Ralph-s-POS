@@ -1,3 +1,5 @@
+import type { MoneyAccount } from "@/lib/types";
+
 /** Page size for one vault ledger "load more" batch — the table grows
     unbounded over the store's lifetime, so unlike the sales dashboard's
     single-day window this can't be fetched in full up front. Kept in its own
@@ -10,4 +12,10 @@ export type VaultLedgerFilters = {
   q: string;
   fromTs?: string;
   toTs?: string;
+  /** Narrows to entries on these accounts (matched against vault_entries.
+      account directly, same field the Ledger table's own Badge already
+      shows) — empty means no wallet filter, every account. Several
+      selected at once is an OR, not an AND (an entry has exactly one
+      account, so "AND" would always match nothing past the first). */
+  accounts: MoneyAccount[];
 };

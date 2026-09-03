@@ -34,6 +34,7 @@ import {
   type VaultAdjustState,
   type VaultMoveState,
 } from "./actions";
+import type { WalletCardData } from "./walletCard";
 
 const initialState: VaultMoveState = { error: null };
 const initialAdjustState: VaultAdjustState = { error: null };
@@ -284,18 +285,27 @@ function AdjustForm({
   );
 }
 
-/** Pulls money out of Profit and/or For Restock into this account — the
-    mirror of FundCard's own transfer form, started from the account's side
-    instead of the fund's (see transferFundsToAccount's own doc comment).
-    Unlike FundCard, there's no natural "where it came from" default to
-    pre-fill here, so both split fields start blank. */
+/** Pulls money out of Profit/For Restock and/or any active wallet into this
+    account — the mirror of FundCard/WalletCard's own transfer forms,
+    started from the account's side instead (see transferFundsToAccount's
+    own doc comment). No natural "where it came from" default to pre-fill
+    here, so every split field starts blank. Wallet splits ride along as a
+    `wallet_splits` JSON field — see transferToAccount's own comment on why
+    a wallet's dynamic id can't get a fixed `split_<id>` field name the way
+    the two funds above do. */
 function TransferInForm({
   account,
   fundBalances,
+  wallets,
+  walletBalances,
   onRecorded,
 }: {
   account: MoneyAccount;
   fundBalances: Map<ProfitFund, number>;
+  /** Active wallets only — an archived one drops out of this picker (see
+      wallets' own comment in mariadb/schema.sql). */
+  wallets: WalletCardData[];
+  walletBalances: Map<string, number>;
   /** Called shortly after a successful record — the drawer closes itself
       instead of leaving Cancel as the only way out. */
   onRecorded: () => void;
@@ -308,10 +318,16 @@ function TransferInForm({
     profit: "",
     reinvest: "",
   });
-  const total = PROFIT_FUNDS.reduce(
+  const [walletSplits, setWalletSplits] = useState<Record<string, string>>({});
+  const fundTotal = PROFIT_FUNDS.reduce(
     (sum, fund) => sum + (Number(splits[fund]) || 0),
     0
   );
+  const walletTotal = wallets.reduce(
+    (sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0),
+    0
+  );
+  const total = fundTotal + walletTotal;
 
   // Longer delay than Cash in/out — there's a result to actually read here,
   // same reasoning AdjustForm's own delay follows.
@@ -324,8 +340,17 @@ function TransferInForm({
   return (
     <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
       <input type="hidden" name="account" value={account} />
+      <input
+        type="hidden"
+        name="wallet_splits"
+        value={JSON.stringify(
+          wallets
+            .filter((wallet) => (Number(walletSplits[wallet.id]) || 0) > 0)
+            .map((wallet) => ({ walletId: wallet.id, amount: walletSplits[wallet.id] }))
+        )}
+      />
       <p className="text-xs text-muted-foreground">
-        Pull money from Profit and/or For Restock into{" "}
+        Pull money from Profit, For Restock, and/or any wallet into{" "}
         {MONEY_ACCOUNT_LABELS[account]}.
       </p>
       {PROFIT_FUNDS.map((fund) => (
@@ -347,6 +372,28 @@ function TransferInForm({
             value={splits[fund]}
             onChange={(event) =>
               setSplits((prev) => ({ ...prev, [fund]: event.target.value }))
+            }
+          />
+        </div>
+      ))}
+      {wallets.map((wallet) => (
+        <div key={wallet.id} className="flex flex-col gap-1">
+          <Label htmlFor={`transfer-in-wallet-${wallet.id}`} className="text-xs">
+            {wallet.name}{" "}
+            <span className="font-normal text-muted-foreground">
+              ({formatPeso(walletBalances.get(wallet.id) ?? 0)} available)
+            </span>
+          </Label>
+          <Input
+            id={`transfer-in-wallet-${wallet.id}`}
+            type="number"
+            step="0.01"
+            min="0"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={walletSplits[wallet.id] ?? ""}
+            onChange={(event) =>
+              setWalletSplits((prev) => ({ ...prev, [wallet.id]: event.target.value }))
             }
           />
         </div>
@@ -390,10 +437,15 @@ export default function AccountSheet({
   account,
   balance,
   fundBalances,
+  wallets,
+  walletBalances,
 }: {
   account: MoneyAccount;
   balance: number;
   fundBalances: Map<ProfitFund, number>;
+  /** Active wallets only — see TransferInForm's own comment. */
+  wallets: WalletCardData[];
+  walletBalances: Map<string, number>;
 }) {
   const label = MONEY_ACCOUNT_LABELS[account];
   const [open, setOpen] = useState(false);
@@ -441,6 +493,8 @@ export default function AccountSheet({
               <TransferInForm
                 account={account}
                 fundBalances={fundBalances}
+                wallets={wallets}
+                walletBalances={walletBalances}
                 onRecorded={() => setOpen(false)}
               />
             </TabsContent>

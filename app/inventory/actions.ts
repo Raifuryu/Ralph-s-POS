@@ -12,11 +12,6 @@ import {
   type RestockPaymentSplit,
   type RestockPaymentSource,
 } from "@/lib/mysql/operations/recordBulkRestock";
-import { isMoneyAccount, isProfitFund } from "@/lib/types";
-
-function isRestockPaymentSource(value: string): value is RestockPaymentSource {
-  return isMoneyAccount(value) || isProfitFund(value);
-}
 
 export type InventoryState = { error: string | null };
 
@@ -235,8 +230,16 @@ export async function bulkRestock(
   const payment: RestockPaymentSplit[] = [];
   for (const entry of rawPayment) {
     const line = (entry ?? {}) as Record<string, unknown>;
-    const source = typeof line.source === "string" ? line.source : "";
-    if (!isRestockPaymentSource(source)) {
+    // Not narrowed against a fixed set here (unlike before wallets existed)
+    // — a source can now be a MoneyAccount/ProfitFund literal OR an
+    // open-ended wallet id, so this layer only checks "was something
+    // actually picked." recordBulkRestock's own operation does the real
+    // validation: a fund/account gets its usual balance check, and
+    // anything else is treated as a wallet id, where a truly bogus one is
+    // caught by the FK on vault_entries.wallet_id (see its own comment).
+    const source: RestockPaymentSource =
+      typeof line.source === "string" ? line.source.trim() : "";
+    if (!source) {
       return { error: "Payment split has an invalid source." };
     }
     const amount = parseMoney(String(line.amount ?? ""), { requirePositive: true });

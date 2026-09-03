@@ -41,6 +41,10 @@ export async function fetchVaultLedgerPage(
     conditions.push("ve.created_at <= ?");
     params.push(filters.toTs);
   }
+  if (filters.accounts.length > 0) {
+    conditions.push(`ve.account IN (${filters.accounts.map(() => "?").join(",")})`);
+    params.push(...filters.accounts);
+  }
   if (q) {
     if (matchedServiceTxnIds.length > 0) {
       conditions.push(

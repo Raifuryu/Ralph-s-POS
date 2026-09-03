@@ -13,13 +13,13 @@ import {
   SALES_FILTERS,
   type MoneyAccount,
   type Product,
-  type ProfitFund,
   type SalesEntry,
   type Service,
   type ServiceTransaction,
   type Transaction,
   type TransactionItem,
   type TransactionWithItems,
+  type VaultEntry,
 } from "@/lib/types";
 import { signOut } from "./login/actions";
 import DashboardDateFilter from "./dashboardDateFilter";
@@ -125,12 +125,24 @@ export default async function Home({
   let topSellers: { product_id: string; units_sold: number }[];
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
-  let fundRows: { fund: ProfitFund; balance: number }[];
+  let recentVaultRows: Pick<
+    VaultEntry,
+    "id" | "entry_type" | "account" | "amount" | "note" | "created_at"
+  >[];
+  let todayAdjustmentRows: { account: MoneyAccount; amount: number }[];
   let sales: TransactionWithItems[];
 
   try {
-    [transactions, serviceList, products, topSellers, services, vaultRows, fundRows] =
-      await Promise.all([
+    [
+      transactions,
+      serviceList,
+      products,
+      topSellers,
+      services,
+      vaultRows,
+      recentVaultRows,
+      todayAdjustmentRows,
+    ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
         // service_transactions into one chronological feed.
@@ -154,12 +166,33 @@ export default async function Home({
         queryRows<{ account: MoneyAccount; balance: number }>(
           "SELECT account, balance FROM vault_balance"
         ),
-        // Display-only, per the owner's own request — shown on this card's
-        // footer purely as a front-end lens on the same money already
-        // counted above, nothing here writes anything back (see
-        // VaultCard's own comment on why it's a footer, not more rows).
-        queryRows<{ fund: ProfitFund; balance: number }>(
-          "SELECT fund, balance FROM vault_fund_balance"
+        // The card's own "recent activity" footer — cash out/in/adjustment/
+        // transfer only (not sale/service/void, the everyday transaction
+        // flow already shown elsewhere), and only entries that actually
+        // moved Cash/GCash/Maya (fund IS NULL — a fund-only cash-in/out/
+        // adjustment on Profit/For Restock never touches this card's
+        // balances, and a fund→account transfer's fund-leaving leg has
+        // `fund` set too, so only its account-arriving leg shows here).
+        // Today only, newest first, capped at 3.
+        queryRows<
+          Pick<VaultEntry, "id" | "entry_type" | "account" | "amount" | "note" | "created_at">
+        >(
+          `SELECT id, entry_type, account, amount, note, created_at
+           FROM vault_entries
+           WHERE fund IS NULL
+             AND entry_type IN ('deposit', 'withdrawal', 'adjustment', 'transfer')
+             AND DATE(created_at) = CURDATE()
+           ORDER BY seq DESC
+           LIMIT 3`
+        ),
+        // Today's net adjustment per account — shown beside each row's
+        // balance in VaultCard (see its own `todayAdjustments` prop), same
+        // `fund IS NULL` scoping as above.
+        queryRows<{ account: MoneyAccount; amount: number }>(
+          `SELECT account, COALESCE(SUM(amount), 0) AS amount
+           FROM vault_entries
+           WHERE fund IS NULL AND entry_type = 'adjustment' AND DATE(created_at) = CURDATE()
+           GROUP BY account`
         ),
       ]);
 
@@ -263,9 +296,9 @@ export default async function Home({
   for (const row of vaultRows) {
     if (row.account) vault.set(row.account, Number(row.balance ?? 0));
   }
-  const funds = new Map<ProfitFund, number>();
-  for (const row of fundRows) {
-    if (row.fund) funds.set(row.fund, Number(row.balance ?? 0));
+  const todayAdjustments = new Map<MoneyAccount, number>();
+  for (const row of todayAdjustmentRows) {
+    if (row.account) todayAdjustments.set(row.account, Number(row.amount ?? 0));
   }
 
   // Same reasoning as storeMargin: counted over the whole filtered window via
@@ -307,7 +340,12 @@ export default async function Home({
             two headline cards — equal weight, stacked on mobile, side by
             side from sm up. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <VaultCard balances={vault} funds={funds} compact />
+          <VaultCard
+            balances={vault}
+            todayAdjustments={todayAdjustments}
+            recentEntries={recentVaultRows}
+            compact
+          />
           <IncomeBreakdownCard
             title={incomeTitle}
             subtitle={incomeSubtitle}

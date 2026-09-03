@@ -138,6 +138,7 @@ export default async function InventoryPage({
   let restockHistoryRows: (RestockReceiptLine & { cashier_id: string })[];
   let vaultBalanceRows: { account: MoneyAccount; balance: number }[];
   let fundBalanceRows: { fund: ProfitFund; balance: number }[];
+  let activeWalletRows: { wallet_id: string; name: string; balance: number }[];
 
   try {
     [
@@ -149,6 +150,7 @@ export default async function InventoryPage({
       restockHistoryRows,
       vaultBalanceRows,
       fundBalanceRows,
+      activeWalletRows,
     ] = await Promise.all([
         queryRows<Product>(`SELECT ${PRODUCT_COLUMNS} FROM products ORDER BY name`),
         queryRows<Category>(
@@ -198,6 +200,13 @@ export default async function InventoryPage({
               "SELECT fund, balance FROM vault_fund_balance"
             )
           : Promise.resolve([]),
+        // Active wallets only — an archived one can't pay for a restock
+        // (see wallets' own comment in mariadb/schema.sql).
+        showBulkRestock
+          ? queryRows<{ wallet_id: string; name: string; balance: number }>(
+              "SELECT wallet_id, name, balance FROM wallet_balance WHERE is_active = 1 ORDER BY name"
+            )
+          : Promise.resolve([]),
       ]);
   } catch (err) {
     return (
@@ -234,6 +243,11 @@ export default async function InventoryPage({
   const fundBalances = new Map(
     fundBalanceRows.map((row) => [row.fund, Number(row.balance ?? 0)])
   );
+  const wallets = activeWalletRows.map((row) => ({
+    id: row.wallet_id,
+    name: row.name,
+    balance: Number(row.balance ?? 0),
+  }));
 
   // Sales attributed to a batch = this product's revenue from the batch's
   // created_at onward. An earlier batch's window overlaps a later batch's,
@@ -430,6 +444,7 @@ export default async function InventoryPage({
           categories={categories}
           vaultBalances={vaultBalances}
           fundBalances={fundBalances}
+          wallets={wallets}
         />
 
         <RestockHistorySheet open={showRestockHistory} receipts={restockReceipts} />

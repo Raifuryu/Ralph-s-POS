@@ -13,6 +13,11 @@ export type BreakdownRow = {
   label: string;
   value: number;
   color: string;
+  /** A small greyed-out annotation shown in parentheses right after this
+      row's value (e.g. "₱123,456.00 (₱123.00)" — VaultCard's own today's-
+      adjustment figure). Purely a label, never folds into `value`/the
+      proportion bar/the headline total. */
+  note?: string;
   /** Indented child rows under this one (e.g. E-Service split by wallet). */
   subRows?: BreakdownRow[];
 };
@@ -157,13 +162,20 @@ export function MoneyBreakdownCard({
                     />
                     {row.label}
                   </span>
-                  <span
-                    className={cn(
-                      "font-medium tabular-nums",
-                      row.value < 0 && "text-destructive"
-                    )}
-                  >
-                    {formatPeso(row.value)}
+                  <span className="flex items-baseline gap-1">
+                    <span
+                      className={cn(
+                        "font-medium tabular-nums",
+                        row.value < 0 && "text-destructive"
+                      )}
+                    >
+                      {formatPeso(row.value)}
+                    </span>
+                    {row.note ? (
+                      <span className="text-muted-foreground tabular-nums">
+                        ({row.note})
+                      </span>
+                    ) : null}
                   </span>
                 </p>
 
