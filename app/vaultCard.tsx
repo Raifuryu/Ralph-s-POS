@@ -6,12 +6,17 @@ import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 export type TransferOutItem = { key: string; label: string; amount: number };
 
 export default function VaultCard({
+  title = "Money on hand",
   balances,
   todayTransfersIn,
   transfersOut,
   compact = false,
   className,
 }: {
+  /** The Sales dashboard shows this same Cash/GCash/Maya card as "Baseline
+      Fund" instead — everywhere else (Vault page, Vault Snapshot sheet)
+      keeps the default. */
+  title?: string;
   balances: Map<MoneyAccount, number>;
   /** Today's total transferred INTO each account (entry_type='transfer',
       the account-arriving leg — see page.tsx's own transferredInTodayRows
@@ -57,7 +62,7 @@ export default function VaultCard({
 
   return (
     <MoneyBreakdownCard
-      title="Money on hand"
+      title={title}
       total={total}
       headlineNote={
         transferredInSum !== 0 ? `was ${formatPeso(totalBeforeTransfers)}` : undefined

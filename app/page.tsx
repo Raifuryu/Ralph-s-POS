@@ -307,6 +307,12 @@ export default async function Home({
     else eServiceFees.other += fee;
   }
 
+  // Same gross figure the Income card's own headline shows (store +
+  // e-service, before cost) — recomputed here rather than read back off
+  // that card, since it's just these same two numbers already in scope.
+  const windowIncome =
+    storeTotal + eServiceFees.gcash + eServiceFees.maya + eServiceFees.other;
+
   const { title: incomeTitle, subtitle: incomeSubtitle } = incomeCardCopy({
     dateKey,
     unknownCostNote:
@@ -321,6 +327,10 @@ export default async function Home({
   for (const row of vaultRows) {
     if (row.account) vault.set(row.account, Number(row.balance ?? 0));
   }
+  // The Sales dashboard's own "Baseline Fund" total (VaultCard's own
+  // Cash+GCash+Maya sum) — fed into the Income card's own "Baseline Fund +
+  // Income" footer line below.
+  const baselineFundTotal = [...vault.values()].reduce((sum, value) => sum + value, 0);
   const transferredInToday = new Map<MoneyAccount, number>();
   for (const row of transferredInTodayRows) {
     if (row.account) transferredInToday.set(row.account, Number(row.amount ?? 0));
@@ -386,6 +396,7 @@ export default async function Home({
             side from sm up. */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <VaultCard
+            title="Baseline Fund"
             balances={vault}
             todayTransfersIn={transferredInToday}
             transfersOut={transfersOut}
@@ -400,6 +411,17 @@ export default async function Home({
             invested={storeCogs}
             compact
           />
+        </div>
+
+        {/* Baseline Fund + Income, plain — not another card, just the
+            running total those two cards above add up to. */}
+        <div className="flex flex-col gap-1">
+          <p className="text-sm text-muted-foreground">
+            Baseline Fund + Income
+          </p>
+          <p className="text-2xl font-semibold tabular-nums">
+            {formatPeso(baselineFundTotal + windowIncome)}
+          </p>
         </div>
 
         <TransactionTabs
