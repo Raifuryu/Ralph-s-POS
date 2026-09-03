@@ -404,6 +404,7 @@ export default async function VaultPage({
             key={account}
             account={account}
             balance={balances.get(account) ?? 0}
+            accountBalances={balances}
             fundBalances={fundBalances}
             wallets={activeWallets}
             walletBalances={walletBalances}

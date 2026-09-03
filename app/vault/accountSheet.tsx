@@ -18,6 +18,7 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import {
+  MONEY_ACCOUNTS,
   MONEY_ACCOUNT_LABELS,
   PROFIT_FUNDS,
   PROFIT_FUND_LABELS,
@@ -295,12 +296,17 @@ function AdjustForm({
     the two funds above do. */
 function TransferInForm({
   account,
+  accountBalances,
   fundBalances,
   wallets,
   walletBalances,
   onRecorded,
 }: {
   account: MoneyAccount;
+  /** Every account's own balance, including this one (unused for itself —
+      an account can't transfer into itself, so it never appears as a
+      source option here). */
+  accountBalances: Map<MoneyAccount, number>;
   fundBalances: Map<ProfitFund, number>;
   /** Active wallets only — an archived one drops out of this picker (see
       wallets' own comment in mariadb/schema.sql). */
@@ -314,11 +320,21 @@ function TransferInForm({
     transferToAccount,
     initialTransferState
   );
+  const otherAccounts = MONEY_ACCOUNTS.filter((a) => a !== account);
+  const [accountSplits, setAccountSplits] = useState<Record<MoneyAccount, string>>({
+    cash: "",
+    gcash: "",
+    maya: "",
+  });
   const [splits, setSplits] = useState<Record<ProfitFund, string>>({
     profit: "",
     reinvest: "",
   });
   const [walletSplits, setWalletSplits] = useState<Record<string, string>>({});
+  const accountTotal = otherAccounts.reduce(
+    (sum, a) => sum + (Number(accountSplits[a]) || 0),
+    0
+  );
   const fundTotal = PROFIT_FUNDS.reduce(
     (sum, fund) => sum + (Number(splits[fund]) || 0),
     0
@@ -327,7 +343,7 @@ function TransferInForm({
     (sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0),
     0
   );
-  const total = fundTotal + walletTotal;
+  const total = accountTotal + fundTotal + walletTotal;
 
   // Longer delay than Cash in/out — there's a result to actually read here,
   // same reasoning AdjustForm's own delay follows.
@@ -350,9 +366,32 @@ function TransferInForm({
         )}
       />
       <p className="text-xs text-muted-foreground">
-        Pull money from Profit, For Restock, and/or any wallet into{" "}
-        {MONEY_ACCOUNT_LABELS[account]}.
+        Pull money from another account, Profit/For Restock, and/or any
+        wallet into {MONEY_ACCOUNT_LABELS[account]}.
       </p>
+      {otherAccounts.map((otherAccount) => (
+        <div key={otherAccount} className="flex flex-col gap-1">
+          <Label htmlFor={`transfer-in-account-${otherAccount}`} className="text-xs">
+            {MONEY_ACCOUNT_LABELS[otherAccount]}{" "}
+            <span className="font-normal text-muted-foreground">
+              ({formatPeso(accountBalances.get(otherAccount) ?? 0)} available)
+            </span>
+          </Label>
+          <Input
+            id={`transfer-in-account-${otherAccount}`}
+            name={`split_${otherAccount}`}
+            type="number"
+            step="0.01"
+            min="0"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={accountSplits[otherAccount]}
+            onChange={(event) =>
+              setAccountSplits((prev) => ({ ...prev, [otherAccount]: event.target.value }))
+            }
+          />
+        </div>
+      ))}
       {PROFIT_FUNDS.map((fund) => (
         <div key={fund} className="flex flex-col gap-1">
           <Label htmlFor={`transfer-in-${fund}`} className="text-xs">
@@ -436,12 +475,15 @@ function TransferInForm({
 export default function AccountSheet({
   account,
   balance,
+  accountBalances,
   fundBalances,
   wallets,
   walletBalances,
 }: {
   account: MoneyAccount;
   balance: number;
+  /** Every account's own balance — see TransferInForm's own comment. */
+  accountBalances: Map<MoneyAccount, number>;
   fundBalances: Map<ProfitFund, number>;
   /** Active wallets only — see TransferInForm's own comment. */
   wallets: WalletCardData[];
@@ -492,6 +534,7 @@ export default function AccountSheet({
             <TabsContent value="transfer" className="flex min-h-0 flex-col pt-3">
               <TransferInForm
                 account={account}
+                accountBalances={accountBalances}
                 fundBalances={fundBalances}
                 wallets={wallets}
                 walletBalances={walletBalances}

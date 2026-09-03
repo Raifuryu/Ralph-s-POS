@@ -203,14 +203,19 @@ export default async function Home({
         ),
         // Today's total TRANSFERRED IN per account — shown beside each
         // row's balance in VaultCard (see its own `todayTransfersIn` prop).
-        // Only the account-arriving leg of a transfer passes this filter —
-        // the fund/wallet-leaving leg has `fund`/`wallet_id` set, so it's
-        // excluded by the same scoping the query above uses.
+        // `fund IS NULL AND wallet_id IS NULL` used to be enough on its own
+        // to isolate the account-arriving leg (a fund/wallet-leaving leg
+        // always has one of those set) — but now that account-to-account
+        // transfers exist (transferAccountsToAccount), BOTH of that
+        // transfer's legs pass that filter, so `amount > 0` is needed too
+        // to drop the source account's own negative leaving leg (which
+        // would otherwise show up as money "transferred in" — actually
+        // money that left).
         queryRows<{ account: MoneyAccount; amount: number }>(
           `SELECT account, COALESCE(SUM(amount), 0) AS amount
            FROM vault_entries
            WHERE fund IS NULL AND wallet_id IS NULL
-             AND entry_type = 'transfer'
+             AND entry_type = 'transfer' AND amount > 0
              AND DATE(created_at) = CURDATE()
            GROUP BY account`
         ),

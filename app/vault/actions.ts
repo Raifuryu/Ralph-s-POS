@@ -19,6 +19,7 @@ import {
   type VaultSnapshotResult,
   type VaultSnapshotTargetDay,
 } from "@/lib/mysql/operations/recordVaultSnapshot";
+import { transferAccountsToAccount } from "@/lib/mysql/operations/transferAccount";
 import {
   transferFund as transferFundOperation,
   transferFundsToAccount,
@@ -588,25 +589,46 @@ export type TransferToAccountState = {
   result?: { account: MoneyAccount; transferred: number };
 };
 
-/** The mirror of transferFund, started from an account's own sheet instead
-    of a fund's — see transferFundsToAccount's own doc comment.
-    `split_profit`/`split_reinvest` are read straight off the form's
-    per-fund inputs, same convention transferFund's own split_* fields
-    already use. Wallet splits ride along as a separate `wallet_splits` JSON
-    field instead — a wallet's id isn't a fixed literal like `profit`/
-    `reinvest`, so there's no fixed `split_<id>` field name to loop over the
-    way MONEY_ACCOUNTS/PROFIT_FUNDS let the fund loop above do (same
-    "JSON field for a dynamic list" convention app/inventory/actions.ts's
-    own bulkRestock already uses for its payment split). Posted as two
-    separate transfers (funds, then wallets) rather than one combined
-    operation — each already validates its own source's balance
-    independently, same as if the owner had submitted them one at a time. */
+/** Pulls money into one fixed account from any other account, Profit/For
+    Restock, and/or any wallet — the mirror of transferFund, started from
+    an account's own sheet instead of a fund's (see transferFundsToAccount's
+    own doc comment), now also covering account-to-account via
+    transferAccountsToAccount (the only place that capability exists — see
+    its own doc comment). `split_cash`/`split_gcash`/`split_maya` (the OTHER
+    two accounts) and `split_profit`/`split_reinvest` are read straight off
+    the form's own inputs, same convention transferFund's own split_*
+    fields already use. Wallet splits ride along as a separate
+    `wallet_splits` JSON field instead — a wallet's id isn't a fixed literal
+    like an account/fund, so there's no fixed `split_<id>` field name to
+    loop over the way MONEY_ACCOUNTS/PROFIT_FUNDS let the loops above do
+    (same "JSON field for a dynamic list" convention app/inventory/actions.ts's
+    own bulkRestock already uses for its payment split). Posted as up to
+    three separate transfers (accounts, then funds, then wallets) rather
+    than one combined operation — each already validates its own source's
+    balance independently, same as if the owner had submitted them one at a
+    time. */
 export async function transferToAccount(
   _prev: TransferToAccountState,
   formData: FormData
 ): Promise<TransferToAccountState> {
   const account = parseAccount(formData.get("account"));
   if (!account) return { error: "Pick which account to transfer into." };
+
+  // The other two accounts — same `split_${x}` literal-field convention
+  // the fund loop below already uses, safe from collision since this
+  // action never reads `split_cash`/`split_gcash`/`split_maya` for
+  // anything else.
+  const accountSplits: { fromAccount: MoneyAccount; amount: number }[] = [];
+  for (const fromAccount of MONEY_ACCOUNTS) {
+    if (fromAccount === account) continue;
+    const amount = parseMoney(formData.get(`split_${fromAccount}`), { allowBlank: true });
+    if (amount === "bad") {
+      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[fromAccount]}.` };
+    }
+    if (amount !== null && amount > 0) {
+      accountSplits.push({ fromAccount, amount });
+    }
+  }
 
   const fundSplits: { fund: ProfitFund; amount: number }[] = [];
   for (const fund of PROFIT_FUNDS) {
@@ -638,13 +660,20 @@ export async function transferToAccount(
     }
   }
 
-  if (fundSplits.length === 0 && walletSplits.length === 0) {
+  if (accountSplits.length === 0 && fundSplits.length === 0 && walletSplits.length === 0) {
     return { error: "Enter at least one amount to transfer." };
   }
 
   try {
     const user = await requireCurrentUser();
     let transferred = 0;
+    if (accountSplits.length > 0) {
+      const result = await transferAccountsToAccount(
+        { toAccount: account, splits: accountSplits },
+        user.id
+      );
+      transferred += result.transferred;
+    }
     if (fundSplits.length > 0) {
       const result = await transferFundsToAccount(
         { account, splits: fundSplits },
