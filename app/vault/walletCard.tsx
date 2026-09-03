@@ -17,7 +17,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
-import { MONEY_ACCOUNT_LABELS, type MoneyAccount, type Wallet } from "@/lib/types";
+import {
+  MONEY_ACCOUNT_LABELS,
+  PROFIT_FUNDS,
+  PROFIT_FUND_LABELS,
+  type MoneyAccount,
+  type ProfitFund,
+  type Wallet,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   adjustWallet,
@@ -284,18 +291,27 @@ function AdjustForm({
   );
 }
 
-/** Moves money out of this wallet into one or more physical accounts — the
-    exact mirror of FundCard's own TransferForm, targeting transferWalletOut.
-    No natural "where it came from" default to pre-fill (a wallet, unlike
-    Profit/For Restock, is never auto-funded by a sale) — every split field
-    starts blank. */
+/** Moves money out of this wallet into one or more physical accounts,
+    Profit/For Restock, and/or other wallets — the exact mirror of
+    FundCard's own TransferForm (for the account fields) plus AccountSheet's
+    TransferInForm (for the fund fields), plus every other active wallet.
+    All target one action (transferWalletOut); destination wallets ride
+    along as a `dest_wallet_splits` JSON field (see the action's own
+    comment on why — a wallet's id can't get a fixed `split_<id>` field
+    name the way the fixed accounts/funds above do). No natural "where it
+    came from" default to pre-fill (a wallet, unlike Profit/For Restock, is
+    never auto-funded by a sale) — every split field starts blank. */
 function TransferForm({
   walletId,
   balance,
+  otherWallets,
   onRecorded,
 }: {
   walletId: string;
   balance: number;
+  /** Every other ACTIVE wallet — see WalletFilter's own comment on why an
+      archived one drops out of pickers like this. */
+  otherWallets: WalletCardData[];
   onRecorded: () => void;
 }) {
   const [state, formAction, isPending] = useActionState(
@@ -307,10 +323,18 @@ function TransferForm({
     gcash: "",
     maya: "",
   });
-  const total = ACCOUNTS.reduce(
-    (sum, account) => sum + (Number(splits[account]) || 0),
-    0
-  );
+  const [fundSplits, setFundSplits] = useState<Record<ProfitFund, string>>({
+    profit: "",
+    reinvest: "",
+  });
+  const [walletSplits, setWalletSplits] = useState<Record<string, string>>({});
+  const total =
+    ACCOUNTS.reduce((sum, account) => sum + (Number(splits[account]) || 0), 0) +
+    PROFIT_FUNDS.reduce((sum, fund) => sum + (Number(fundSplits[fund]) || 0), 0) +
+    otherWallets.reduce(
+      (sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0),
+      0
+    );
 
   useEffect(() => {
     if (!state.result) return;
@@ -321,9 +345,18 @@ function TransferForm({
   return (
     <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
       <input type="hidden" name="wallet_id" value={walletId} />
+      <input
+        type="hidden"
+        name="dest_wallet_splits"
+        value={JSON.stringify(
+          otherWallets
+            .filter((wallet) => (Number(walletSplits[wallet.id]) || 0) > 0)
+            .map((wallet) => ({ walletId: wallet.id, amount: walletSplits[wallet.id] }))
+        )}
+      />
       <p className="text-xs text-muted-foreground">
-        Split this wallet&rsquo;s money across Cash/GCash/Maya however it
-        actually arrived.
+        Split this wallet&rsquo;s money across Cash/GCash/Maya, Profit/For
+        Restock, and/or another wallet however it actually arrived.
       </p>
       {ACCOUNTS.map((account) => (
         <div key={account} className="flex flex-col gap-1">
@@ -341,6 +374,45 @@ function TransferForm({
             value={splits[account]}
             onChange={(event) =>
               setSplits((prev) => ({ ...prev, [account]: event.target.value }))
+            }
+          />
+        </div>
+      ))}
+      {PROFIT_FUNDS.map((fund) => (
+        <div key={fund} className="flex flex-col gap-1">
+          <Label htmlFor={`wallet-split-${fund}`} className="text-xs">
+            {PROFIT_FUND_LABELS[fund]}
+          </Label>
+          <Input
+            id={`wallet-split-${fund}`}
+            name={`split_${fund}`}
+            type="number"
+            step="0.01"
+            min="0"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={fundSplits[fund]}
+            onChange={(event) =>
+              setFundSplits((prev) => ({ ...prev, [fund]: event.target.value }))
+            }
+          />
+        </div>
+      ))}
+      {otherWallets.map((wallet) => (
+        <div key={wallet.id} className="flex flex-col gap-1">
+          <Label htmlFor={`wallet-split-w-${wallet.id}`} className="text-xs">
+            {wallet.name}
+          </Label>
+          <Input
+            id={`wallet-split-w-${wallet.id}`}
+            type="number"
+            step="0.01"
+            min="0"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={walletSplits[wallet.id] ?? ""}
+            onChange={(event) =>
+              setWalletSplits((prev) => ({ ...prev, [wallet.id]: event.target.value }))
             }
           />
         </div>
@@ -499,9 +571,14 @@ function ManageForm({
 export default function WalletCard({
   wallet,
   balance,
+  otherWallets,
 }: {
   wallet: WalletCardData;
   balance: number;
+  /** Every other ACTIVE wallet — passed through to this card's own
+      TransferForm (see its own comment). Already excludes `wallet` itself
+      — the caller builds this per-card. */
+  otherWallets: WalletCardData[];
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(wallet.name);
@@ -555,6 +632,7 @@ export default function WalletCard({
               <TransferForm
                 walletId={wallet.id}
                 balance={balance}
+                otherWallets={otherWallets}
                 onRecorded={() => setOpen(false)}
               />
             </TabsContent>

@@ -7,7 +7,6 @@ import { queryRows } from "@/lib/mysql/pool";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import {
   PROFIT_FUNDS,
-  PROFIT_FUND_LABELS,
   type MoneyAccount,
   type ProfitFund,
   type WalletBalance,
@@ -48,6 +47,10 @@ type SearchParams = {
   debts?: string;
   snapshot?: string;
   /** Comma-joined MoneyAccount values — see WalletFilter's own comment. */
+  account?: string;
+  /** Comma-joined ProfitFund values — see WalletFilter's own comment. */
+  fund?: string;
+  /** Comma-joined wallet ids — see WalletFilter's own comment. */
   wallet?: string;
 };
 
@@ -61,10 +64,27 @@ export default async function VaultPage({
   // Garbage/stale values (a hand-edited URL) are silently dropped rather
   // than erroring — same "fall back to no filter" tolerance every other
   // URL-driven filter in this app follows.
-  const selectedWallets = (params.wallet?.split(",") ?? []).filter(
+  const selectedAccounts = (params.account?.split(",") ?? []).filter(
     (value): value is MoneyAccount => (ACCOUNTS as string[]).includes(value)
   );
-  const filters = { q, fromTs: params.from_ts, toTs: params.to_ts, accounts: selectedWallets };
+  const selectedFunds = (params.fund?.split(",") ?? []).filter(
+    (value): value is ProfitFund => (PROFIT_FUNDS as readonly string[]).includes(value)
+  );
+  // Not validated against the real wallet list here (that's fetched further
+  // down) — an id that doesn't actually exist just matches nothing in the
+  // query below, same "hand-edited URL" tolerance every other filter here
+  // follows.
+  const selectedWalletIds = (params.wallet?.split(",") ?? []).filter(
+    (value) => value.trim() !== ""
+  );
+  const filters = {
+    q,
+    fromTs: params.from_ts,
+    toTs: params.to_ts,
+    accounts: selectedAccounts,
+    funds: selectedFunds,
+    walletIds: selectedWalletIds,
+  };
   const showDebts = params.debts !== undefined;
   const showSnapshot = params.snapshot !== undefined;
 
@@ -332,6 +352,17 @@ export default async function VaultPage({
   // still shows regardless.
   const activeWallets = wallets.filter((wallet) => wallet.is_active);
   const walletBalances = new Map(wallets.map((wallet) => [wallet.id, wallet.balance]));
+  // Every wallet, active or archived — an archived one's leftover balance is
+  // still real money the store has, see wallets' own comment on what
+  // is_active does (and doesn't) mean.
+  const walletsTotal = wallets.reduce((sum, wallet) => sum + wallet.balance, 0);
+  const fundsTotal = PROFIT_FUNDS.reduce(
+    (sum, fund) => sum + (fundBalances.get(fund) ?? 0),
+    0
+  );
+  // Everything the store has, across every account/fund/wallet — shown
+  // beside the page's own title.
+  const grandTotal = totalOnHand + fundsTotal + walletsTotal;
 
   const snapshotHistory: SnapshotHistoryEntry[] = snapshotHistoryRows.map((row) => ({
     day: row.snapshot_day,
@@ -355,7 +386,15 @@ export default async function VaultPage({
 
   return (
     <PageShell>
-      <h1 className="text-xl font-semibold">Vault</h1>
+      {/* The grand total — every account, fund, and wallet added together —
+          sits right beside the title, so "how much does the store have,
+          period" is answered before scrolling past a single card. */}
+      <div className="flex items-baseline justify-between gap-2">
+        <h1 className="text-xl font-semibold">Vault</h1>
+        <p className="text-lg font-semibold tabular-nums">
+          {formatPeso(grandTotal)}
+        </p>
+      </div>
 
       {/* Tap a card to cash in/out, adjust, or transfer into that account;
           nothing left to pick */}
@@ -370,6 +409,16 @@ export default async function VaultPage({
             walletBalances={walletBalances}
           />
         ))}
+      </div>
+
+      {/* Total on hand, plain — not another card, since the three account
+          cards above already carry that weight; this is just the running
+          total those three numbers add up to. */}
+      <div className="flex flex-col gap-1">
+        <p className="text-sm text-muted-foreground">Total on hand</p>
+        <p className="text-2xl font-semibold tabular-nums">
+          {formatPeso(totalOnHand)}
+        </p>
       </div>
 
       {/* Every sale/service fee lands here first, not in the accounts above
@@ -394,14 +443,26 @@ export default async function VaultPage({
           here (their history stays reachable) but drop out of every other
           picker. */}
       <div className="flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2">
-          <p className="text-sm text-muted-foreground">Wallets</p>
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="flex items-baseline gap-2 text-sm text-muted-foreground">
+            Wallets
+            {wallets.length > 0 ? (
+              <span className="text-sm font-medium tabular-nums text-foreground">
+                {formatPeso(walletsTotal)}
+              </span>
+            ) : null}
+          </p>
           <AddWalletSheet />
         </div>
         {wallets.length > 0 ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {wallets.map((wallet) => (
-              <WalletCard key={wallet.id} wallet={wallet} balance={wallet.balance} />
+              <WalletCard
+                key={wallet.id}
+                wallet={wallet}
+                balance={wallet.balance}
+                otherWallets={activeWallets.filter((w) => w.id !== wallet.id)}
+              />
             ))}
           </div>
         ) : (
@@ -410,32 +471,6 @@ export default async function VaultPage({
             separate from Profit/For Restock.
           </p>
         )}
-      </div>
-
-      {/* Total on hand, plain — not another card, since the three account
-          cards and two fund cards above already carry that weight; this is
-          just the running total those five numbers add up to. The two fund
-          balances underneath answer "how much money do we actually have"
-          at a glance, same all-time balances the fund cards above already
-          show, just gathered here too. */}
-      <div className="flex flex-col gap-1">
-        <p className="text-sm text-muted-foreground">Total on hand</p>
-        <p className="text-2xl font-semibold tabular-nums">
-          {formatPeso(totalOnHand)}
-        </p>
-        <div className="flex flex-col gap-0.5">
-          {PROFIT_FUNDS.map((fund) => (
-            <p
-              key={fund}
-              className="flex items-baseline justify-between text-xs text-muted-foreground"
-            >
-              <span>{PROFIT_FUND_LABELS[fund]}</span>
-              <span className="tabular-nums">
-                {formatPeso(fundBalances.get(fund) ?? 0)}
-              </span>
-            </p>
-          ))}
-        </div>
       </div>
 
       <div className="flex flex-wrap gap-2">
@@ -464,14 +499,27 @@ export default async function VaultPage({
         searchPlaceholder="e.g. GCash, supplies"
       />
 
-      <WalletFilter initial={selectedWallets} basePath="/vault" />
+      <WalletFilter
+        initialAccounts={selectedAccounts}
+        initialFunds={selectedFunds}
+        initialWalletIds={selectedWalletIds}
+        wallets={activeWallets}
+        basePath="/vault"
+      />
 
       <VaultLedgerClient
-        key={`${q}|${params.from_ts ?? ""}|${params.to_ts ?? ""}|${selectedWallets.join(",")}`}
+        key={`${q}|${params.from_ts ?? ""}|${params.to_ts ?? ""}|${selectedAccounts.join(",")}|${selectedFunds.join(",")}|${selectedWalletIds.join(",")}`}
         initialEntries={ledgerPage.entries}
         initialTotal={ledgerPage.total}
         filters={filters}
-        filtered={Boolean(q || params.from_ts || params.to_ts || selectedWallets.length > 0)}
+        filtered={Boolean(
+          q ||
+            params.from_ts ||
+            params.to_ts ||
+            selectedAccounts.length > 0 ||
+            selectedFunds.length > 0 ||
+            selectedWalletIds.length > 0
+        )}
       />
 
       <PersonalTakesSheet open={showDebts} takes={personalTakes} />

@@ -19,7 +19,6 @@ import {
   type Transaction,
   type TransactionItem,
   type TransactionWithItems,
-  type VaultEntry,
 } from "@/lib/types";
 import { signOut } from "./login/actions";
 import DashboardDateFilter from "./dashboardDateFilter";
@@ -125,11 +124,8 @@ export default async function Home({
   let topSellers: { product_id: string; units_sold: number }[];
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
-  let recentVaultRows: Pick<
-    VaultEntry,
-    "id" | "entry_type" | "account" | "amount" | "note" | "created_at"
-  >[];
-  let todayAdjustmentRows: { account: MoneyAccount; amount: number }[];
+  let takenTodayRows: { account: MoneyAccount; taken: number }[];
+  let transferredInTodayRows: { account: MoneyAccount; amount: number }[];
   let sales: TransactionWithItems[];
 
   try {
@@ -140,8 +136,8 @@ export default async function Home({
       topSellers,
       services,
       vaultRows,
-      recentVaultRows,
-      todayAdjustmentRows,
+      takenTodayRows,
+      transferredInTodayRows,
     ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
@@ -166,32 +162,34 @@ export default async function Home({
         queryRows<{ account: MoneyAccount; balance: number }>(
           "SELECT account, balance FROM vault_balance"
         ),
-        // The card's own "recent activity" footer — cash out/in/adjustment/
-        // transfer only (not sale/service/void, the everyday transaction
-        // flow already shown elsewhere), and only entries that actually
-        // moved Cash/GCash/Maya (fund IS NULL — a fund-only cash-in/out/
-        // adjustment on Profit/For Restock never touches this card's
-        // balances, and a fund→account transfer's fund-leaving leg has
-        // `fund` set too, so only its account-arriving leg shows here).
-        // Today only, newest first, capped at 3.
-        queryRows<
-          Pick<VaultEntry, "id" | "entry_type" | "account" | "amount" | "note" | "created_at">
-        >(
-          `SELECT id, entry_type, account, amount, note, created_at
+        // The card's own "Today's cash activity" footer — how much was
+        // TAKEN (entry_type='withdrawal' only — a cash-in/adjustment/
+        // transfer isn't money leaving, so those stay out of this "taken"
+        // figure), grouped by account. Only entries that actually reduced
+        // Cash/GCash/Maya's own balance (`fund IS NULL AND wallet_id IS
+        // NULL` — a fund/wallet's own cash-out never touches this card's
+        // balances at all). Today only. `amount` is negative for a
+        // withdrawal (see vault_entries' own CHECK), flipped here so the
+        // figure reads as a plain positive "amount taken".
+        queryRows<{ account: MoneyAccount; taken: number }>(
+          `SELECT account, COALESCE(SUM(-amount), 0) AS taken
            FROM vault_entries
-           WHERE fund IS NULL
-             AND entry_type IN ('deposit', 'withdrawal', 'adjustment', 'transfer')
+           WHERE fund IS NULL AND wallet_id IS NULL
+             AND entry_type = 'withdrawal'
              AND DATE(created_at) = CURDATE()
-           ORDER BY seq DESC
-           LIMIT 3`
+           GROUP BY account`
         ),
-        // Today's net adjustment per account — shown beside each row's
-        // balance in VaultCard (see its own `todayAdjustments` prop), same
-        // `fund IS NULL` scoping as above.
+        // Today's total TRANSFERRED IN per account — shown beside each
+        // row's balance in VaultCard (see its own `todayTransfersIn` prop).
+        // Only the account-arriving leg of a transfer passes this filter —
+        // the fund/wallet-leaving leg has `fund`/`wallet_id` set, so it's
+        // excluded by the same scoping the query above uses.
         queryRows<{ account: MoneyAccount; amount: number }>(
           `SELECT account, COALESCE(SUM(amount), 0) AS amount
            FROM vault_entries
-           WHERE fund IS NULL AND entry_type = 'adjustment' AND DATE(created_at) = CURDATE()
+           WHERE fund IS NULL AND wallet_id IS NULL
+             AND entry_type = 'transfer'
+             AND DATE(created_at) = CURDATE()
            GROUP BY account`
         ),
       ]);
@@ -296,9 +294,13 @@ export default async function Home({
   for (const row of vaultRows) {
     if (row.account) vault.set(row.account, Number(row.balance ?? 0));
   }
-  const todayAdjustments = new Map<MoneyAccount, number>();
-  for (const row of todayAdjustmentRows) {
-    if (row.account) todayAdjustments.set(row.account, Number(row.amount ?? 0));
+  const takenToday = new Map<MoneyAccount, number>();
+  for (const row of takenTodayRows) {
+    if (row.account) takenToday.set(row.account, Number(row.taken ?? 0));
+  }
+  const transferredInToday = new Map<MoneyAccount, number>();
+  for (const row of transferredInTodayRows) {
+    if (row.account) transferredInToday.set(row.account, Number(row.amount ?? 0));
   }
 
   // Same reasoning as storeMargin: counted over the whole filtered window via
@@ -342,8 +344,8 @@ export default async function Home({
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <VaultCard
             balances={vault}
-            todayAdjustments={todayAdjustments}
-            recentEntries={recentVaultRows}
+            todayTransfersIn={transferredInToday}
+            takenToday={takenToday}
             compact
           />
           <IncomeBreakdownCard

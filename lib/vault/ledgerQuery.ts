@@ -41,9 +41,29 @@ export async function fetchVaultLedgerPage(
     conditions.push("ve.created_at <= ?");
     params.push(filters.toTs);
   }
+  // Account, fund, and wallet chips combine as an OR (see
+  // VaultLedgerFilters' own comment) — each part only contributes to the OR
+  // when its own chips are selected, so picking only one kind still narrows
+  // correctly instead of matching everything.
+  const scopeConditions: string[] = [];
   if (filters.accounts.length > 0) {
-    conditions.push(`ve.account IN (${filters.accounts.map(() => "?").join(",")})`);
+    scopeConditions.push(
+      `(ve.account IN (${filters.accounts.map(() => "?").join(",")}) AND ve.fund IS NULL AND ve.wallet_id IS NULL)`
+    );
     params.push(...filters.accounts);
+  }
+  if (filters.funds.length > 0) {
+    scopeConditions.push(`ve.fund IN (${filters.funds.map(() => "?").join(",")})`);
+    params.push(...filters.funds);
+  }
+  if (filters.walletIds.length > 0) {
+    scopeConditions.push(
+      `ve.wallet_id IN (${filters.walletIds.map(() => "?").join(",")})`
+    );
+    params.push(...filters.walletIds);
+  }
+  if (scopeConditions.length > 0) {
+    conditions.push(`(${scopeConditions.join(" OR ")})`);
   }
   if (q) {
     if (matchedServiceTxnIds.length > 0) {

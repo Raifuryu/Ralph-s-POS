@@ -26,6 +26,8 @@ import {
 import {
   transferWalletToAccounts,
   transferWalletsToAccount,
+  transferWalletToFunds,
+  transferWalletToWallets,
 } from "@/lib/mysql/operations/transferWallet";
 import {
   createWallet as createWalletOperation,
@@ -479,10 +481,20 @@ export type TransferWalletState = {
   result?: { walletId: string; transferred: number; remainingBalance: number };
 };
 
-/** Moves money out of a wallet into one or more physical accounts — the
-    mirror of transferFund, targeting transferWalletToAccounts instead.
-    `split_cash`/`split_gcash`/`split_maya` are read the same way
-    transferFund's own splits are. */
+/** Moves money out of a wallet into one or more physical accounts, Profit/
+    For Restock, and/or other wallets — `split_cash`/`split_gcash`/
+    `split_maya` are read the same way transferFund's own splits are,
+    `split_profit`/`split_reinvest` the same way. Destination wallets ride
+    along as a `dest_wallet_splits` JSON field instead — a wallet's id isn't
+    a fixed literal, so there's no fixed `split_<id>` field name to loop
+    over (same "JSON field for a dynamic list" convention transferToAccount's
+    own `wallet_splits` field already uses). Posted as up to three separate
+    transfers (accounts, then funds, then wallets) rather than one combined
+    operation — safe because they're awaited in sequence, so each later
+    transfer's own balance check reads the wallet's balance AFTER the
+    earlier one already committed, never double-spending the same pesos
+    (same reasoning transferToAccount's own combined fund+wallet calls
+    already rely on). */
 export async function transferWalletOut(
   _prev: TransferWalletState,
   formData: FormData
@@ -490,26 +502,82 @@ export async function transferWalletOut(
   const walletId = parseWalletId(formData.get("wallet_id"));
   if (!walletId) return { error: "Pick which wallet to transfer from." };
 
-  const splits: { account: MoneyAccount; amount: number }[] = [];
+  const accountSplits: { account: MoneyAccount; amount: number }[] = [];
   for (const account of MONEY_ACCOUNTS) {
     const amount = parseMoney(formData.get(`split_${account}`), { allowBlank: true });
     if (amount === "bad") {
       return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[account]}.` };
     }
     if (amount !== null && amount > 0) {
-      splits.push({ account, amount });
+      accountSplits.push({ account, amount });
     }
   }
-  if (splits.length === 0) {
+
+  const fundSplits: { fund: ProfitFund; amount: number }[] = [];
+  for (const fund of PROFIT_FUNDS) {
+    const amount = parseMoney(formData.get(`split_${fund}`), { allowBlank: true });
+    if (amount === "bad") {
+      return { error: `Enter a valid amount for ${PROFIT_FUND_LABELS[fund]}.` };
+    }
+    if (amount !== null && amount > 0) {
+      fundSplits.push({ fund, amount });
+    }
+  }
+
+  let walletSplits: { walletId: string; amount: number }[] = [];
+  const walletSplitsRaw = String(formData.get("dest_wallet_splits") ?? "");
+  if (walletSplitsRaw) {
+    try {
+      const parsed: unknown = JSON.parse(walletSplitsRaw);
+      if (!Array.isArray(parsed)) throw new Error("bad shape");
+      walletSplits = parsed.map((entry) => {
+        const destWalletId = String((entry as { walletId?: unknown }).walletId ?? "");
+        const amount = Number((entry as { amount?: unknown }).amount);
+        if (!destWalletId || !Number.isFinite(amount) || amount <= 0) {
+          throw new Error("bad entry");
+        }
+        return { walletId: destWalletId, amount };
+      });
+    } catch {
+      return { error: "Something went wrong reading the wallet split." };
+    }
+  }
+
+  if (accountSplits.length === 0 && fundSplits.length === 0 && walletSplits.length === 0) {
     return { error: "Enter at least one amount to transfer." };
   }
 
   try {
     const user = await requireCurrentUser();
-    const result = await transferWalletToAccounts({ walletId, splits }, user.id);
+    let transferred = 0;
+    let remainingBalance = 0;
+    if (accountSplits.length > 0) {
+      const result = await transferWalletToAccounts(
+        { walletId, splits: accountSplits },
+        user.id
+      );
+      transferred += result.transferred;
+      remainingBalance = result.remainingBalance;
+    }
+    if (fundSplits.length > 0) {
+      const result = await transferWalletToFunds(
+        { walletId, splits: fundSplits },
+        user.id
+      );
+      transferred += result.transferred;
+      remainingBalance = result.remainingBalance;
+    }
+    if (walletSplits.length > 0) {
+      const result = await transferWalletToWallets(
+        { walletId, splits: walletSplits },
+        user.id
+      );
+      transferred += result.transferred;
+      remainingBalance = result.remainingBalance;
+    }
     revalidatePath("/vault");
     revalidatePath("/");
-    return { error: null, result };
+    return { error: null, result: { walletId, transferred, remainingBalance } };
   } catch (err) {
     return { error: (err as Error).message };
   }
