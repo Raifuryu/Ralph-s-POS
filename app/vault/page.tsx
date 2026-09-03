@@ -108,20 +108,24 @@ export default async function VaultPage({
            GROUP BY fund, account
            HAVING SUM(amount) > 0`
         ),
-        // What each fund actually EARNED today — 'sale'/'service' entries
-        // only, same entry types checkout.ts/recordService.ts post the
-        // profit/reinvest split with. This is deliberately narrower than
-        // "every entry dated today": a same-day cash-out, adjustment, or
-        // transfer also touches these funds but isn't income, and mixing
-        // it in here made this figure disagree with the dashboard's own
-        // Income card (Invested/Total profit), which is 'sale'/'service'
-        // margin only. Un-gated (unlike the snapshot-only queries below) —
+        // What each fund actually EARNED today — 'sale'/'service' entries,
+        // same entry types checkout.ts/recordService.ts post the
+        // profit/reinvest split with, PLUS 'void' — the reversing row
+        // voidTransaction.ts/voidServiceTransaction.ts post for one voided
+        // same-day (see their own 'void' inserts). Without 'void' here, a
+        // sale voided the same day it was made kept its original profit
+        // counted with no offsetting reversal, disagreeing with the
+        // dashboard's own Income card (Invested/Total profit), which drops
+        // a voided transaction entirely. 'transfer'/'withdrawal'/
+        // 'adjustment'/'deposit' stay excluded — a same-day cash-out,
+        // adjustment, or transfer also touches these funds but isn't
+        // income. Un-gated (unlike the snapshot-only queries below) —
         // FundCard always shows this once the card itself renders.
         queryRows<{ fund: ProfitFund; amount: number }>(
           `SELECT fund, COALESCE(SUM(amount), 0) AS amount
            FROM vault_entries
            WHERE fund IS NOT NULL
-             AND entry_type IN ('sale', 'service')
+             AND entry_type IN ('sale', 'service', 'void')
              AND DATE(created_at) = CURDATE()
            GROUP BY fund`
         ),
