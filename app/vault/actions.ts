@@ -25,6 +25,7 @@ import {
   transferFundsToAccount,
 } from "@/lib/mysql/operations/transferFund";
 import {
+  transferAccountsToWallet,
   transferWalletToAccounts,
   transferWalletsToAccount,
   transferWalletToFunds,
@@ -579,6 +580,50 @@ export async function transferWalletOut(
     revalidatePath("/vault");
     revalidatePath("/");
     return { error: null, result: { walletId, transferred, remainingBalance } };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type TransferIntoWalletState = {
+  error: string | null;
+  result?: { walletId: string; transferred: number };
+};
+
+/** Pulls money into a fixed wallet from one or more accounts — the mirror
+    of transferToAccount's own account-splits, started from the wallet's
+    side instead of an account's. `split_cash`/`split_gcash`/`split_maya`
+    are read the same way transferToAccount's own account-source fields
+    already are (see transferAccountsToWallet's own doc comment — this is
+    the last account/fund/wallet direction that didn't have a real transfer
+    path yet). */
+export async function transferIntoWallet(
+  _prev: TransferIntoWalletState,
+  formData: FormData
+): Promise<TransferIntoWalletState> {
+  const walletId = parseWalletId(formData.get("wallet_id"));
+  if (!walletId) return { error: "Pick which wallet to transfer into." };
+
+  const splits: { fromAccount: MoneyAccount; amount: number }[] = [];
+  for (const account of MONEY_ACCOUNTS) {
+    const amount = parseMoney(formData.get(`split_${account}`), { allowBlank: true });
+    if (amount === "bad") {
+      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[account]}.` };
+    }
+    if (amount !== null && amount > 0) {
+      splits.push({ fromAccount: account, amount });
+    }
+  }
+  if (splits.length === 0) {
+    return { error: "Enter at least one amount to transfer." };
+  }
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await transferAccountsToWallet({ walletId, splits }, user.id);
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
   } catch (err) {
     return { error: (err as Error).message };
   }

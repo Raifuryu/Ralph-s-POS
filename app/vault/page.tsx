@@ -457,6 +457,7 @@ export default async function VaultPage({
                   wallet={wallet}
                   balance={wallet.balance}
                   otherWallets={activeWallets.filter((w) => w.id !== wallet.id)}
+                  accountBalances={balances}
                 />
               ))}
             </div>

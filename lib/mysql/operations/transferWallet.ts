@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { withTransaction } from "@/lib/mysql/pool";
-import type { MoneyAccount, ProfitFund } from "@/lib/types";
+import { MONEY_ACCOUNT_LABELS, type MoneyAccount, type ProfitFund } from "@/lib/types";
 import { queryConn, roundMoney } from "./helpers";
 
 /**
@@ -263,5 +263,75 @@ export async function transferWalletsToAccount(
     }
 
     return { account, transferred };
+  });
+}
+
+/**
+ * Moves money from one or more physical accounts INTO a fixed wallet — the
+ * last missing direction: every other account/fund/wallet pair already had
+ * a real (balance-debiting) path, but nothing let a wallet actually pull
+ * from an account the way transferWalletsToAccount/transferFundsToAccount
+ * already let an account pull from a wallet/fund. Same two-leg shape as
+ * transferAccountsToAccount (see its own doc comment) — the account-leaving
+ * leg is a plain account-tagged entry (fund/wallet_id both NULL, so
+ * vault_balance's own SUM picks it up like any withdrawal), the
+ * wallet-arriving leg carries `wallet_id` — plus a shared `transfer_group`,
+ * same convention every transfer function here follows.
+ */
+export async function transferAccountsToWallet(
+  params: {
+    walletId: string;
+    splits: { fromAccount: MoneyAccount; amount: number }[];
+    note?: string | null;
+  },
+  userId: string
+): Promise<{ walletId: string; transferred: number }> {
+  const { walletId } = params;
+  const note = params.note?.trim() || null;
+
+  const collapsed = new Map<MoneyAccount, number>();
+  for (const split of params.splits) {
+    const amount = roundMoney(split.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Each split amount must be more than 0");
+    }
+    collapsed.set(
+      split.fromAccount,
+      roundMoney((collapsed.get(split.fromAccount) ?? 0) + amount)
+    );
+  }
+  if (collapsed.size === 0) {
+    return { walletId, transferred: 0 };
+  }
+  const transferred = roundMoney(
+    [...collapsed.values()].reduce((sum, amount) => sum + amount, 0)
+  );
+
+  return withTransaction(async (conn) => {
+    for (const [fromAccount, amount] of collapsed) {
+      const rows = await queryConn<{ balance: number }>(
+        conn,
+        "SELECT balance FROM vault_balance WHERE account = ?",
+        [fromAccount]
+      );
+      const balance = roundMoney(rows[0]?.balance ?? 0);
+      if (amount > balance) {
+        throw new Error(
+          `${MONEY_ACCOUNT_LABELS[fromAccount]} only has ${balance.toFixed(2)} available`
+        );
+      }
+
+      const transferGroup = randomUUID();
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, account, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
+        [randomUUID(), -amount, fromAccount, transferGroup, userId, note]
+      );
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, transfer_group, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?, ?)",
+        [randomUUID(), amount, walletId, transferGroup, userId, note]
+      );
+    }
+
+    return { walletId, transferred };
   });
 }

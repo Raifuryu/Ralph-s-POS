@@ -32,8 +32,10 @@ import {
   cashOutWallet,
   renameWalletAction,
   setWalletActiveAction,
+  transferIntoWallet,
   transferWalletOut,
   type RenameWalletState,
+  type TransferIntoWalletState,
   type TransferWalletState,
   type VaultMoveState,
   type WalletAdjustState,
@@ -49,6 +51,7 @@ export type WalletCardData = Pick<Wallet, "id" | "name" | "color" | "is_active">
 const initialMoveState: VaultMoveState = { error: null };
 const initialAdjustState: WalletAdjustState = { error: null };
 const initialTransferState: TransferWalletState = { error: null };
+const initialTransferInState: TransferIntoWalletState = { error: null };
 const initialRenameState: RenameWalletState = { error: null };
 const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
 
@@ -460,6 +463,100 @@ function TransferForm({
   );
 }
 
+/** Pulls money into this wallet from one or more physical accounts — the
+    last missing account/fund/wallet direction (see transferAccountsToWallet's
+    own doc comment), same "pull in" shape as AccountSheet's own
+    TransferInForm but simpler (accounts only — a wallet pulling from a fund
+    isn't a thing, and pulling from another wallet is already covered by
+    that other wallet's own Transfer out tab). */
+function TransferInForm({
+  walletId,
+  accountBalances,
+  onRecorded,
+}: {
+  walletId: string;
+  accountBalances: Map<MoneyAccount, number>;
+  onRecorded: () => void;
+}) {
+  const [state, formAction, isPending] = useActionState(
+    transferIntoWallet,
+    initialTransferInState
+  );
+  const [splits, setSplits] = useState<Record<MoneyAccount, string>>({
+    cash: "",
+    gcash: "",
+    maya: "",
+  });
+  const total = ACCOUNTS.reduce(
+    (sum, account) => sum + (Number(splits[account]) || 0),
+    0
+  );
+
+  useEffect(() => {
+    if (!state.result) return;
+    const timer = setTimeout(onRecorded, 1600);
+    return () => clearTimeout(timer);
+  }, [state.result, onRecorded]);
+
+  return (
+    <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-3">
+      <input type="hidden" name="wallet_id" value={walletId} />
+      <p className="text-xs text-muted-foreground">
+        Pull money from Cash/GCash/Maya into this wallet.
+      </p>
+      {ACCOUNTS.map((account) => (
+        <div key={account} className="flex flex-col gap-1">
+          <Label htmlFor={`wallet-transfer-in-${account}`} className="text-xs">
+            {MONEY_ACCOUNT_LABELS[account]}{" "}
+            <span className="font-normal text-muted-foreground">
+              ({formatPeso(accountBalances.get(account) ?? 0)} available)
+            </span>
+          </Label>
+          <Input
+            id={`wallet-transfer-in-${account}`}
+            name={`split_${account}`}
+            type="number"
+            step="0.01"
+            min="0"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={splits[account]}
+            onChange={(event) =>
+              setSplits((prev) => ({ ...prev, [account]: event.target.value }))
+            }
+          />
+        </div>
+      ))}
+      <p className="text-xs text-muted-foreground">
+        Total:{" "}
+        <span className="font-medium text-foreground">
+          {formatPeso(total)}
+        </span>
+      </p>
+      {state.error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {state.error}
+        </p>
+      ) : null}
+      {state.result ? (
+        <p role="status" className="text-sm text-success">
+          Transferred {formatPeso(state.result.transferred)} into this wallet.
+        </p>
+      ) : null}
+      <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
+        <DrawerClose
+          className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
+        >
+          Cancel
+        </DrawerClose>
+        <Button type="submit" size="sm" disabled={isPending || total <= 0}>
+          {isPending ? "Transferring…" : "Transfer"}
+        </Button>
+      </DrawerFooter>
+    </form>
+  );
+}
+
 /** Rename + archive/unarchive — the only two things about a wallet itself
     (not its balance) the owner can change after creating it. Kept as its
     own tab rather than a header icon so it fits the same
@@ -572,6 +669,7 @@ export default function WalletCard({
   wallet,
   balance,
   otherWallets,
+  accountBalances,
 }: {
   wallet: WalletCardData;
   balance: number;
@@ -579,6 +677,9 @@ export default function WalletCard({
       TransferForm (see its own comment). Already excludes `wallet` itself
       — the caller builds this per-card. */
   otherWallets: WalletCardData[];
+  /** Every account's own balance — passed through to this card's own
+      TransferInForm. */
+  accountBalances: Map<MoneyAccount, number>;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(wallet.name);
@@ -606,12 +707,13 @@ export default function WalletCard({
         </DrawerHeader>
 
         <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <Tabs defaultValue="transfer" className="min-h-0 w-full min-w-0 flex-1">
+          <Tabs defaultValue="transfer-out" className="min-h-0 w-full min-w-0 flex-1">
             <TabsList className="w-full sm:w-fit">
               <TabsTrigger value="out">Cash out</TabsTrigger>
               <TabsTrigger value="in">Cash in</TabsTrigger>
               <TabsTrigger value="adjust">Adjust</TabsTrigger>
-              <TabsTrigger value="transfer">Transfer</TabsTrigger>
+              <TabsTrigger value="transfer-out">Transfer out</TabsTrigger>
+              <TabsTrigger value="transfer-in">Transfer in</TabsTrigger>
               <TabsTrigger value="manage">Manage</TabsTrigger>
             </TabsList>
             <TabsContent value="out" className="flex min-h-0 flex-col pt-3">
@@ -628,11 +730,18 @@ export default function WalletCard({
                 onRecorded={() => setOpen(false)}
               />
             </TabsContent>
-            <TabsContent value="transfer" className="flex min-h-0 flex-col pt-3">
+            <TabsContent value="transfer-out" className="flex min-h-0 flex-col pt-3">
               <TransferForm
                 walletId={wallet.id}
                 balance={balance}
                 otherWallets={otherWallets}
+                onRecorded={() => setOpen(false)}
+              />
+            </TabsContent>
+            <TabsContent value="transfer-in" className="flex min-h-0 flex-col pt-3">
+              <TransferInForm
+                walletId={wallet.id}
+                accountBalances={accountBalances}
                 onRecorded={() => setOpen(false)}
               />
             </TabsContent>
