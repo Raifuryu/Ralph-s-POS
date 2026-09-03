@@ -68,12 +68,6 @@ export default function VaultCard({
         transferredInSum !== 0 ? `was ${formatPeso(totalBeforeTransfers)}` : undefined
       }
       rows={rows}
-      afterRows={
-        <p className="flex items-baseline justify-between gap-2 text-xs font-medium">
-          <span>Total</span>
-          <span className="tabular-nums">{formatPeso(total)}</span>
-        </p>
-      }
       href="/vault"
       linkLabel="Vault →"
       compact={compact}
