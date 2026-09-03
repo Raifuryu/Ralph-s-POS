@@ -414,15 +414,17 @@ export default async function Home({
         </div>
 
         {/* Baseline Fund + Income, plain — not another card, just the
-            running total those two cards above add up to. */}
-        <div className="flex flex-col gap-1">
-          <p className="text-sm text-muted-foreground">
-            Baseline Fund + Income
-          </p>
-          <p className="text-2xl font-semibold tabular-nums">
+            running total those two cards above add up to. One compact line
+            (label and figure side by side, pulled up closer to the cards
+            with -mt-3) rather than PageShell's own full gap-6 + a stacked
+            label/headline — this app is mostly used on mobile, where that
+            much room for one summary line is wasted scroll. */}
+        <p className="-mt-3 flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+          <span>Baseline Fund + Income</span>
+          <span className="font-semibold tabular-nums text-foreground">
             {formatPeso(baselineFundTotal + windowIncome)}
-          </p>
-        </div>
+          </span>
+        </p>
 
         <TransactionTabs
           entries={merged}

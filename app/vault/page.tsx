@@ -398,7 +398,7 @@ export default async function VaultPage({
 
       {/* Tap a card to cash in/out, adjust, or transfer into that account;
           nothing left to pick */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 sm:gap-3">
         {ACCOUNTS.map((account) => (
           <AccountSheet
             key={account}
@@ -414,19 +414,22 @@ export default async function VaultPage({
 
       {/* Total on hand, plain — not another card, since the three account
           cards above already carry that weight; this is just the running
-          total those three numbers add up to. */}
-      <div className="flex flex-col gap-1">
-        <p className="text-sm text-muted-foreground">Total on hand</p>
-        <p className="text-2xl font-semibold tabular-nums">
+          total those three numbers add up to. One compact line, pulled up
+          against the grid above (-mt-1, cutting into PageShell's own gap-6)
+          same "mostly used on mobile" reasoning app/page.tsx's own Baseline
+          Fund + Income line follows. */}
+      <p className="-mt-1 flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+        <span>Total on hand</span>
+        <span className="font-semibold tabular-nums text-foreground">
           {formatPeso(totalOnHand)}
-        </p>
-      </div>
+        </span>
+      </p>
 
       {/* Every sale/service fee lands here first, not in the accounts above
           — tap a card to transfer some of it into Cash/GCash/Maya, the only
           way it becomes physically spendable (see mariadb/schema.sql's own
           comment on vault_entries.fund). */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-2 gap-2 sm:gap-3">
         {PROFIT_FUNDS.map((fund) => (
           <FundCard
             key={fund}
@@ -450,7 +453,7 @@ export default async function VaultPage({
         </div>
         {wallets.length > 0 ? (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
               {wallets.map((wallet) => (
                 <WalletCard
                   key={wallet.id}
@@ -462,15 +465,15 @@ export default async function VaultPage({
               ))}
             </div>
 
-            {/* Same "plain running total below the cards" treatment as
+            {/* Same "plain compact line below the cards" treatment as
                 Total on hand above — not another card, just what the
                 wallet cards above already add up to. */}
-            <div className="flex flex-col gap-1">
-              <p className="text-sm text-muted-foreground">Wallets total</p>
-              <p className="text-2xl font-semibold tabular-nums">
+            <p className="-mt-1 flex items-baseline justify-between gap-2 text-xs text-muted-foreground">
+              <span>Wallets total</span>
+              <span className="font-semibold tabular-nums text-foreground">
                 {formatPeso(walletsTotal)}
-              </p>
-            </div>
+              </span>
+            </p>
           </>
         ) : (
           <p className="text-sm text-muted-foreground">

@@ -686,16 +686,16 @@ export default function WalletCard({
 
   return (
     <Drawer open={open} onOpenChange={setOpen} showSwipeHandle>
-      <DrawerTrigger className="block w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-muted/30">
-        <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+      <DrawerTrigger className="block w-full min-w-0 rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/30">
+        <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
           <span
             aria-hidden
             className="size-2 shrink-0 rounded-full"
             style={{ backgroundColor: wallet.color }}
           />
-          {name}
+          <span className="truncate">{name}</span>
         </p>
-        <p className="mt-1 text-2xl font-semibold tabular-nums">
+        <p className="mt-0.5 truncate text-lg font-semibold tabular-nums">
           {formatPeso(balance)}
         </p>
       </DrawerTrigger>

@@ -2,20 +2,23 @@ import type { MoneyAccount } from "./types";
 
 /**
  * Fixed account → hue assignment (color follows the entity, never its rank —
- * every card that breaks money down by account uses this same mapping).
+ * every card that breaks money down by account uses this same mapping, so
+ * changing it here is the one place that needs to change).
  *
- * The app's own chart tokens (--chart-1..5) are grayscale, which fails a
- * categorical palette validation outright (zero chroma, adjacent steps
- * indistinguishable even to normal vision). These three hues are categorical
- * slots 1–3 from a validated palette, re-validated against this app's white
- * surface: CVD ΔE ≥ 7.6, normal-vision ΔE ≥ 29. Maya's pink sits below 3:1
- * contrast, which is legal only because every value using these colors is
- * directly labeled — color never carries identity alone here.
+ * Cash/GCash/Maya = yellow/blue/green, per the owner's own request — blue
+ * and green are the same two hues this app already used for cash/gcash
+ * respectively (just reassigned to gcash/maya), still the CVD-validated
+ * pair described below; yellow reuses incomeBreakdownCard.tsx's own
+ * ESERVICE_COLOR rather than a freshly invented hex, so every yellow in the
+ * app stays the same value. Not independently re-validated for CVD/contrast
+ * as a fresh 3-color set the way the original blue/green/pink combination
+ * was — every value using these colors is directly labeled regardless, so
+ * color never carries identity alone here.
  */
 export const ACCOUNT_COLORS: Record<MoneyAccount, string> = {
-  cash: "#2a78d6",
-  gcash: "#008300",
-  maya: "#e87ba4",
+  cash: "#eda100",
+  gcash: "#2a78d6",
+  maya: "#008300",
 };
 
 export const ACCOUNT_ORDER: MoneyAccount[] = ["cash", "gcash", "maya"];

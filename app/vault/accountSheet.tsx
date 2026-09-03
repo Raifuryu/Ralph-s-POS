@@ -494,9 +494,9 @@ export default function AccountSheet({
 
   return (
     <Drawer open={open} onOpenChange={setOpen} showSwipeHandle>
-      <DrawerTrigger className="block w-full rounded-lg border bg-card p-4 text-left transition-colors hover:bg-muted/30">
-        <p className="text-sm text-muted-foreground">{label}</p>
-        <p className="mt-1 text-2xl font-semibold tabular-nums">
+      <DrawerTrigger className="block w-full min-w-0 rounded-lg border bg-card p-3 text-left transition-colors hover:bg-muted/30">
+        <p className="truncate text-xs text-muted-foreground">{label}</p>
+        <p className="mt-0.5 truncate text-lg font-semibold tabular-nums">
           {formatPeso(balance)}
         </p>
       </DrawerTrigger>
