@@ -303,6 +303,23 @@ CREATE TABLE vault_entries (
   -- both. NULL `account` isn't an option (NOT NULL), so a wallet-earmarked
   -- row still carries the same 'cash' placeholder convention `fund` rows use.
   wallet_id              CHAR(36),
+  -- Correlates a 'transfer' row with its OTHER leg — the two rows one split
+  -- posts (see the CHECK's own comment below) share one transfer_group,
+  -- generated fresh per split. NULL for every other entry_type. Exists
+  -- specifically so a wallet's leaving leg (wallet_id set) can be told
+  -- apart from one that reached a real account (transferWalletToAccounts/
+  -- transferWalletsToAccount — its sibling arriving leg has fund AND
+  -- wallet_id both NULL) versus one that reached a fund (transferWalletToFunds
+  -- — sibling has fund set) or another wallet (transferWalletToWallets —
+  -- sibling has wallet_id set too): the leaving leg's own columns look
+  -- identical in all three cases (wallet_id set, account either the real
+  -- destination or a 'cash' placeholder depending which), so only a join
+  -- back to the sibling via transfer_group can tell them apart. A fund's
+  -- own leaving leg never needs this (transferFund/transferFundsToAccount
+  -- are the only fund-leaving-leg source, and always land on a real
+  -- account), but every transfer-posting function sets it anyway for
+  -- consistency.
+  transfer_group         CHAR(36),
   CONSTRAINT vault_entries_seq_key UNIQUE (seq),
   CONSTRAINT vault_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT vault_entries_service_transaction_id_fkey FOREIGN KEY (service_transaction_id) REFERENCES service_transactions(id) ON DELETE SET NULL,
@@ -325,7 +342,8 @@ CREATE TABLE vault_entries (
   CONSTRAINT vault_entries_withdrawal_note_check CHECK (entry_type <> 'withdrawal' OR LENGTH(TRIM(COALESCE(note, ''))) > 0),
   INDEX vault_entries_account_seq_idx (account, seq DESC),
   INDEX vault_entries_seq_idx (seq DESC),
-  INDEX vault_entries_wallet_id_seq_idx (wallet_id, seq DESC)
+  INDEX vault_entries_wallet_id_seq_idx (wallet_id, seq DESC),
+  INDEX vault_entries_transfer_group_idx (transfer_group)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================

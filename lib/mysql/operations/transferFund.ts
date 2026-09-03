@@ -20,7 +20,11 @@ export type ProfitFund = "profit" | "reinvest";
  * depending on which view is asking. Splitting across several accounts in
  * one call lets the owner cover a payment partly from what a fund already
  * has and partly from elsewhere (e.g. topping off from cashbox once
- * Reinvest alone falls short) in a single, atomic transfer.
+ * Reinvest alone falls short) in a single, atomic transfer. Both legs of
+ * one split share a fresh `transfer_group` id — see vault_entries' own
+ * comment on why that exists (it's the wallet-transfer functions that
+ * actually need it to disambiguate, not this one, but every transfer
+ * function sets it for consistency).
  *
  * No row to lock (a fund balance is a SUM, not a row) — same accepted
  * soft-race as adjustVaultBalance/recordVaultCount already live with for
@@ -72,13 +76,14 @@ export async function transferFund(
     }
 
     for (const [account, amount] of collapsed) {
+      const transferGroup = randomUUID();
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
-        [randomUUID(), -amount, account, fund, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?, ?)",
+        [randomUUID(), -amount, account, fund, transferGroup, userId, note]
       );
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?)",
-        [randomUUID(), amount, account, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
+        [randomUUID(), amount, account, transferGroup, userId, note]
       );
     }
 
@@ -140,13 +145,14 @@ export async function transferFundsToAccount(
         );
       }
 
+      const transferGroup = randomUUID();
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
-        [randomUUID(), -amount, account, fund, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?, ?)",
+        [randomUUID(), -amount, account, fund, transferGroup, userId, note]
       );
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?)",
-        [randomUUID(), amount, account, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
+        [randomUUID(), amount, account, transferGroup, userId, note]
       );
     }
 

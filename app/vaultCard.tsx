@@ -3,10 +3,12 @@ import { ACCOUNT_COLORS, ACCOUNT_ORDER } from "@/lib/accountColors";
 import { formatPeso } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 
+export type TransferOutItem = { key: string; label: string; amount: number };
+
 export default function VaultCard({
   balances,
   todayTransfersIn,
-  takenToday,
+  transfersOut,
   compact = false,
   className,
 }: {
@@ -19,15 +21,14 @@ export default function VaultCard({
       Omitted (or zero) rows show no parenthetical at all — only the Sales
       dashboard passes this today. */
   todayTransfersIn?: Map<MoneyAccount, number>;
-  /** Today's total TAKEN from each account (entry_type='withdrawal' only —
-      cash-in/adjustment/transfer aren't "taken", see page.tsx's own
-      takenTodayRows query) — the footer below, one line per account that
-      had at least one withdrawal today. Replaces this card's old Profit/
-      For Restock footer (that breakdown lives on the Vault page's own fund
-      cards now, with a "today" figure of its own). Omitted or empty hides
-      the footer entirely, same "no divider over nothing" rule the old
-      funds footer followed. Only the Sales dashboard passes this today. */
-  takenToday?: Map<MoneyAccount, number>;
+  /** Today's transfers OUT of Profit, For Restock, and every wallet — the
+      footer below, one line per source with a transfer today (see page.tsx's
+      own fundsTransferredOutRows/walletsTransferredOutRows queries and their
+      "known imprecision" comment). Not withdrawals/cash-out — only
+      entry_type='transfer'. Omitted or empty hides the footer entirely,
+      same "no divider over nothing" rule this card's earlier footers have
+      followed. Only the Sales dashboard passes this today. */
+  transfersOut?: TransferOutItem[];
   compact?: boolean;
   className?: string;
 }) {
@@ -42,10 +43,6 @@ export default function VaultCard({
     };
   });
   const total = rows.reduce((sum, row) => sum + row.value, 0);
-
-  const takenRows = ACCOUNT_ORDER.filter(
-    (account) => (takenToday?.get(account) ?? 0) > 0
-  );
 
   return (
     <MoneyBreakdownCard
@@ -63,21 +60,19 @@ export default function VaultCard({
       compact={compact}
       className={className}
       footer={
-        takenRows.length > 0 ? (
+        transfersOut && transfersOut.length > 0 ? (
           <div className="flex flex-col gap-1.5">
             <p className="text-xs text-muted-foreground">
-              Today&rsquo;s cash activity
+              Today&rsquo;s transfers
             </p>
-            {takenRows.map((account) => (
+            {transfersOut.map((item) => (
               <p
-                key={account}
+                key={item.key}
                 className="flex items-baseline justify-between gap-2 text-xs"
               >
-                <span className="text-muted-foreground">
-                  {MONEY_ACCOUNT_LABELS[account]}
-                </span>
-                <span className="font-medium tabular-nums text-destructive">
-                  −{formatPeso(takenToday?.get(account) ?? 0)} taken
+                <span className="text-muted-foreground">{item.label}</span>
+                <span className="font-medium tabular-nums">
+                  {formatPeso(item.amount)}
                 </span>
               </p>
             ))}

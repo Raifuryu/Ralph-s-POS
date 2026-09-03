@@ -10,9 +10,12 @@ import {
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import {
+  PROFIT_FUNDS,
+  PROFIT_FUND_LABELS,
   SALES_FILTERS,
   type MoneyAccount,
   type Product,
+  type ProfitFund,
   type SalesEntry,
   type Service,
   type ServiceTransaction,
@@ -124,7 +127,8 @@ export default async function Home({
   let topSellers: { product_id: string; units_sold: number }[];
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
-  let takenTodayRows: { account: MoneyAccount; taken: number }[];
+  let fundsTransferredOutRows: { fund: ProfitFund; amount: number }[];
+  let walletsTransferredOutRows: { wallet_id: string; name: string; amount: number }[];
   let transferredInTodayRows: { account: MoneyAccount; amount: number }[];
   let sales: TransactionWithItems[];
 
@@ -136,7 +140,8 @@ export default async function Home({
       topSellers,
       services,
       vaultRows,
-      takenTodayRows,
+      fundsTransferredOutRows,
+      walletsTransferredOutRows,
       transferredInTodayRows,
     ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
@@ -162,22 +167,39 @@ export default async function Home({
         queryRows<{ account: MoneyAccount; balance: number }>(
           "SELECT account, balance FROM vault_balance"
         ),
-        // The card's own "Today's cash activity" footer — how much was
-        // TAKEN (entry_type='withdrawal' only — a cash-in/adjustment/
-        // transfer isn't money leaving, so those stay out of this "taken"
-        // figure), grouped by account. Only entries that actually reduced
-        // Cash/GCash/Maya's own balance (`fund IS NULL AND wallet_id IS
-        // NULL` — a fund/wallet's own cash-out never touches this card's
-        // balances at all). Today only. `amount` is negative for a
-        // withdrawal (see vault_entries' own CHECK), flipped here so the
-        // figure reads as a plain positive "amount taken".
-        queryRows<{ account: MoneyAccount; taken: number }>(
-          `SELECT account, COALESCE(SUM(-amount), 0) AS taken
+        // The card's own "Today's transfers" footer — how much left each
+        // fund via a transfer today (the fund-leaving leg, always paired
+        // with a real account-arriving leg — see transferFund's own doc
+        // comment, there's no "fund → somewhere else" path). `amount` is
+        // negative on this leg, flipped here to read as a plain positive
+        // figure.
+        queryRows<{ fund: ProfitFund; amount: number }>(
+          `SELECT fund, COALESCE(SUM(-amount), 0) AS amount
            FROM vault_entries
-           WHERE fund IS NULL AND wallet_id IS NULL
-             AND entry_type = 'withdrawal'
-             AND DATE(created_at) = CURDATE()
-           GROUP BY account`
+           WHERE fund IS NOT NULL AND entry_type = 'transfer' AND DATE(created_at) = CURDATE()
+           GROUP BY fund`
+        ),
+        // Same, for wallets — but a wallet's leaving leg alone can't say
+        // where the money actually went (it looks identical whether it
+        // reached a real account, a fund, or another wallet), so this
+        // joins each leaving leg (`ve`) to its sibling via `transfer_group`
+        // and only counts it when that sibling landed on a real account
+        // (`arrive.fund IS NULL AND arrive.wallet_id IS NULL`) — see
+        // vault_entries.transfer_group's own comment. Only reflects
+        // Cash/GCash/Maya-bound transfers now, same scope as
+        // transferredInTodayRows below.
+        queryRows<{ wallet_id: string; name: string; amount: number }>(
+          `SELECT ve.wallet_id, w.name, COALESCE(SUM(-ve.amount), 0) AS amount
+           FROM vault_entries ve
+           JOIN wallets w ON w.id = ve.wallet_id
+           JOIN vault_entries arrive
+             ON arrive.transfer_group = ve.transfer_group
+             AND arrive.id <> ve.id
+             AND arrive.fund IS NULL
+             AND arrive.wallet_id IS NULL
+           WHERE ve.wallet_id IS NOT NULL AND ve.entry_type = 'transfer' AND ve.amount < 0
+             AND DATE(ve.created_at) = CURDATE()
+           GROUP BY ve.wallet_id, w.name`
         ),
         // Today's total TRANSFERRED IN per account — shown beside each
         // row's balance in VaultCard (see its own `todayTransfersIn` prop).
@@ -294,14 +316,30 @@ export default async function Home({
   for (const row of vaultRows) {
     if (row.account) vault.set(row.account, Number(row.balance ?? 0));
   }
-  const takenToday = new Map<MoneyAccount, number>();
-  for (const row of takenTodayRows) {
-    if (row.account) takenToday.set(row.account, Number(row.taken ?? 0));
-  }
   const transferredInToday = new Map<MoneyAccount, number>();
   for (const row of transferredInTodayRows) {
     if (row.account) transferredInToday.set(row.account, Number(row.amount ?? 0));
   }
+
+  // The card's own "Today's transfers" footer — Profit/For Restock first,
+  // then every wallet with a transfer today, zero-amount ones dropped
+  // entirely (see fundsTransferredOutRows/walletsTransferredOutRows' own
+  // comments on what this actually measures).
+  const fundsTransferredOut = new Map<ProfitFund, number>(
+    fundsTransferredOutRows.map((row) => [row.fund, Number(row.amount ?? 0)])
+  );
+  const transfersOut = [
+    ...PROFIT_FUNDS.filter((fund) => (fundsTransferredOut.get(fund) ?? 0) > 0).map(
+      (fund) => ({
+        key: fund as string,
+        label: PROFIT_FUND_LABELS[fund],
+        amount: fundsTransferredOut.get(fund)!,
+      })
+    ),
+    ...walletsTransferredOutRows
+      .filter((row) => Number(row.amount) > 0)
+      .map((row) => ({ key: row.wallet_id, label: row.name, amount: Number(row.amount) })),
+  ];
 
   // Same reasoning as storeMargin: counted over the whole filtered window via
   // `sales`, not just the visible page.
@@ -345,7 +383,7 @@ export default async function Home({
           <VaultCard
             balances={vault}
             todayTransfersIn={transferredInToday}
-            takenToday={takenToday}
+            transfersOut={transfersOut}
             compact
           />
           <IncomeBreakdownCard

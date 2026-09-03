@@ -9,7 +9,11 @@ import { queryConn, roundMoney } from "./helpers";
  * mirror of transferFund, just keyed by `wallet_id` instead of the fixed
  * `fund` enum. Same two-leg posting (wallet-leaving, negative, wallet_id
  * set; account-arriving, positive, wallet_id NULL) and the same reasoning
- * for it — see transferFund's own doc comment.
+ * for it — see transferFund's own doc comment. Both legs share a fresh
+ * `transfer_group` id, same as every other transfer function here — see
+ * vault_entries' own comment on why that matters specifically for a
+ * wallet's leaving leg (this function's own arriving leg is the "landed on
+ * a real account" case that comment describes).
  */
 export async function transferWalletToAccounts(
   params: {
@@ -51,13 +55,14 @@ export async function transferWalletToAccounts(
     }
 
     for (const [account, amount] of collapsed) {
+      const transferGroup = randomUUID();
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
-        [randomUUID(), -amount, account, walletId, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?, ?)",
+        [randomUUID(), -amount, account, walletId, transferGroup, userId, note]
       );
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?)",
-        [randomUUID(), amount, account, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
+        [randomUUID(), amount, account, transferGroup, userId, note]
       );
     }
 
@@ -116,13 +121,14 @@ export async function transferWalletToFunds(
     }
 
     for (const [fund, amount] of collapsed) {
+      const transferGroup = randomUUID();
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?)",
-        [randomUUID(), -amount, walletId, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, transfer_group, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?, ?)",
+        [randomUUID(), -amount, walletId, transferGroup, userId, note]
       );
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?)",
-        [randomUUID(), amount, fund, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, transfer_group, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?, ?)",
+        [randomUUID(), amount, fund, transferGroup, userId, note]
       );
     }
 
@@ -184,13 +190,14 @@ export async function transferWalletToWallets(
     }
 
     for (const [destWalletId, amount] of collapsed) {
+      const transferGroup = randomUUID();
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?)",
-        [randomUUID(), -amount, walletId, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, transfer_group, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?, ?)",
+        [randomUUID(), -amount, walletId, transferGroup, userId, note]
       );
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?)",
-        [randomUUID(), amount, destWalletId, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, transfer_group, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?, ?)",
+        [randomUUID(), amount, destWalletId, transferGroup, userId, note]
       );
     }
 
@@ -244,13 +251,14 @@ export async function transferWalletsToAccount(
         );
       }
 
+      const transferGroup = randomUUID();
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
-        [randomUUID(), -amount, account, walletId, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?, ?)",
+        [randomUUID(), -amount, account, walletId, transferGroup, userId, note]
       );
       await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?)",
-        [randomUUID(), amount, account, userId, note]
+        "INSERT INTO vault_entries (id, entry_type, amount, account, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
+        [randomUUID(), amount, account, transferGroup, userId, note]
       );
     }
 

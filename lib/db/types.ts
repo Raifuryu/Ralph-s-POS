@@ -178,6 +178,7 @@ export type Database = {
           account: MoneyAccountEnum;
           fund: ProfitFundEnum | null;
           wallet_id: string | null;
+          transfer_group: string | null;
         };
       };
       vault_snapshots: {

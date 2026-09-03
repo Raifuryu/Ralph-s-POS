@@ -444,27 +444,32 @@ export default async function VaultPage({
           picker. */}
       <div className="flex flex-col gap-3">
         <div className="flex items-baseline justify-between gap-2">
-          <p className="flex items-baseline gap-2 text-sm text-muted-foreground">
-            Wallets
-            {wallets.length > 0 ? (
-              <span className="text-sm font-medium tabular-nums text-foreground">
-                {formatPeso(walletsTotal)}
-              </span>
-            ) : null}
-          </p>
+          <p className="text-sm text-muted-foreground">Wallets</p>
           <AddWalletSheet />
         </div>
         {wallets.length > 0 ? (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {wallets.map((wallet) => (
-              <WalletCard
-                key={wallet.id}
-                wallet={wallet}
-                balance={wallet.balance}
-                otherWallets={activeWallets.filter((w) => w.id !== wallet.id)}
-              />
-            ))}
-          </div>
+          <>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {wallets.map((wallet) => (
+                <WalletCard
+                  key={wallet.id}
+                  wallet={wallet}
+                  balance={wallet.balance}
+                  otherWallets={activeWallets.filter((w) => w.id !== wallet.id)}
+                />
+              ))}
+            </div>
+
+            {/* Same "plain running total below the cards" treatment as
+                Total on hand above — not another card, just what the
+                wallet cards above already add up to. */}
+            <div className="flex flex-col gap-1">
+              <p className="text-sm text-muted-foreground">Wallets total</p>
+              <p className="text-2xl font-semibold tabular-nums">
+                {formatPeso(walletsTotal)}
+              </p>
+            </div>
+          </>
         ) : (
           <p className="text-sm text-muted-foreground">
             No wallets yet — add one to track money for a specific purpose,
