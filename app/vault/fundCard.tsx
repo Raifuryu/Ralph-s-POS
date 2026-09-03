@@ -412,11 +412,12 @@ export default function FundCard({
 }: {
   fund: ProfitFund;
   balance: number;
-  /** This fund's net change today (every entry dated today, whatever its
-      type — see page.tsx's own todayFundRows query) — shown alongside the
-      all-time balance so "how much came in today" doesn't require opening
-      the ledger. Can land negative if a same-day cash-out/transfer outpaced
-      what came in. */
+  /** What this fund actually earned today — 'sale'/'service' entries only
+      (see page.tsx's own todayFundRows query), same figure the dashboard's
+      Income card shows as Invested/Total profit, not this fund's net
+      change (a same-day cash-out/adjustment/transfer isn't income, and
+      isn't counted here). Shown alongside the all-time balance so "how
+      much came in today" doesn't require opening the ledger. */
   today: number;
   breakdown: Map<MoneyAccount, number>;
 }) {

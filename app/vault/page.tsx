@@ -108,16 +108,21 @@ export default async function VaultPage({
            GROUP BY fund, account
            HAVING SUM(amount) > 0`
         ),
-        // Today's net change to each fund — every entry dated today,
-        // whatever its type (sale/service earnings, but also a same-day
-        // cash-out/adjustment/transfer if one happened), same "SUM(amount)
-        // grouped by fund" shape as vault_fund_balance itself, just scoped
-        // to CURDATE(). Un-gated (unlike the snapshot-only queries below) —
+        // What each fund actually EARNED today — 'sale'/'service' entries
+        // only, same entry types checkout.ts/recordService.ts post the
+        // profit/reinvest split with. This is deliberately narrower than
+        // "every entry dated today": a same-day cash-out, adjustment, or
+        // transfer also touches these funds but isn't income, and mixing
+        // it in here made this figure disagree with the dashboard's own
+        // Income card (Invested/Total profit), which is 'sale'/'service'
+        // margin only. Un-gated (unlike the snapshot-only queries below) —
         // FundCard always shows this once the card itself renders.
         queryRows<{ fund: ProfitFund; amount: number }>(
           `SELECT fund, COALESCE(SUM(amount), 0) AS amount
            FROM vault_entries
-           WHERE fund IS NOT NULL AND DATE(created_at) = CURDATE()
+           WHERE fund IS NOT NULL
+             AND entry_type IN ('sale', 'service')
+             AND DATE(created_at) = CURDATE()
            GROUP BY fund`
         ),
         fetchVaultLedgerPage(filters, 0),
