@@ -18,11 +18,11 @@ export default function VaultCard({
       keeps the default. */
   title?: string;
   balances: Map<MoneyAccount, number>;
-  /** Today's total transferred INTO each account (entry_type='transfer',
-      the account-arriving leg — see page.tsx's own transferredInTodayRows
-      query) — shown as a small greyed-out figure beside that row's
-      balance, e.g. "₱123,456.00 (₱123.00)", so money that moved in via a
-      transfer today doesn't just silently shift the headline number.
+  /** Today's total money that came INTO each account — a transfer's
+      arriving leg plus a plain Cash in (see page.tsx's own
+      transferredInTodayRows query) — shown as a small greyed-out figure
+      beside that row's balance, e.g. "₱123,456.00 (₱123.00)", so money
+      that moved in today doesn't just silently shift the headline number.
       Omitted (or zero) rows show no parenthetical at all — only the Sales
       dashboard passes this today. */
   todayTransfersIn?: Map<MoneyAccount, number>;
@@ -49,10 +49,10 @@ export default function VaultCard({
   });
   const total = rows.reduce((sum, row) => sum + row.value, 0);
 
-  // What the total was before today's incoming transfers — shown beside
-  // the headline so e.g. "₱20,692.56 was ₱20,392.56" reads as "GCash's
-  // ₱300 transfer today is included in that number." Hidden when nothing
-  // transferred in today (todayTransfersIn omitted or all-zero), same "no
+  // What the total was before today's incoming money (transfers + cash
+  // ins) — shown beside the headline so e.g. "₱20,692.56 was ₱20,392.56"
+  // reads as "GCash's ₱300 today is included in that number." Hidden when
+  // nothing came in today (todayTransfersIn omitted or all-zero), same "no
   // note over nothing" rule this card's row-level notes already follow.
   const transferredInSum = ACCOUNT_ORDER.reduce(
     (sum, account) => sum + (todayTransfersIn?.get(account) ?? 0),

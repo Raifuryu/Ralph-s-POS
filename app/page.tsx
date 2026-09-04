@@ -201,21 +201,23 @@ export default async function Home({
              AND DATE(ve.created_at) = CURDATE()
            GROUP BY ve.wallet_id, w.name`
         ),
-        // Today's total TRANSFERRED IN per account — shown beside each
-        // row's balance in VaultCard (see its own `todayTransfersIn` prop).
-        // `fund IS NULL AND wallet_id IS NULL` used to be enough on its own
-        // to isolate the account-arriving leg (a fund/wallet-leaving leg
-        // always has one of those set) — but now that account-to-account
-        // transfers exist (transferAccountsToAccount), BOTH of that
-        // transfer's legs pass that filter, so `amount > 0` is needed too
-        // to drop the source account's own negative leaving leg (which
-        // would otherwise show up as money "transferred in" — actually
-        // money that left).
+        // Today's total money that came INTO each account — a transfer's
+        // arriving leg plus a plain Cash in (entry_type='deposit', always
+        // positive already, see vault_entries' own CHECK) — shown beside
+        // each row's balance in VaultCard (see its own `todayTransfersIn`
+        // prop, name kept even though it's broader now). `fund IS NULL AND
+        // wallet_id IS NULL` used to be enough on its own to isolate a
+        // transfer's account-arriving leg (a fund/wallet-leaving leg always
+        // has one of those set) — but now that account-to-account transfers
+        // exist (transferAccountsToAccount), BOTH of that transfer's legs
+        // pass that filter, so `amount > 0` is needed too to drop the
+        // source account's own negative leaving leg (which would otherwise
+        // show up as money "in" — actually money that left).
         queryRows<{ account: MoneyAccount; amount: number }>(
           `SELECT account, COALESCE(SUM(amount), 0) AS amount
            FROM vault_entries
            WHERE fund IS NULL AND wallet_id IS NULL
-             AND entry_type = 'transfer' AND amount > 0
+             AND entry_type IN ('transfer', 'deposit') AND amount > 0
              AND DATE(created_at) = CURDATE()
            GROUP BY account`
         ),
