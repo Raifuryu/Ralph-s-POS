@@ -65,6 +65,12 @@ export async function fetchVaultLedgerPage(
   if (scopeConditions.length > 0) {
     conditions.push(`(${scopeConditions.join(" OR ")})`);
   }
+  // A separate dimension from the account/fund/wallet OR-group above — see
+  // VaultLedgerFilters.types' own comment.
+  if (filters.types.length > 0) {
+    conditions.push(`ve.entry_type IN (${filters.types.map(() => "?").join(",")})`);
+    params.push(...filters.types);
+  }
   if (q) {
     if (matchedServiceTxnIds.length > 0) {
       conditions.push(

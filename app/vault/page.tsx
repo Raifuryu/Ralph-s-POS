@@ -9,8 +9,10 @@ import {
   PROFIT_FUNDS,
   type MoneyAccount,
   type ProfitFund,
+  type VaultEntryType,
   type WalletBalance,
 } from "@/lib/types";
+import { VAULT_LEDGER_FILTER_TYPES } from "@/lib/vault/ledgerFilters";
 import { type EServiceFees } from "../incomeBreakdownCard";
 import TransactionFilters from "../transactionFilters";
 import AccountSheet from "./accountSheet";
@@ -22,6 +24,7 @@ import VaultSnapshotSheet, {
   type SnapshotHistoryEntry,
   type TodaySnapshot,
 } from "./vaultSnapshotSheet";
+import VaultTypeFilter from "./vaultTypeFilter";
 import WalletCard from "./walletCard";
 import WalletFilter from "./walletFilter";
 
@@ -52,6 +55,9 @@ type SearchParams = {
   fund?: string;
   /** Comma-joined wallet ids — see WalletFilter's own comment. */
   wallet?: string;
+  /** Comma-joined VaultEntryType values — see VaultTypeFilter's own
+      comment. */
+  type?: string;
 };
 
 export default async function VaultPage({
@@ -77,6 +83,10 @@ export default async function VaultPage({
   const selectedWalletIds = (params.wallet?.split(",") ?? []).filter(
     (value) => value.trim() !== ""
   );
+  const selectedTypes = (params.type?.split(",") ?? []).filter(
+    (value): value is VaultEntryType =>
+      (VAULT_LEDGER_FILTER_TYPES as readonly string[]).includes(value)
+  );
   const filters = {
     q,
     fromTs: params.from_ts,
@@ -84,6 +94,7 @@ export default async function VaultPage({
     accounts: selectedAccounts,
     funds: selectedFunds,
     walletIds: selectedWalletIds,
+    types: selectedTypes,
   };
   const showDebts = params.debts !== undefined;
   const showSnapshot = params.snapshot !== undefined;
@@ -517,8 +528,10 @@ export default async function VaultPage({
         basePath="/vault"
       />
 
+      <VaultTypeFilter initialTypes={selectedTypes} basePath="/vault" />
+
       <VaultLedgerClient
-        key={`${q}|${params.from_ts ?? ""}|${params.to_ts ?? ""}|${selectedAccounts.join(",")}|${selectedFunds.join(",")}|${selectedWalletIds.join(",")}`}
+        key={`${q}|${params.from_ts ?? ""}|${params.to_ts ?? ""}|${selectedAccounts.join(",")}|${selectedFunds.join(",")}|${selectedWalletIds.join(",")}|${selectedTypes.join(",")}`}
         initialEntries={ledgerPage.entries}
         initialTotal={ledgerPage.total}
         filters={filters}
@@ -528,7 +541,8 @@ export default async function VaultPage({
             params.to_ts ||
             selectedAccounts.length > 0 ||
             selectedFunds.length > 0 ||
-            selectedWalletIds.length > 0
+            selectedWalletIds.length > 0 ||
+            selectedTypes.length > 0
         )}
       />
 

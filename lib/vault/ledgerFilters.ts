@@ -1,4 +1,14 @@
-import type { MoneyAccount, ProfitFund } from "@/lib/types";
+import type { MoneyAccount, ProfitFund, VaultEntryType } from "@/lib/types";
+
+/** The 4 entry types VaultTypeFilter's chips offer — the other 4
+    (sale/service/count/void) are system-posted bookkeeping rows, not
+    something the owner filters for here. */
+export const VAULT_LEDGER_FILTER_TYPES = [
+  "deposit",
+  "withdrawal",
+  "transfer",
+  "adjustment",
+] as const satisfies readonly VaultEntryType[];
 
 /** Page size for one vault ledger "load more" batch — the table grows
     unbounded over the store's lifetime, so unlike the sales dashboard's
@@ -28,4 +38,11 @@ export type VaultLedgerFilters = {
       `funds` the same OR way (an entry is on at most one of an account, a
       fund, or a wallet). */
   walletIds: string[];
+  /** Narrows to entries of these types (`entry_type IN (...)`) — Cash in/
+      Cash out/Transfer/Adjustment (see VAULT_LEDGER_FILTER_TYPES above).
+      ANDed with the account/fund/wallet OR-group above, not folded into it
+      — a type filter and a scope filter narrow independently, e.g. "GCash"
+      + "Cash out" means a GCash withdrawal specifically, not either one.
+      Empty means no type filter. */
+  types: VaultEntryType[];
 };
