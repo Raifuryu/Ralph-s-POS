@@ -10,12 +10,9 @@ import {
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
 import {
-  PROFIT_FUNDS,
-  PROFIT_FUND_LABELS,
   SALES_FILTERS,
   type MoneyAccount,
   type Product,
-  type ProfitFund,
   type SalesEntry,
   type Service,
   type ServiceTransaction,
@@ -128,9 +125,6 @@ export default async function Home({
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
   let baselineFundTargetRows: { baseline_fund_target: number | null }[];
-  let fundsTransferredOutRows: { fund: ProfitFund; amount: number }[];
-  let walletsTransferredOutRows: { wallet_id: string; name: string; amount: number }[];
-  let transferredInTodayRows: { account: MoneyAccount; amount: number }[];
   let sales: TransactionWithItems[];
 
   try {
@@ -142,9 +136,6 @@ export default async function Home({
       services,
       vaultRows,
       baselineFundTargetRows,
-      fundsTransferredOutRows,
-      walletsTransferredOutRows,
-      transferredInTodayRows,
     ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
@@ -177,60 +168,6 @@ export default async function Home({
         // below is undefined either way).
         queryRows<{ baseline_fund_target: number | null }>(
           "SELECT baseline_fund_target FROM store_settings WHERE id = 1"
-        ),
-        // The card's own "Today's transfers" footer — how much left each
-        // fund via a transfer today (the fund-leaving leg, always paired
-        // with a real account-arriving leg — see transferFund's own doc
-        // comment, there's no "fund → somewhere else" path). `amount` is
-        // negative on this leg, flipped here to read as a plain positive
-        // figure.
-        queryRows<{ fund: ProfitFund; amount: number }>(
-          `SELECT fund, COALESCE(SUM(-amount), 0) AS amount
-           FROM vault_entries
-           WHERE fund IS NOT NULL AND entry_type = 'transfer' AND DATE(created_at) = CURDATE()
-           GROUP BY fund`
-        ),
-        // Same, for wallets — but a wallet's leaving leg alone can't say
-        // where the money actually went (it looks identical whether it
-        // reached a real account, a fund, or another wallet), so this
-        // joins each leaving leg (`ve`) to its sibling via `transfer_group`
-        // and only counts it when that sibling landed on a real account
-        // (`arrive.fund IS NULL AND arrive.wallet_id IS NULL`) — see
-        // vault_entries.transfer_group's own comment. Only reflects
-        // Cash/GCash/Maya-bound transfers now, same scope as
-        // transferredInTodayRows below.
-        queryRows<{ wallet_id: string; name: string; amount: number }>(
-          `SELECT ve.wallet_id, w.name, COALESCE(SUM(-ve.amount), 0) AS amount
-           FROM vault_entries ve
-           JOIN wallets w ON w.id = ve.wallet_id
-           JOIN vault_entries arrive
-             ON arrive.transfer_group = ve.transfer_group
-             AND arrive.id <> ve.id
-             AND arrive.fund IS NULL
-             AND arrive.wallet_id IS NULL
-           WHERE ve.wallet_id IS NOT NULL AND ve.entry_type = 'transfer' AND ve.amount < 0
-             AND DATE(ve.created_at) = CURDATE()
-           GROUP BY ve.wallet_id, w.name`
-        ),
-        // Today's total money that came INTO each account — a transfer's
-        // arriving leg plus a plain Cash in (entry_type='deposit', always
-        // positive already, see vault_entries' own CHECK) — shown beside
-        // each row's balance in VaultCard (see its own `todayTransfersIn`
-        // prop, name kept even though it's broader now). `fund IS NULL AND
-        // wallet_id IS NULL` used to be enough on its own to isolate a
-        // transfer's account-arriving leg (a fund/wallet-leaving leg always
-        // has one of those set) — but now that account-to-account transfers
-        // exist (transferAccountsToAccount), BOTH of that transfer's legs
-        // pass that filter, so `amount > 0` is needed too to drop the
-        // source account's own negative leaving leg (which would otherwise
-        // show up as money "in" — actually money that left).
-        queryRows<{ account: MoneyAccount; amount: number }>(
-          `SELECT account, COALESCE(SUM(amount), 0) AS amount
-           FROM vault_entries
-           WHERE fund IS NULL AND wallet_id IS NULL
-             AND entry_type IN ('transfer', 'deposit') AND amount > 0
-             AND DATE(created_at) = CURDATE()
-           GROUP BY account`
         ),
       ]);
 
@@ -348,30 +285,6 @@ export default async function Home({
   // against — null (no row yet, or an explicitly cleared target) hides
   // that note and just shows the "Set target" trigger.
   const baselineFundTarget = baselineFundTargetRows[0]?.baseline_fund_target ?? null;
-  const transferredInToday = new Map<MoneyAccount, number>();
-  for (const row of transferredInTodayRows) {
-    if (row.account) transferredInToday.set(row.account, Number(row.amount ?? 0));
-  }
-
-  // The card's own "Today's transfers" footer — Profit/For Restock first,
-  // then every wallet with a transfer today, zero-amount ones dropped
-  // entirely (see fundsTransferredOutRows/walletsTransferredOutRows' own
-  // comments on what this actually measures).
-  const fundsTransferredOut = new Map<ProfitFund, number>(
-    fundsTransferredOutRows.map((row) => [row.fund, Number(row.amount ?? 0)])
-  );
-  const transfersOut = [
-    ...PROFIT_FUNDS.filter((fund) => (fundsTransferredOut.get(fund) ?? 0) > 0).map(
-      (fund) => ({
-        key: fund as string,
-        label: PROFIT_FUND_LABELS[fund],
-        amount: fundsTransferredOut.get(fund)!,
-      })
-    ),
-    ...walletsTransferredOutRows
-      .filter((row) => Number(row.amount) > 0)
-      .map((row) => ({ key: row.wallet_id, label: row.name, amount: Number(row.amount) })),
-  ];
 
   // Same reasoning as storeMargin: counted over the whole filtered window via
   // `sales`, not just the visible page.
@@ -416,8 +329,6 @@ export default async function Home({
             title="Baseline Fund"
             balances={vault}
             baselineFundTarget={baselineFundTarget}
-            todayTransfersIn={transferredInToday}
-            transfersOut={transfersOut}
             compact
           />
           <IncomeBreakdownCard
