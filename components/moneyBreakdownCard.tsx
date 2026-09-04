@@ -43,6 +43,8 @@ export function MoneyBreakdownCard({
   footer,
   href,
   linkLabel = "View →",
+  secondaryHref,
+  secondaryLinkLabel,
   compact = false,
   className,
 }: {
@@ -69,6 +71,11 @@ export function MoneyBreakdownCard({
   /** If set, a small link to view the full breakdown elsewhere. */
   href?: string;
   linkLabel?: string;
+  /** A second small link, rendered BEFORE `href`'s own — e.g. VaultCard's
+      own "History" link, sitting before "Vault →". Independent of `href`;
+      either can be set without the other. */
+  secondaryHref?: string;
+  secondaryLinkLabel?: string;
   /** Tighter padding and a smaller headline number — same recipe as
       SummaryCard's own `compact`, for pages that stack several of these
       cards where the full-size headline is more room than the number
@@ -94,16 +101,31 @@ export function MoneyBreakdownCard({
         >
           {title}
         </p>
-        {href ? (
-          <Button
-            variant="ghost"
-            size="xs"
-            className="-mr-2 text-muted-foreground"
-            nativeButton={false}
-            render={<Link href={href} />}
-          >
-            {linkLabel}
-          </Button>
+        {href || secondaryHref ? (
+          <div className="-mr-2 flex items-center">
+            {secondaryHref ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground"
+                nativeButton={false}
+                render={<Link href={secondaryHref} />}
+              >
+                {secondaryLinkLabel}
+              </Button>
+            ) : null}
+            {href ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                className="text-muted-foreground"
+                nativeButton={false}
+                render={<Link href={href} />}
+              >
+                {linkLabel}
+              </Button>
+            ) : null}
+          </div>
         ) : null}
       </div>
 

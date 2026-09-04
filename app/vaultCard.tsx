@@ -8,6 +8,8 @@ export type TransferOutItem = { key: string; label: string; amount: number };
 export default function VaultCard({
   title = "Money on hand",
   balances,
+  historyHref,
+  openingTotal,
   todayTransfersIn,
   transfersOut,
   compact = false,
@@ -18,6 +20,19 @@ export default function VaultCard({
       keeps the default. */
   title?: string;
   balances: Map<MoneyAccount, number>;
+  /** Link to the Cash In/Cash Out/Transfer/Adjust history sheet, shown as a
+      small "History" link before "Vault →" (see MoneyBreakdownCard's own
+      secondaryHref). Omit to hide it — only the Sales dashboard passes this
+      today. */
+  historyHref?: string;
+  /** Cash+GCash+Maya's TRUE opening balance for today — a fixed snapshot
+      (see page.tsx's own openingBalanceRows query), not a live "total minus
+      today's transfers" that would keep drifting whenever anything else —
+      a same-day cash-out, a sale — also changes the total. Shown as the
+      headline's own "was ₱X" note whenever it differs from the current
+      total. Omit to hide the note entirely — only the Sales dashboard
+      passes this today. */
+  openingTotal?: number;
   /** Today's total money that came INTO each account — a transfer's
       arriving leg plus a plain Cash in (see page.tsx's own
       transferredInTodayRows query) — shown as a small greyed-out figure
@@ -49,27 +64,20 @@ export default function VaultCard({
   });
   const total = rows.reduce((sum, row) => sum + row.value, 0);
 
-  // What the total was before today's incoming money (transfers + cash
-  // ins) — shown beside the headline so e.g. "₱20,692.56 was ₱20,392.56"
-  // reads as "GCash's ₱300 today is included in that number." Hidden when
-  // nothing came in today (todayTransfersIn omitted or all-zero), same "no
-  // note over nothing" rule this card's row-level notes already follow.
-  const transferredInSum = ACCOUNT_ORDER.reduce(
-    (sum, account) => sum + (todayTransfersIn?.get(account) ?? 0),
-    0
-  );
-  const totalBeforeTransfers = total - transferredInSum;
-
   return (
     <MoneyBreakdownCard
       title={title}
       total={total}
       headlineNote={
-        transferredInSum !== 0 ? `was ${formatPeso(totalBeforeTransfers)}` : undefined
+        openingTotal !== undefined && openingTotal !== total
+          ? `was ${formatPeso(openingTotal)}`
+          : undefined
       }
       rows={rows}
       href="/vault"
       linkLabel="Vault →"
+      secondaryHref={historyHref}
+      secondaryLinkLabel="History"
       compact={compact}
       className={className}
       footer={

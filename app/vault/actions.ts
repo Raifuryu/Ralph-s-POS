@@ -21,6 +21,10 @@ import {
 } from "@/lib/mysql/operations/recordVaultSnapshot";
 import { transferAccountsToAccount } from "@/lib/mysql/operations/transferAccount";
 import {
+  counterVaultEntry,
+  type CounterDestination,
+} from "@/lib/mysql/operations/counterVaultEntry";
+import {
   transferFund as transferFundOperation,
   transferFundsToAccount,
 } from "@/lib/mysql/operations/transferFund";
@@ -869,6 +873,76 @@ export async function settleDebt(
     revalidatePath("/vault");
     revalidatePath("/");
     return { error: null, ok: true };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+export type CounterEntryState = {
+  error: string | null;
+  result?: { remaining: number };
+};
+
+/** Reads the transfer-counter-action's own destination fields — one of
+    three shapes depending on `destination_type`, same "one hidden field
+    picks which kind" convention nothing else in this file quite needed
+    before (every other transfer target here was a single fixed kind). */
+function parseCounterDestination(formData: FormData): CounterDestination | null {
+  const type = String(formData.get("destination_type") ?? "");
+  if (type === "account") {
+    const account = parseAccount(formData.get("destination_account"));
+    return account ? { type: "account", account } : null;
+  }
+  if (type === "wallet") {
+    const walletId = parseWalletId(formData.get("destination_wallet_id"));
+    return walletId ? { type: "wallet", walletId } : null;
+  }
+  if (type === "fund") {
+    const fund = parseFund(formData.get("destination_fund"));
+    return fund ? { type: "fund", fund } : null;
+  }
+  return null;
+}
+
+/** Posts a counter-action against a Cash In/Cash Out — the Baseline Fund
+    card's own History sheet is the only place this is called from. See
+    counterVaultEntry's own doc comment for what "countering" actually
+    does. */
+export async function counterEntry(
+  _prev: CounterEntryState,
+  formData: FormData
+): Promise<CounterEntryState> {
+  const originalId = String(formData.get("original_id") ?? "");
+  if (!originalId) return { error: "Missing entry." };
+
+  const actionRaw = String(formData.get("action") ?? "");
+  if (actionRaw !== "cash" && actionRaw !== "transfer") {
+    return { error: "Pick how to counter this entry." };
+  }
+
+  const amount = parseMoney(formData.get("amount"), { requirePositive: true });
+  if (amount === "bad" || amount === null) {
+    return { error: "Enter an amount above zero." };
+  }
+
+  const note = String(formData.get("note") ?? "").trim() || null;
+
+  let destination: CounterDestination | undefined;
+  if (actionRaw === "transfer") {
+    const parsed = parseCounterDestination(formData);
+    if (!parsed) return { error: "Pick where the money goes." };
+    destination = parsed;
+  }
+
+  try {
+    const user = await requireCurrentUser();
+    const result = await counterVaultEntry(
+      { originalId, action: actionRaw, amount, note, destination },
+      user.id
+    );
+    revalidatePath("/vault");
+    revalidatePath("/");
+    return { error: null, result };
   } catch (err) {
     return { error: (err as Error).message };
   }

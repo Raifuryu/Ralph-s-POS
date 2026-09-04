@@ -28,6 +28,9 @@ import DashboardDateFilter from "./dashboardDateFilter";
 import IncomeBreakdownCard, { type EServiceFees } from "./incomeBreakdownCard";
 import NewSaleDrawer from "./newSaleDrawer";
 import VaultCard from "./vaultCard";
+import BaselineFundHistorySheet, {
+  type HistoryEntry,
+} from "./baselineFundHistorySheet";
 import TransactionTabs from "./transactionTabs";
 
 const DATE_KEY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -81,6 +84,9 @@ function sortByCreatedAtDesc(entries: SalesEntry[]): SalesEntry[] {
 type SearchParams = {
   date?: string;
   tab?: string;
+  /** Opens the Baseline Fund card's own History sheet — see
+      BaselineFundHistorySheet's own comment. */
+  history?: string;
 };
 
 function LoadError({ message }: { message: string }) {
@@ -118,6 +124,7 @@ export default async function Home({
   const activeTab = SALES_FILTERS.includes(params.tab as (typeof SALES_FILTERS)[number])
     ? (params.tab as (typeof SALES_FILTERS)[number])
     : "all";
+  const showHistory = params.history !== undefined;
 
   const { fromTs, toTs } = storeDayRange(dateKey);
 
@@ -127,9 +134,20 @@ export default async function Home({
   let topSellers: { product_id: string; units_sold: number }[];
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
+  let openingBalanceRows: { account: MoneyAccount; balance: number }[];
   let fundsTransferredOutRows: { fund: ProfitFund; amount: number }[];
   let walletsTransferredOutRows: { wallet_id: string; name: string; amount: number }[];
   let transferredInTodayRows: { account: MoneyAccount; amount: number }[];
+  let historyRows: {
+    id: string;
+    entry_type: "deposit" | "withdrawal" | "transfer" | "adjustment";
+    account: MoneyAccount;
+    amount: number;
+    note: string | null;
+    created_at: string;
+    remaining: number | null;
+  }[];
+  let activeWalletRows: { id: string; name: string }[];
   let sales: TransactionWithItems[];
 
   try {
@@ -140,9 +158,12 @@ export default async function Home({
       topSellers,
       services,
       vaultRows,
+      openingBalanceRows,
       fundsTransferredOutRows,
       walletsTransferredOutRows,
       transferredInTodayRows,
+      historyRows,
+      activeWalletRows,
     ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
@@ -166,6 +187,47 @@ export default async function Home({
         ),
         queryRows<{ account: MoneyAccount; balance: number }>(
           "SELECT account, balance FROM vault_balance"
+        ),
+        // Each account's TRUE opening balance for today — a fixed snapshot
+        // (unlike the old "total minus today's transfers-in", which kept
+        // drifting whenever anything else, e.g. a same-day cash-out, also
+        // changed the live total) for VaultCard's own "was ₱X" headline
+        // note. Exact mirror of vault_balance's own count-anchor logic
+        // (mariadb/schema.sql), just bounded to `created_at < CURDATE()` on
+        // both the "latest count" lookup and the "entries since" sum, so a
+        // physical count made earlier — or even today — is handled
+        // correctly rather than assuming no count ever happened.
+        queryRows<{ account: MoneyAccount; balance: number }>(
+          `SELECT
+             acct.account,
+             CAST(
+               COALESCE(lc.amount, 0) + COALESCE((
+                 SELECT SUM(v.amount)
+                 FROM vault_entries v
+                 WHERE v.entry_type <> 'count'
+                   AND v.fund IS NULL AND v.wallet_id IS NULL
+                   AND v.account = acct.account
+                   AND v.seq > COALESCE(lc.seq, 0)
+                   AND v.created_at < CURDATE()
+               ), 0)
+             AS DECIMAL(12,2)) AS balance
+           FROM (
+             SELECT 'cash' AS account
+             UNION ALL SELECT 'gcash'
+             UNION ALL SELECT 'maya'
+           ) acct
+           LEFT JOIN (
+             SELECT ve.account, ve.amount, ve.seq
+             FROM vault_entries ve
+             WHERE ve.entry_type = 'count'
+               AND ve.created_at < CURDATE()
+               AND ve.seq = (
+                 SELECT MAX(ve2.seq)
+                 FROM vault_entries ve2
+                 WHERE ve2.entry_type = 'count' AND ve2.account = ve.account
+                   AND ve2.created_at < CURDATE()
+               )
+           ) lc ON lc.account = acct.account`
         ),
         // The card's own "Today's transfers" footer — how much left each
         // fund via a transfer today (the fund-leaving leg, always paired
@@ -221,6 +283,46 @@ export default async function Home({
              AND DATE(created_at) = CURDATE()
            GROUP BY account`
         ),
+        // Baseline Fund's own History sheet — every manual/administrative
+        // entry on Cash/GCash/Maya (cash in/out, transfer, adjustment; NOT
+        // sale/service/void/count, which belong to the full Vault ledger
+        // instead), newest first, capped at a generous 300 since these are
+        // rare next to sales. A deposit/withdrawal row is LEFT JOINed
+        // against vault_counter_remaining and dropped once fully countered
+        // (remaining <= 0) — see that view's own comment; transfer/
+        // adjustment rows have no `remaining` concept and always show.
+        // Only worth fetching while the sheet is actually open, same
+        // "don't pay for a query nobody's looking at" reasoning as every
+        // other sheet-gated query in this app.
+        showHistory
+          ? queryRows<{
+              id: string;
+              entry_type: "deposit" | "withdrawal" | "transfer" | "adjustment";
+              account: MoneyAccount;
+              amount: number;
+              note: string | null;
+              created_at: string;
+              remaining: number | null;
+            }>(
+              `SELECT ve.id, ve.entry_type, ve.account, ve.amount, ve.note, ve.created_at,
+                      vcr.remaining
+               FROM vault_entries ve
+               LEFT JOIN vault_counter_remaining vcr ON vcr.id = ve.id
+               WHERE ve.fund IS NULL AND ve.wallet_id IS NULL
+                 AND ve.entry_type IN ('deposit', 'withdrawal', 'transfer', 'adjustment')
+                 AND (ve.entry_type NOT IN ('deposit', 'withdrawal') OR vcr.remaining > 0)
+               ORDER BY ve.seq DESC
+               LIMIT 300`
+            )
+          : Promise.resolve([]),
+        // Active wallets only — the History sheet's own counter-transfer
+        // destination picker (same "drops out of pickers" convention every
+        // other wallet picker in the app follows). Same gating as above.
+        showHistory
+          ? queryRows<{ id: string; name: string }>(
+              "SELECT id, name FROM wallets WHERE is_active = 1 ORDER BY name"
+            )
+          : Promise.resolve([]),
       ]);
 
     // transaction_items are a separate query (no PostgREST-style nested
@@ -333,6 +435,13 @@ export default async function Home({
   // Cash+GCash+Maya sum) — fed into the Income card's own "Baseline Fund +
   // Income" footer line below.
   const baselineFundTotal = [...vault.values()].reduce((sum, value) => sum + value, 0);
+  // Fixed reference point for VaultCard's own "was ₱X" headline note — see
+  // openingBalanceRows' own query comment for why this is a real snapshot
+  // rather than a live subtraction.
+  const openingBalanceTotal = openingBalanceRows.reduce(
+    (sum, row) => sum + Number(row.balance ?? 0),
+    0
+  );
   const transferredInToday = new Map<MoneyAccount, number>();
   for (const row of transferredInTodayRows) {
     if (row.account) transferredInToday.set(row.account, Number(row.amount ?? 0));
@@ -357,6 +466,19 @@ export default async function Home({
       .filter((row) => Number(row.amount) > 0)
       .map((row) => ({ key: row.wallet_id, label: row.name, amount: Number(row.amount) })),
   ];
+
+  // Baseline Fund's own History sheet — re-typed from raw query rows the
+  // same way every other money figure on this page already is (mysql2
+  // returns DECIMAL columns as strings).
+  const historyEntries: HistoryEntry[] = historyRows.map((row) => ({
+    id: row.id,
+    entry_type: row.entry_type,
+    account: row.account,
+    amount: Number(row.amount),
+    note: row.note,
+    created_at: row.created_at,
+    remaining: row.remaining !== null ? Number(row.remaining) : null,
+  }));
 
   // Same reasoning as storeMargin: counted over the whole filtered window via
   // `sales`, not just the visible page.
@@ -400,6 +522,8 @@ export default async function Home({
           <VaultCard
             title="Baseline Fund"
             balances={vault}
+            historyHref="/?history"
+            openingTotal={openingBalanceTotal}
             todayTransfersIn={transferredInToday}
             transfersOut={transfersOut}
             compact
@@ -432,6 +556,12 @@ export default async function Home({
           entries={merged}
           activeTab={activeTab}
           dateKey={dateKey}
+        />
+
+        <BaselineFundHistorySheet
+          open={showHistory}
+          entries={historyEntries}
+          wallets={activeWalletRows}
         />
       </>
     </PageShell>
