@@ -2,14 +2,14 @@ import { MoneyBreakdownCard } from "@/components/moneyBreakdownCard";
 import { ACCOUNT_COLORS, ACCOUNT_ORDER } from "@/lib/accountColors";
 import { formatPeso } from "@/lib/format";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
+import SetBaselineFundTargetSheet from "./setBaselineFundTargetSheet";
 
 export type TransferOutItem = { key: string; label: string; amount: number };
 
 export default function VaultCard({
   title = "Money on hand",
   balances,
-  historyHref,
-  openingTotal,
+  baselineFundTarget,
   todayTransfersIn,
   transfersOut,
   compact = false,
@@ -20,19 +20,13 @@ export default function VaultCard({
       keeps the default. */
   title?: string;
   balances: Map<MoneyAccount, number>;
-  /** Link to the Cash In/Cash Out/Transfer/Adjust history sheet, shown as a
-      small "History" link before "Vault →" (see MoneyBreakdownCard's own
-      secondaryHref). Omit to hide it — only the Sales dashboard passes this
-      today. */
-  historyHref?: string;
-  /** Cash+GCash+Maya's TRUE opening balance for today — a fixed snapshot
-      (see page.tsx's own openingBalanceRows query), not a live "total minus
-      today's transfers" that would keep drifting whenever anything else —
-      a same-day cash-out, a sale — also changes the total. Shown as the
-      headline's own "was ₱X" note whenever it differs from the current
-      total. Omit to hide the note entirely — only the Sales dashboard
-      passes this today. */
-  openingTotal?: number;
+  /** The Cash+GCash+Maya total the owner wants maintained (see
+      setBaselineFundTarget's own comment in
+      lib/mysql/operations/storeSettings.ts) — `undefined` hides both the
+      gap note and the "Set target" trigger entirely (only the Sales
+      dashboard passes this today); `null` shows the trigger but no target
+      is set yet, so no gap note either. */
+  baselineFundTarget?: number | null;
   /** Today's total money that came INTO each account — a transfer's
       arriving leg plus a plain Cash in (see page.tsx's own
       transferredInTodayRows query) — shown as a small greyed-out figure
@@ -63,21 +57,36 @@ export default function VaultCard({
     };
   });
   const total = rows.reduce((sum, row) => sum + row.value, 0);
+  const deficit =
+    baselineFundTarget !== undefined && baselineFundTarget !== null
+      ? total - baselineFundTarget
+      : undefined;
 
   return (
     <MoneyBreakdownCard
       title={title}
       total={total}
       headlineNote={
-        openingTotal !== undefined && openingTotal !== total
-          ? `was ${formatPeso(openingTotal)}`
-          : undefined
+        deficit !== undefined ? (
+          deficit < 0 ? (
+            <span className="text-destructive">
+              {formatPeso(Math.abs(deficit))} short
+            </span>
+          ) : deficit > 0 ? (
+            `${formatPeso(deficit)} over`
+          ) : (
+            "on target"
+          )
+        ) : undefined
       }
       rows={rows}
       href="/vault"
       linkLabel="Vault →"
-      secondaryHref={historyHref}
-      secondaryLinkLabel="History"
+      headerExtra={
+        baselineFundTarget !== undefined ? (
+          <SetBaselineFundTargetSheet currentTarget={baselineFundTarget} />
+        ) : undefined
+      }
       compact={compact}
       className={className}
       footer={

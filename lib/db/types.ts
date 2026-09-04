@@ -196,6 +196,14 @@ export type Database = {
           updated_at: string;
         };
       };
+      store_settings: {
+        Row: {
+          id: number;
+          baseline_fund_target: number | null;
+          updated_by: string | null;
+          updated_at: string;
+        };
+      };
     };
     Views: {
       product_sales_totals: {

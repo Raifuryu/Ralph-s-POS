@@ -41,10 +41,9 @@ export function MoneyBreakdownCard({
   rows,
   afterRows,
   footer,
+  headerExtra,
   href,
   linkLabel = "View →",
-  secondaryHref,
-  secondaryLinkLabel,
   compact = false,
   className,
 }: {
@@ -68,14 +67,14 @@ export function MoneyBreakdownCard({
       additive rows/bar above (e.g. a profit line next to rows that are all
       gross amounts). */
   footer?: React.ReactNode;
+  /** Rendered in the header row, before `href`'s own link button — for a
+      trigger that isn't a plain navigation link (e.g. VaultCard's own
+      "Set target" drawer). A generic ReactNode slot rather than another
+      href/linkLabel pair, since the trigger here opens a Drawer. */
+  headerExtra?: React.ReactNode;
   /** If set, a small link to view the full breakdown elsewhere. */
   href?: string;
   linkLabel?: string;
-  /** A second small link, rendered BEFORE `href`'s own — e.g. VaultCard's
-      own "History" link, sitting before "Vault →". Independent of `href`;
-      either can be set without the other. */
-  secondaryHref?: string;
-  secondaryLinkLabel?: string;
   /** Tighter padding and a smaller headline number — same recipe as
       SummaryCard's own `compact`, for pages that stack several of these
       cards where the full-size headline is more room than the number
@@ -101,32 +100,20 @@ export function MoneyBreakdownCard({
         >
           {title}
         </p>
-        {href || secondaryHref ? (
-          <div className="-mr-2 flex items-center">
-            {secondaryHref ? (
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground"
-                nativeButton={false}
-                render={<Link href={secondaryHref} />}
-              >
-                {secondaryLinkLabel}
-              </Button>
-            ) : null}
-            {href ? (
-              <Button
-                variant="ghost"
-                size="xs"
-                className="text-muted-foreground"
-                nativeButton={false}
-                render={<Link href={href} />}
-              >
-                {linkLabel}
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+        <span className="flex items-center gap-1">
+          {headerExtra}
+          {href ? (
+            <Button
+              variant="ghost"
+              size="xs"
+              className="-mr-2 text-muted-foreground"
+              nativeButton={false}
+              render={<Link href={href} />}
+            >
+              {linkLabel}
+            </Button>
+          ) : null}
+        </span>
       </div>
 
       <button

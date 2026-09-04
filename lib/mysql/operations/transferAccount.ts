@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { withTransaction } from "@/lib/mysql/pool";
-import { MONEY_ACCOUNT_LABELS, type MoneyAccount, type ProfitFund } from "@/lib/types";
+import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { queryConn, roundMoney } from "./helpers";
 
 /**
@@ -84,72 +84,5 @@ export async function transferAccountsToAccount(
     }
 
     return { toAccount, transferred };
-  });
-}
-
-/**
- * Moves money from a physical account into one or both of Profit/For
- * Restock — the account-side mirror of transferWalletToFunds (see its own
- * doc comment for why this pairing never existed before: every prior
- * fund-crediting path was a sale/service fee, a fund's own Cash in, or a
- * wallet transferring in — never a plain account). Same two-leg shape: the
- * account-leaving leg is a plain account-tagged entry (fund/wallet_id both
- * NULL, picked up by vault_balance's own SUM exactly like a withdrawal),
- * the arriving leg carries `fund` — 'cash' is used as the placeholder
- * `account` value on that leg, same convention every other fund-only entry
- * already uses.
- */
-export async function transferAccountToFunds(
-  params: {
-    fromAccount: MoneyAccount;
-    splits: { fund: ProfitFund; amount: number }[];
-    note?: string | null;
-  },
-  userId: string
-): Promise<{ fromAccount: MoneyAccount; transferred: number }> {
-  const { fromAccount } = params;
-  const note = params.note?.trim() || null;
-
-  const collapsed = new Map<ProfitFund, number>();
-  for (const split of params.splits) {
-    const amount = roundMoney(split.amount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error("Each split amount must be more than 0");
-    }
-    collapsed.set(split.fund, roundMoney((collapsed.get(split.fund) ?? 0) + amount));
-  }
-  if (collapsed.size === 0) {
-    return { fromAccount, transferred: 0 };
-  }
-  const transferred = roundMoney(
-    [...collapsed.values()].reduce((sum, amount) => sum + amount, 0)
-  );
-
-  return withTransaction(async (conn) => {
-    const rows = await queryConn<{ balance: number }>(
-      conn,
-      "SELECT balance FROM vault_balance WHERE account = ?",
-      [fromAccount]
-    );
-    const balance = roundMoney(rows[0]?.balance ?? 0);
-    if (transferred > balance) {
-      throw new Error(
-        `${MONEY_ACCOUNT_LABELS[fromAccount]} only has ${balance.toFixed(2)} available`
-      );
-    }
-
-    for (const [fund, amount] of collapsed) {
-      const transferGroup = randomUUID();
-      await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, transfer_group, created_by, note) VALUES (?, 'transfer', ?, ?, ?, ?, ?)",
-        [randomUUID(), -amount, fromAccount, transferGroup, userId, note]
-      );
-      await conn.query(
-        "INSERT INTO vault_entries (id, entry_type, amount, account, fund, transfer_group, created_by, note) VALUES (?, 'transfer', ?, 'cash', ?, ?, ?, ?)",
-        [randomUUID(), amount, fund, transferGroup, userId, note]
-      );
-    }
-
-    return { fromAccount, transferred };
   });
 }

@@ -320,23 +320,11 @@ CREATE TABLE vault_entries (
   -- account), but every transfer-posting function sets it anyway for
   -- consistency.
   transfer_group         CHAR(36),
-  -- Points at the 'deposit'/'withdrawal' row THIS row is offsetting — the
-  -- "IOU" mechanic: a Cash In's outstanding balance (its own amount minus
-  -- SUM(ABS(amount)) of every row pointing at it) shrinks as counter-
-  -- actions are posted against it, same idea personal-take settlement
-  -- already uses, just generalized to any Cash In/Cash Out instead of one
-  -- special case. A counter-action is itself an ordinary 'deposit'/
-  -- 'withdrawal'/'transfer' row (it really did move real money) — this
-  -- column is the only thing marking it as ALSO counting against another
-  -- row. NULL for the overwhelming majority of entries, which counter
-  -- nothing. See vault_counter_remaining below for the computed balance.
-  counters_id            CHAR(36),
   CONSTRAINT vault_entries_seq_key UNIQUE (seq),
   CONSTRAINT vault_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT vault_entries_service_transaction_id_fkey FOREIGN KEY (service_transaction_id) REFERENCES service_transactions(id) ON DELETE SET NULL,
   CONSTRAINT vault_entries_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES transactions(id) ON DELETE SET NULL,
   CONSTRAINT vault_entries_wallet_id_fkey FOREIGN KEY (wallet_id) REFERENCES wallets(id) ON DELETE RESTRICT,
-  CONSTRAINT vault_entries_counters_id_fkey FOREIGN KEY (counters_id) REFERENCES vault_entries(id) ON DELETE RESTRICT,
   CONSTRAINT vault_entries_fund_wallet_check CHECK (fund IS NULL OR wallet_id IS NULL),
   CONSTRAINT vault_entries_type_amount_check CHECK (
     (entry_type = 'count' AND amount >= 0 AND expected IS NOT NULL)
@@ -355,8 +343,7 @@ CREATE TABLE vault_entries (
   INDEX vault_entries_account_seq_idx (account, seq DESC),
   INDEX vault_entries_seq_idx (seq DESC),
   INDEX vault_entries_wallet_id_seq_idx (wallet_id, seq DESC),
-  INDEX vault_entries_transfer_group_idx (transfer_group),
-  INDEX vault_entries_counters_id_idx (counters_id)
+  INDEX vault_entries_transfer_group_idx (transfer_group)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================
@@ -391,6 +378,31 @@ CREATE TABLE vault_snapshots (
   CONSTRAINT vault_snapshots_amounts_check CHECK (
     cash_amount >= 0 AND gcash_amount >= 0 AND maya_amount >= 0
   )
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =============================================================================
+-- store_settings — a single row of small owner-configurable settings that
+-- don't belong to any one entity. Baseline Fund's own maintained target is
+-- the first (and so far only) one — see setBaselineFundTarget's own doc
+-- comment for what it drives. Fixed id=1, enforced by the CHECK below,
+-- rather than a real key-value table — simplest shape for "there's only
+-- ever one row of these." No seed row required: the app upserts on first
+-- save (INSERT ... ON DUPLICATE KEY UPDATE), and reads tolerate "no row
+-- yet" as "not set."
+-- =============================================================================
+
+CREATE TABLE store_settings (
+  id                    TINYINT(1)    NOT NULL PRIMARY KEY DEFAULT 1,
+  -- The Cash+GCash+Maya total the owner wants maintained — the Sales
+  -- dashboard's own Baseline Fund card shows the gap between this and the
+  -- live total (red when short). NULL means no target set yet, hides that
+  -- note entirely.
+  baseline_fund_target  DECIMAL(12,2),
+  updated_by            CHAR(36),
+  updated_at            TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  CONSTRAINT store_settings_single_row_check CHECK (id = 1),
+  CONSTRAINT store_settings_updated_by_fkey FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT store_settings_target_nonnegative CHECK (baseline_fund_target IS NULL OR baseline_fund_target >= 0)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================
@@ -498,34 +510,3 @@ SELECT
 FROM wallets w
 LEFT JOIN vault_entries ve ON ve.wallet_id = w.id
 GROUP BY w.id, w.name, w.color, w.is_active;
-
--- Every Cash In/Cash Out's own outstanding ("remaining") balance — its own
--- amount minus every row that counters it (see vault_entries.counters_id's
--- own comment for the "IOU" idea this powers). Scoped to real, physical-
--- account entries only (fund IS NULL AND wallet_id IS NULL) — a fund/
--- wallet's own cash in/out was never part of this feature. `remaining` can
--- land at exactly 0 once fully countered (the caller drops those from its
--- own history list — this view still returns the row, it doesn't hide
--- anything itself) or, in principle, negative if ever over-countered
--- (shouldn't happen — counterVaultEntry's own validation caps each counter
--- action at what's remaining at post time — but not enforced here at the
--- view level).
-CREATE VIEW vault_counter_remaining AS
-SELECT
-  orig.id,
-  orig.account,
-  orig.entry_type,
-  orig.amount,
-  orig.note,
-  orig.created_at,
-  CAST(
-    ABS(orig.amount) - COALESCE((
-      SELECT SUM(ABS(c.amount))
-      FROM vault_entries c
-      WHERE c.counters_id = orig.id
-    ), 0)
-  AS DECIMAL(12,2)) AS remaining
-FROM vault_entries orig
-WHERE orig.entry_type IN ('deposit', 'withdrawal')
-  AND orig.fund IS NULL
-  AND orig.wallet_id IS NULL;

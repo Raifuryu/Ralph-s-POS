@@ -16,6 +16,7 @@ export type VaultSnapshot = Tables<"vault_snapshots">;
 export type VaultFundBalance = Tables<"vault_fund_balance">;
 export type Wallet = Tables<"wallets">;
 export type WalletBalance = Tables<"wallet_balance">;
+export type StoreSettings = Tables<"store_settings">;
 export type Transaction = Tables<"transactions">;
 export type TransactionItem = Tables<"transaction_items">;
 
