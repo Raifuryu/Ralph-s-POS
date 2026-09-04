@@ -8,27 +8,37 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import type { Category, Product } from "@/lib/types";
-import { updateProduct, type InventoryState } from "./actions";
+import { createProduct, updateProduct, type InventoryState } from "./actions";
 
 const initialState: InventoryState = { error: null };
 
 export default function ProductForm({
   product,
   categories,
+  onCancel,
 }: {
-  product: Product;
+  /** Omit (or null) to register a brand-new product instead of editing one
+      — see createProduct's own doc comment for what that does (and
+      deliberately doesn't do). */
+  product?: Product | null;
   categories: Category[];
+  /** Overrides the default Cancel behavior (navigating to /inventory) —
+      BulkRestockSheet's own "New item" mode uses this to switch the toggle
+      back to "Restock" instead of closing the whole sheet. Omit to keep the
+      default (ProductSheet's own edit-mode usage). */
+  onCancel?: () => void;
 }) {
+  const isEdit = Boolean(product);
   const [state, formAction, isPending] = useActionState(
-    updateProduct,
+    isEdit ? updateProduct : createProduct,
     initialState
   );
 
-  const [price, setPrice] = useState(String(product.price));
+  const [price, setPrice] = useState(String(product?.price ?? ""));
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
-      <input type="hidden" name="id" value={product.id} />
+      {product ? <input type="hidden" name="id" value={product.id} /> : null}
 
       <div className="flex flex-col gap-2">
         <Label htmlFor="name" className="text-xs">
@@ -38,7 +48,7 @@ export default function ProductForm({
           id="name"
           name="name"
           required
-          defaultValue={product.name}
+          defaultValue={product?.name}
           placeholder="e.g. Sardinas"
         />
       </div>
@@ -76,7 +86,7 @@ export default function ProductForm({
             step="0.01"
             min="0"
             inputMode="decimal"
-            defaultValue={product.cost ?? ""}
+            defaultValue={product?.cost ?? ""}
             placeholder="10.00"
           />
         </div>
@@ -96,7 +106,7 @@ export default function ProductForm({
             type="number"
             step="1"
             inputMode="numeric"
-            defaultValue={product.stock ?? ""}
+            defaultValue={product?.stock ?? ""}
             placeholder="Blank"
           />
         </div>
@@ -130,7 +140,7 @@ export default function ProductForm({
             step="1"
             min="0"
             inputMode="numeric"
-            defaultValue={product.low_stock_threshold ?? ""}
+            defaultValue={product?.low_stock_threshold ?? ""}
             placeholder="5"
           />
         </div>
@@ -146,7 +156,7 @@ export default function ProductForm({
             id="expiry_date"
             name="expiry_date"
             type="date"
-            defaultValue={product.expiry_date ?? ""}
+            defaultValue={product?.expiry_date ?? ""}
           />
         </div>
       </div>
@@ -172,7 +182,7 @@ export default function ProductForm({
           <Select
             id="category_id"
             name="category_id"
-            defaultValue={product.category_id ?? ""}
+            defaultValue={product?.category_id ?? ""}
           >
             <option value="">No category</option>
             {categories.map((category) => (
@@ -193,7 +203,7 @@ export default function ProductForm({
           <Input
             id="description"
             name="description"
-            defaultValue={product.description ?? ""}
+            defaultValue={product?.description ?? ""}
             placeholder="e.g. Sold by scoop"
           />
         </div>
@@ -207,16 +217,22 @@ export default function ProductForm({
 
       <div className="flex gap-2">
         <Button type="submit" size="sm" disabled={isPending}>
-          {isPending ? "Saving…" : "Save changes"}
+          {isPending ? "Saving…" : isEdit ? "Save changes" : "Add item"}
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          nativeButton={false}
-          render={<Link href="/inventory" />}
-        >
-          Cancel
-        </Button>
+        {onCancel ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+            Cancel
+          </Button>
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            nativeButton={false}
+            render={<Link href="/inventory" />}
+          >
+            Cancel
+          </Button>
+        )}
       </div>
     </form>
   );

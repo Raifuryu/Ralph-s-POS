@@ -10,8 +10,12 @@ import {
   DrawerHeader,
   DrawerTitle,
 } from "@/components/ui/drawer";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import type { Category, MoneyAccount, Product, ProfitFund } from "@/lib/types";
 import BulkRestockForm from "./bulkRestockForm";
+import ProductForm from "./productForm";
+
+type SheetMode = "restock" | "new-item";
 
 /**
  * Log a whole supplier receipt at once — a draft cart, URL-driven (?bulk)
@@ -53,6 +57,15 @@ export default function BulkRestockSheet({
   }
   const drawerOpen = openState.value;
 
+  // Which of the two unrelated forms this sheet shows — a real purchase
+  // (the cart, requires Qty/Cost/Paid With per line) vs just registering a
+  // product with nothing bought yet (see createProduct's own doc comment
+  // on why that posts no vault entry at all). Local UI state, not
+  // URL-driven — switching modes mid-sheet isn't a navigation, and
+  // shouldn't lose whatever's already been typed in the cart if the owner
+  // flips over to register something and back.
+  const [mode, setMode] = useState<SheetMode>("restock");
+
   return (
     <Drawer
       open={drawerOpen}
@@ -64,20 +77,41 @@ export default function BulkRestockSheet({
     >
       <DrawerContent className="h-[100dvh]">
         <DrawerHeader>
-          <DrawerTitle>Restock</DrawerTitle>
+          <DrawerTitle>{mode === "restock" ? "Restock" : "New item"}</DrawerTitle>
           <DrawerDescription>
-            Add each item bought, its cost, and its selling price. Nothing is
-            saved until you submit.
+            {mode === "restock"
+              ? "Add each item bought, its cost, and its selling price. Nothing is saved until you submit."
+              : "Register a product with nothing bought yet — no cost, quantity, or payment required, just what you're planning to sell."}
           </DrawerDescription>
         </DrawerHeader>
-        <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <BulkRestockForm
-            products={products}
-            categories={categories}
-            vaultBalances={vaultBalances}
-            fundBalances={fundBalances}
-            wallets={wallets}
-          />
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <Tabs
+            value={mode}
+            onValueChange={(value) => setMode(value as SheetMode)}
+            className="w-full min-w-0 shrink-0"
+          >
+            <TabsList className="w-full sm:w-fit">
+              <TabsTrigger value="restock">Restock</TabsTrigger>
+              <TabsTrigger value="new-item">New item</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          {mode === "restock" ? (
+            <BulkRestockForm
+              products={products}
+              categories={categories}
+              vaultBalances={vaultBalances}
+              fundBalances={fundBalances}
+              wallets={wallets}
+            />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <ProductForm
+                key="new-item"
+                categories={categories}
+                onCancel={() => setMode("restock")}
+              />
+            </div>
+          )}
         </div>
       </DrawerContent>
     </Drawer>

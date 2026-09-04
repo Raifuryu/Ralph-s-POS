@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 
@@ -121,6 +122,44 @@ export async function updateProduct(
       parsed.low_stock_threshold,
       parsed.expiry_date,
       id,
+    ]
+  );
+
+  revalidatePath("/inventory");
+  revalidatePath("/checkout");
+  redirect("/inventory");
+}
+
+/** Registers a brand-new product with no restock/purchase attached — no
+    vault entry, no "paid with" step, same as directly editing an existing
+    product's cost/stock posts nothing to the vault either. Deliberately
+    the ONLY required fields are name + price (reuses updateProduct's own
+    parseForm, so cost/stock/category/description/low-stock/expiry all stay
+    optional exactly like editing does) — this exists specifically so
+    registering an item doesn't require going through Bulk Restock's own
+    required quantity/cost/Paid With flow when there's no actual purchase to
+    record yet. Triggered from BulkRestockSheet's own "New item" toggle
+    (see its own comment), not a separate page. */
+export async function createProduct(
+  _prev: InventoryState,
+  formData: FormData
+): Promise<InventoryState> {
+  const parsed = parseForm(formData);
+  if ("error" in parsed) return { error: parsed.error };
+
+  await pool.query(
+    `INSERT INTO products (id, name, price, cost, description, category_id, stock, low_stock_threshold, expiry_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      randomUUID(),
+      parsed.name,
+      parsed.price,
+      parsed.cost,
+      parsed.description,
+      parsed.category_id,
+      parsed.stock,
+      parsed.low_stock_threshold,
+      parsed.expiry_date,
     ]
   );
 
