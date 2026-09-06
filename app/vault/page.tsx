@@ -362,7 +362,6 @@ export default async function VaultPage({
   // wallets' own comment in mariadb/schema.sql), though its own card below
   // still shows regardless.
   const activeWallets = wallets.filter((wallet) => wallet.is_active);
-  const walletBalances = new Map(wallets.map((wallet) => [wallet.id, wallet.balance]));
   // Every wallet, active or archived — an archived one's leftover balance is
   // still real money the store has, see wallets' own comment on what
   // is_active does (and doesn't) mean.
@@ -415,10 +414,7 @@ export default async function VaultPage({
             key={account}
             account={account}
             balance={balances.get(account) ?? 0}
-            accountBalances={balances}
-            fundBalances={fundBalances}
             wallets={activeWallets}
-            walletBalances={walletBalances}
           />
         ))}
       </div>
@@ -471,7 +467,6 @@ export default async function VaultPage({
                   wallet={wallet}
                   balance={wallet.balance}
                   otherWallets={activeWallets.filter((w) => w.id !== wallet.id)}
-                  accountBalances={balances}
                 />
               ))}
             </div>

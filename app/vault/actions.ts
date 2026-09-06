@@ -19,15 +19,14 @@ import {
   type VaultSnapshotResult,
   type VaultSnapshotTargetDay,
 } from "@/lib/mysql/operations/recordVaultSnapshot";
-import { transferAccountsToAccount } from "@/lib/mysql/operations/transferAccount";
 import {
-  transferFund as transferFundOperation,
-  transferFundsToAccount,
-} from "@/lib/mysql/operations/transferFund";
+  transferAccountToAccounts,
+  transferAccountToFunds,
+  transferAccountToWallets,
+} from "@/lib/mysql/operations/transferAccount";
+import { transferFund as transferFundOperation } from "@/lib/mysql/operations/transferFund";
 import {
-  transferAccountsToWallet,
   transferWalletToAccounts,
-  transferWalletsToAccount,
   transferWalletToFunds,
   transferWalletToWallets,
 } from "@/lib/mysql/operations/transferWallet";
@@ -489,14 +488,14 @@ export type TransferWalletState = {
     `split_profit`/`split_reinvest` the same way. Destination wallets ride
     along as a `dest_wallet_splits` JSON field instead — a wallet's id isn't
     a fixed literal, so there's no fixed `split_<id>` field name to loop
-    over (same "JSON field for a dynamic list" convention transferToAccount's
-    own `wallet_splits` field already uses). Posted as up to three separate
-    transfers (accounts, then funds, then wallets) rather than one combined
-    operation — safe because they're awaited in sequence, so each later
-    transfer's own balance check reads the wallet's balance AFTER the
+    over (same "JSON field for a dynamic list" convention transferAccountOut's
+    own `dest_wallet_splits` field already uses). Posted as up to three
+    separate transfers (accounts, then funds, then wallets) rather than one
+    combined operation — safe because they're awaited in sequence, so each
+    later transfer's own balance check reads the wallet's balance AFTER the
     earlier one already committed, never double-spending the same pesos
-    (same reasoning transferToAccount's own combined fund+wallet calls
-    already rely on). */
+    (same reasoning transferAccountOut's own combined splits already rely
+    on). */
 export async function transferWalletOut(
   _prev: TransferWalletState,
   formData: FormData
@@ -585,93 +584,42 @@ export async function transferWalletOut(
   }
 }
 
-export type TransferIntoWalletState = {
+export type TransferAccountOutState = {
   error: string | null;
-  result?: { walletId: string; transferred: number };
+  result?: { fromAccount: MoneyAccount; transferred: number; remainingBalance: number };
 };
 
-/** Pulls money into a fixed wallet from one or more accounts — the mirror
-    of transferToAccount's own account-splits, started from the wallet's
-    side instead of an account's. `split_cash`/`split_gcash`/`split_maya`
-    are read the same way transferToAccount's own account-source fields
-    already are (see transferAccountsToWallet's own doc comment — this is
-    the last account/fund/wallet direction that didn't have a real transfer
-    path yet). */
-export async function transferIntoWallet(
-  _prev: TransferIntoWalletState,
+/** Moves money out of a fixed account into one or more OTHER accounts,
+    Profit/For Restock, and/or wallets — the ONLY transfer direction this
+    account offers (see transferAccountToAccounts/transferAccountToFunds/
+    transferAccountToWallets' own doc comments) — deliberately push-only:
+    that's how the owner actually uses this, opening the account they're
+    taking money FROM rather than the one they're topping up. Same
+    field-reading
+    conventions as transferWalletOut: `split_<account>`/`split_<fund>` for
+    the two fixed enums, `dest_wallet_splits` JSON for the dynamic wallet
+    list. Posted as up to three separate transfers (accounts, then funds,
+    then wallets) rather than one combined operation — safe because they're
+    awaited in sequence, so each later transfer's own balance check reads
+    this account's balance AFTER the earlier one already committed, never
+    double-spending the same pesos (same reasoning transferWalletOut's own
+    comment gives). */
+export async function transferAccountOut(
+  _prev: TransferAccountOutState,
   formData: FormData
-): Promise<TransferIntoWalletState> {
-  const walletId = parseWalletId(formData.get("wallet_id"));
-  if (!walletId) return { error: "Pick which wallet to transfer into." };
+): Promise<TransferAccountOutState> {
+  const fromAccount = parseAccount(formData.get("account"));
+  if (!fromAccount) return { error: "Pick which account to transfer from." };
 
-  const splits: { fromAccount: MoneyAccount; amount: number }[] = [];
-  for (const account of MONEY_ACCOUNTS) {
-    const amount = parseMoney(formData.get(`split_${account}`), { allowBlank: true });
+  const accountSplits: { toAccount: MoneyAccount; amount: number }[] = [];
+  for (const toAccount of MONEY_ACCOUNTS) {
+    if (toAccount === fromAccount) continue;
+    const amount = parseMoney(formData.get(`split_${toAccount}`), { allowBlank: true });
     if (amount === "bad") {
-      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[account]}.` };
+      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[toAccount]}.` };
     }
     if (amount !== null && amount > 0) {
-      splits.push({ fromAccount: account, amount });
-    }
-  }
-  if (splits.length === 0) {
-    return { error: "Enter at least one amount to transfer." };
-  }
-
-  try {
-    const user = await requireCurrentUser();
-    const result = await transferAccountsToWallet({ walletId, splits }, user.id);
-    revalidatePath("/vault");
-    revalidatePath("/");
-    return { error: null, result };
-  } catch (err) {
-    return { error: (err as Error).message };
-  }
-}
-
-export type TransferToAccountState = {
-  error: string | null;
-  result?: { account: MoneyAccount; transferred: number };
-};
-
-/** Pulls money into one fixed account from any other account, Profit/For
-    Restock, and/or any wallet — the mirror of transferFund, started from
-    an account's own sheet instead of a fund's (see transferFundsToAccount's
-    own doc comment), now also covering account-to-account via
-    transferAccountsToAccount (the only place that capability exists — see
-    its own doc comment). `split_cash`/`split_gcash`/`split_maya` (the OTHER
-    two accounts) and `split_profit`/`split_reinvest` are read straight off
-    the form's own inputs, same convention transferFund's own split_*
-    fields already use. Wallet splits ride along as a separate
-    `wallet_splits` JSON field instead — a wallet's id isn't a fixed literal
-    like an account/fund, so there's no fixed `split_<id>` field name to
-    loop over the way MONEY_ACCOUNTS/PROFIT_FUNDS let the loops above do
-    (same "JSON field for a dynamic list" convention app/inventory/actions.ts's
-    own bulkRestock already uses for its payment split). Posted as up to
-    three separate transfers (accounts, then funds, then wallets) rather
-    than one combined operation — each already validates its own source's
-    balance independently, same as if the owner had submitted them one at a
-    time. */
-export async function transferToAccount(
-  _prev: TransferToAccountState,
-  formData: FormData
-): Promise<TransferToAccountState> {
-  const account = parseAccount(formData.get("account"));
-  if (!account) return { error: "Pick which account to transfer into." };
-
-  // The other two accounts — same `split_${x}` literal-field convention
-  // the fund loop below already uses, safe from collision since this
-  // action never reads `split_cash`/`split_gcash`/`split_maya` for
-  // anything else.
-  const accountSplits: { fromAccount: MoneyAccount; amount: number }[] = [];
-  for (const fromAccount of MONEY_ACCOUNTS) {
-    if (fromAccount === account) continue;
-    const amount = parseMoney(formData.get(`split_${fromAccount}`), { allowBlank: true });
-    if (amount === "bad") {
-      return { error: `Enter a valid amount for ${MONEY_ACCOUNT_LABELS[fromAccount]}.` };
-    }
-    if (amount !== null && amount > 0) {
-      accountSplits.push({ fromAccount, amount });
+      accountSplits.push({ toAccount, amount });
     }
   }
 
@@ -687,7 +635,7 @@ export async function transferToAccount(
   }
 
   let walletSplits: { walletId: string; amount: number }[] = [];
-  const walletSplitsRaw = String(formData.get("wallet_splits") ?? "");
+  const walletSplitsRaw = String(formData.get("dest_wallet_splits") ?? "");
   if (walletSplitsRaw) {
     try {
       const parsed: unknown = JSON.parse(walletSplitsRaw);
@@ -712,30 +660,34 @@ export async function transferToAccount(
   try {
     const user = await requireCurrentUser();
     let transferred = 0;
+    let remainingBalance = 0;
     if (accountSplits.length > 0) {
-      const result = await transferAccountsToAccount(
-        { toAccount: account, splits: accountSplits },
+      const result = await transferAccountToAccounts(
+        { fromAccount, splits: accountSplits },
         user.id
       );
       transferred += result.transferred;
+      remainingBalance = result.remainingBalance;
     }
     if (fundSplits.length > 0) {
-      const result = await transferFundsToAccount(
-        { account, splits: fundSplits },
+      const result = await transferAccountToFunds(
+        { fromAccount, splits: fundSplits },
         user.id
       );
       transferred += result.transferred;
+      remainingBalance = result.remainingBalance;
     }
     if (walletSplits.length > 0) {
-      const result = await transferWalletsToAccount(
-        { account, splits: walletSplits },
+      const result = await transferAccountToWallets(
+        { fromAccount, splits: walletSplits },
         user.id
       );
       transferred += result.transferred;
+      remainingBalance = result.remainingBalance;
     }
     revalidatePath("/vault");
     revalidatePath("/");
-    return { error: null, result: { account, transferred } };
+    return { error: null, result: { fromAccount, transferred, remainingBalance } };
   } catch (err) {
     return { error: (err as Error).message };
   }

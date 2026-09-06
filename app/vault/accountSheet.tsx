@@ -30,8 +30,8 @@ import {
   adjustBalance,
   cashIn,
   cashOut,
-  transferToAccount,
-  type TransferToAccountState,
+  transferAccountOut,
+  type TransferAccountOutState,
   type VaultAdjustState,
   type VaultMoveState,
 } from "./actions";
@@ -39,7 +39,7 @@ import type { WalletCardData } from "./walletCard";
 
 const initialState: VaultMoveState = { error: null };
 const initialAdjustState: VaultAdjustState = { error: null };
-const initialTransferState: TransferToAccountState = { error: null };
+const initialTransferState: TransferAccountOutState = { error: null };
 
 /** Account travels as a hidden field — the card that opened this sheet
     already fixed it, so there's nothing left to pick. */
@@ -286,38 +286,31 @@ function AdjustForm({
   );
 }
 
-/** Pulls money out of Profit/For Restock and/or any active wallet into this
-    account — the mirror of FundCard/WalletCard's own transfer forms,
-    started from the account's side instead (see transferFundsToAccount's
-    own doc comment). No natural "where it came from" default to pre-fill
-    here, so every split field starts blank. Wallet splits ride along as a
-    `wallet_splits` JSON field — see transferToAccount's own comment on why
-    a wallet's dynamic id can't get a fixed `split_<id>` field name the way
-    the two funds above do. */
-function TransferInForm({
+/** Moves money out of this account into one or more other accounts,
+    Profit/For Restock, and/or any active wallet — the exact mirror of
+    WalletCard's own TransferForm, started from an account's side instead of
+    a wallet's (see transferAccountOut/transferAccountToAccounts/
+    transferAccountToFunds/transferAccountToWallets' own doc comments). Push
+    only — no "pull into this account" direction, since that's not how the
+    owner actually uses this in practice (open the account you're taking
+    money FROM, not the one you're topping up). Wallet splits ride along as
+    a `dest_wallet_splits` JSON field, same convention WalletCard's own
+    TransferForm already uses for its own destination wallets. */
+function TransferForm({
   account,
-  accountBalances,
-  fundBalances,
+  balance,
   wallets,
-  walletBalances,
   onRecorded,
 }: {
   account: MoneyAccount;
-  /** Every account's own balance, including this one (unused for itself —
-      an account can't transfer into itself, so it never appears as a
-      source option here). */
-  accountBalances: Map<MoneyAccount, number>;
-  fundBalances: Map<ProfitFund, number>;
-  /** Active wallets only — an archived one drops out of this picker (see
-      wallets' own comment in mariadb/schema.sql). */
+  balance: number;
+  /** Active wallets only — an archived one drops out of this picker, same
+      as every other wallet picker in the app. */
   wallets: WalletCardData[];
-  walletBalances: Map<string, number>;
-  /** Called shortly after a successful record — the drawer closes itself
-      instead of leaving Cancel as the only way out. */
   onRecorded: () => void;
 }) {
   const [state, formAction, isPending] = useActionState(
-    transferToAccount,
+    transferAccountOut,
     initialTransferState
   );
   const otherAccounts = MONEY_ACCOUNTS.filter((a) => a !== account);
@@ -326,27 +319,16 @@ function TransferInForm({
     gcash: "",
     maya: "",
   });
-  const [splits, setSplits] = useState<Record<ProfitFund, string>>({
+  const [fundSplits, setFundSplits] = useState<Record<ProfitFund, string>>({
     profit: "",
     reinvest: "",
   });
   const [walletSplits, setWalletSplits] = useState<Record<string, string>>({});
-  const accountTotal = otherAccounts.reduce(
-    (sum, a) => sum + (Number(accountSplits[a]) || 0),
-    0
-  );
-  const fundTotal = PROFIT_FUNDS.reduce(
-    (sum, fund) => sum + (Number(splits[fund]) || 0),
-    0
-  );
-  const walletTotal = wallets.reduce(
-    (sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0),
-    0
-  );
-  const total = accountTotal + fundTotal + walletTotal;
+  const total =
+    otherAccounts.reduce((sum, a) => sum + (Number(accountSplits[a]) || 0), 0) +
+    PROFIT_FUNDS.reduce((sum, fund) => sum + (Number(fundSplits[fund]) || 0), 0) +
+    wallets.reduce((sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0), 0);
 
-  // Longer delay than Cash in/out — there's a result to actually read here,
-  // same reasoning AdjustForm's own delay follows.
   useEffect(() => {
     if (!state.result) return;
     const timer = setTimeout(onRecorded, 1600);
@@ -358,7 +340,7 @@ function TransferInForm({
       <input type="hidden" name="account" value={account} />
       <input
         type="hidden"
-        name="wallet_splits"
+        name="dest_wallet_splits"
         value={JSON.stringify(
           wallets
             .filter((wallet) => (Number(walletSplits[wallet.id]) || 0) > 0)
@@ -366,65 +348,56 @@ function TransferInForm({
         )}
       />
       <p className="text-xs text-muted-foreground">
-        Pull money from another account, Profit/For Restock, and/or any
-        wallet into {MONEY_ACCOUNT_LABELS[account]}.
+        Split {MONEY_ACCOUNT_LABELS[account]}&rsquo;s money across the other
+        accounts, Profit/For Restock, and/or any wallet.
       </p>
-      {otherAccounts.map((otherAccount) => (
-        <div key={otherAccount} className="flex flex-col gap-1">
-          <Label htmlFor={`transfer-in-account-${otherAccount}`} className="text-xs">
-            {MONEY_ACCOUNT_LABELS[otherAccount]}{" "}
-            <span className="font-normal text-muted-foreground">
-              ({formatPeso(accountBalances.get(otherAccount) ?? 0)} available)
-            </span>
+      {otherAccounts.map((toAccount) => (
+        <div key={toAccount} className="flex flex-col gap-1">
+          <Label htmlFor={`transfer-out-account-${toAccount}`} className="text-xs">
+            {MONEY_ACCOUNT_LABELS[toAccount]}
           </Label>
           <Input
-            id={`transfer-in-account-${otherAccount}`}
-            name={`split_${otherAccount}`}
+            id={`transfer-out-account-${toAccount}`}
+            name={`split_${toAccount}`}
             type="number"
             step="0.01"
             min="0"
             inputMode="decimal"
             placeholder="0.00"
-            value={accountSplits[otherAccount]}
+            value={accountSplits[toAccount]}
             onChange={(event) =>
-              setAccountSplits((prev) => ({ ...prev, [otherAccount]: event.target.value }))
+              setAccountSplits((prev) => ({ ...prev, [toAccount]: event.target.value }))
             }
           />
         </div>
       ))}
       {PROFIT_FUNDS.map((fund) => (
         <div key={fund} className="flex flex-col gap-1">
-          <Label htmlFor={`transfer-in-${fund}`} className="text-xs">
-            {PROFIT_FUND_LABELS[fund]}{" "}
-            <span className="font-normal text-muted-foreground">
-              ({formatPeso(fundBalances.get(fund) ?? 0)} available)
-            </span>
+          <Label htmlFor={`transfer-out-${fund}`} className="text-xs">
+            {PROFIT_FUND_LABELS[fund]}
           </Label>
           <Input
-            id={`transfer-in-${fund}`}
+            id={`transfer-out-${fund}`}
             name={`split_${fund}`}
             type="number"
             step="0.01"
             min="0"
             inputMode="decimal"
             placeholder="0.00"
-            value={splits[fund]}
+            value={fundSplits[fund]}
             onChange={(event) =>
-              setSplits((prev) => ({ ...prev, [fund]: event.target.value }))
+              setFundSplits((prev) => ({ ...prev, [fund]: event.target.value }))
             }
           />
         </div>
       ))}
       {wallets.map((wallet) => (
         <div key={wallet.id} className="flex flex-col gap-1">
-          <Label htmlFor={`transfer-in-wallet-${wallet.id}`} className="text-xs">
-            {wallet.name}{" "}
-            <span className="font-normal text-muted-foreground">
-              ({formatPeso(walletBalances.get(wallet.id) ?? 0)} available)
-            </span>
+          <Label htmlFor={`transfer-out-wallet-${wallet.id}`} className="text-xs">
+            {wallet.name}
           </Label>
           <Input
-            id={`transfer-in-wallet-${wallet.id}`}
+            id={`transfer-out-wallet-${wallet.id}`}
             type="number"
             step="0.01"
             min="0"
@@ -439,9 +412,13 @@ function TransferInForm({
       ))}
       <p className="text-xs text-muted-foreground">
         Total:{" "}
-        <span className="font-medium text-foreground">
-          {formatPeso(total)}
-        </span>
+        <span className="font-medium text-foreground">{formatPeso(total)}</span>
+        {total > balance ? (
+          <span className="text-destructive">
+            {" "}
+            — more than what&rsquo;s available
+          </span>
+        ) : null}
       </p>
       {state.error ? (
         <p role="alert" className="text-sm text-destructive">
@@ -450,7 +427,8 @@ function TransferInForm({
       ) : null}
       {state.result ? (
         <p role="status" className="text-sm text-success">
-          Transferred {formatPeso(state.result.transferred)} into{" "}
+          Transferred {formatPeso(state.result.transferred)} —{" "}
+          {formatPeso(state.result.remainingBalance)} left in{" "}
           {MONEY_ACCOUNT_LABELS[account]}.
         </p>
       ) : null}
@@ -460,7 +438,11 @@ function TransferInForm({
         >
           Cancel
         </DrawerClose>
-        <Button type="submit" size="sm" disabled={isPending || total <= 0}>
+        <Button
+          type="submit"
+          size="sm"
+          disabled={isPending || total <= 0 || total > balance}
+        >
           {isPending ? "Transferring…" : "Transfer"}
         </Button>
       </DrawerFooter>
@@ -475,19 +457,12 @@ function TransferInForm({
 export default function AccountSheet({
   account,
   balance,
-  accountBalances,
-  fundBalances,
   wallets,
-  walletBalances,
 }: {
   account: MoneyAccount;
   balance: number;
-  /** Every account's own balance — see TransferInForm's own comment. */
-  accountBalances: Map<MoneyAccount, number>;
-  fundBalances: Map<ProfitFund, number>;
-  /** Active wallets only — see TransferInForm's own comment. */
+  /** Active wallets only — see TransferForm's own comment. */
   wallets: WalletCardData[];
-  walletBalances: Map<string, number>;
 }) {
   const label = MONEY_ACCOUNT_LABELS[account];
   const [open, setOpen] = useState(false);
@@ -532,12 +507,10 @@ export default function AccountSheet({
               />
             </TabsContent>
             <TabsContent value="transfer" className="flex min-h-0 flex-col pt-3">
-              <TransferInForm
+              <TransferForm
                 account={account}
-                accountBalances={accountBalances}
-                fundBalances={fundBalances}
+                balance={balance}
                 wallets={wallets}
-                walletBalances={walletBalances}
                 onRecorded={() => setOpen(false)}
               />
             </TabsContent>
