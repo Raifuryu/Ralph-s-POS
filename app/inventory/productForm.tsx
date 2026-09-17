@@ -8,6 +8,7 @@ import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { roundMoney, sellingPriceFor, toNumber } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
@@ -49,11 +50,49 @@ export default function ProductForm({
   // Controlled alongside `price` so the embedded layout can show the same
   // live "₱X/pc · suggested ₱Y" hint and footer margin CartLineCard does.
   const [cost, setCost] = useState(String(product?.cost ?? ""));
+  // Controlled too, since "Pack" mode below needs it to divide a pack total
+  // down to the per-piece cost products.cost actually stores.
+  const [stock, setStock] = useState(String(product?.stock ?? ""));
+  /** Same two modes CartLineCard offers. "individual" is the default here
+      (CartLineCard defaults to "pack") because Cost is optional on this tab
+      and Qty can be left blank — pack mode has nothing to divide by then —
+      and because it keeps the field meaning exactly what it always was for
+      anyone who ignores this toggle. */
+  const [costMode, setCostMode] = useState<"pack" | "individual">("individual");
 
   const priceNum = toNumber(price);
   const costNum = toNumber(cost);
-  const suggested = costNum > 0 ? sellingPriceFor(costNum) : null;
-  const margin = priceNum > 0 && costNum > 0 ? roundMoney(priceNum - costNum) : null;
+  const qtyNum = toNumber(stock);
+  // products.cost is a PER-PIECE figure everywhere in the app (recordRestock
+  // divides a batch cost by its quantity before writing it), so a pack total
+  // typed here has to be divided the same way before it's submitted — see
+  // the hidden `cost` input below, which carries this instead of the raw
+  // typed value.
+  const costPerPiece =
+    costMode === "individual"
+      ? costNum > 0
+        ? costNum
+        : null
+      : costNum > 0 && qtyNum > 0
+        ? roundMoney(costNum / qtyNum)
+        : null;
+  // Pack mode can't work out a per-piece cost without a quantity, and Qty is
+  // optional here — flag that rather than silently dropping what was typed.
+  const packNeedsQty = costMode === "pack" && costNum > 0 && qtyNum <= 0;
+  const suggested = costPerPiece !== null ? sellingPriceFor(costPerPiece) : null;
+  const margin =
+    priceNum > 0 && costPerPiece !== null
+      ? roundMoney(priceNum - costPerPiece)
+      : null;
+
+  // Cleared rather than converted when the mode flips, same reasoning
+  // CartLineCard's own handleCostModeChange gives: a stale pack total
+  // silently reappearing as a per-item figure (or vice versa) is worse than
+  // retyping it.
+  function handleCostModeChange(next: "pack" | "individual") {
+    setCostMode(next);
+    setCost("");
+  }
 
   const fields = (
     <>
@@ -288,6 +327,33 @@ export default function ProductForm({
               </div>
             </div>
 
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">Bought as</Label>
+              <Tabs
+                value={costMode}
+                onValueChange={(value) =>
+                  handleCostModeChange(value as "pack" | "individual")
+                }
+                className="w-full min-w-0"
+              >
+                <TabsList className="w-full sm:w-fit">
+                  <TabsTrigger value="pack">Pack</TabsTrigger>
+                  <TabsTrigger value="individual">Individually</TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+
+            {/* The per-piece figure products.cost actually stores — derived
+                from the pack total in pack mode, passed straight through in
+                individual mode. toFixed(2) because parseMoney rejects more
+                than two decimals outright, and a division rarely lands on
+                exactly two (see createProduct's own parseForm). */}
+            <input
+              type="hidden"
+              name="cost"
+              value={costPerPiece !== null ? costPerPiece.toFixed(2) : ""}
+            />
+
             <div className="grid grid-cols-3 gap-2">
               <div className="flex flex-col gap-1">
                 <Label htmlFor="stock" className="text-xs">
@@ -301,24 +367,24 @@ export default function ProductForm({
                   type="number"
                   step="1"
                   inputMode="numeric"
-                  defaultValue={product?.stock ?? ""}
+                  value={stock}
+                  onChange={(event) => setStock(event.target.value)}
                   placeholder="Blank"
                 />
               </div>
               <div className="flex flex-col gap-1">
-                <Label htmlFor="cost" className="text-xs">
-                  Cost
+                <Label htmlFor="cost-input" className="text-xs">
+                  {costMode === "individual" ? "Cost/item" : "Cost"}
                 </Label>
                 <Input
-                  id="cost"
-                  name="cost"
+                  id="cost-input"
                   type="number"
                   step="0.01"
                   min="0"
                   inputMode="decimal"
                   value={cost}
                   onChange={(event) => setCost(event.target.value)}
-                  placeholder="10.00"
+                  placeholder={costMode === "individual" ? "15.00" : "60.00"}
                 />
               </div>
               <div className="flex flex-col gap-1">
@@ -340,9 +406,16 @@ export default function ProductForm({
               </div>
             </div>
 
-            {suggested !== null ? (
+            {packNeedsQty ? (
+              <p className="text-xs text-warning">
+                Enter a Qty so the pack cost can be split per item — without
+                one, the cost won&apos;t be saved.
+              </p>
+            ) : null}
+
+            {suggested !== null && costPerPiece !== null ? (
               <p className="text-xs">
-                <span className="font-medium">{formatPeso(costNum)}/pc</span>
+                <span className="font-medium">{formatPeso(costPerPiece)}/pc</span>
                 <span className="text-muted-foreground"> · suggested </span>
                 <span className="font-medium">{formatPeso(suggested)}</span>
                 {price === String(suggested) ? null : (
@@ -390,9 +463,10 @@ export default function ProductForm({
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Nothing is bought here — Qty and Cost are optional. Leave Qty
-              blank for items you don&apos;t count (tingi, by scoop);
-              restocking through Restock fills Cost in for you.
+              Nothing is bought here — Qty and Cost are optional, and no
+              payment is recorded. Leave Qty blank for items you don&apos;t
+              count (tingi, by scoop); restocking through Restock fills Cost
+              in for you later.
             </p>
           </div>
         </div>
@@ -409,9 +483,9 @@ export default function ProductForm({
             <p className="text-2xl font-semibold tabular-nums">
               {formatPeso(priceNum)}
             </p>
-            {margin !== null ? (
+            {margin !== null && costPerPiece !== null ? (
               <p className="text-xs text-muted-foreground tabular-nums">
-                {formatPeso(costNum)} cost · {margin >= 0 ? "+" : "-"}
+                {formatPeso(costPerPiece)}/pc cost · {margin >= 0 ? "+" : "-"}
                 {formatPeso(Math.abs(margin))}/pc
               </p>
             ) : null}
