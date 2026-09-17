@@ -71,10 +71,11 @@ export default function IncomeBreakdownCard({
       income/invested/profit read as three separate numbers instead of only
       the netted margin. Omit to hide the line. */
   invested?: number;
-  /** Value of stock taken out without a sale — shown as its own footer
-      line, never folded into `store`/`total`/the proportion bar, since a
-      personal take isn't income (see checkoutForm.tsx: no payment method,
-      no tender, no income posted for one). Omitted (or 0) hides the line. */
+  /** Cost of stock taken out without a sale and NOT yet paid back — shown
+      as its own footer line, never folded into `store`/`total`/the
+      proportion bar. An unpaid take isn't income; once it's paid it's
+      counted in `store` on the payment day instead (see
+      lib/personalTakes.ts). Omitted (or 0) hides the line. */
   personalTake?: number;
   /** Adds an explicit "Income" row in the footer, right above "Total
       profit" — the same gross figure the headline already shows, just
@@ -171,7 +172,7 @@ export default function IncomeBreakdownCard({
             ) : null}
             {(personalTake ?? 0) > 0 ? (
               <p className="flex items-baseline justify-between gap-2 text-xs">
-                <span className="text-muted-foreground">Personal take</span>
+                <span className="text-muted-foreground">Unpaid personal takes</span>
                 <span className="tabular-nums text-muted-foreground">
                   {formatPeso(personalTake ?? 0)}
                 </span>

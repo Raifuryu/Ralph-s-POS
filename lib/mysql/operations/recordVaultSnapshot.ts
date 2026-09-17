@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { withTransaction } from "@/lib/mysql/pool";
 import type { MoneyAccount } from "@/lib/types";
+import { storeIncomeSql } from "@/lib/personalTakesQuery";
 import { queryConn, roundMoney } from "./helpers";
 
 export type VaultSnapshotTargetDay = "today" | "yesterday";
@@ -79,29 +80,13 @@ export async function recordVaultSnapshot(
     }>(
       conn,
       `SELECT
-         COALESCE((
-           SELECT SUM(ti.line_total)
-           FROM transaction_items ti
-           JOIN transactions t ON t.id = ti.transaction_id
-           WHERE t.is_personal_take = 0 AND t.voided_at IS NULL
-             AND DATE(t.created_at) = ${dayExpr}
-         ), 0) AS store_gross,
-         COALESCE((
-           SELECT SUM(
-             CASE WHEN ti.unit_cost IS NOT NULL
-               THEN ti.line_total - ti.unit_cost * ti.quantity
-               ELSE 0
-             END
-           )
-           FROM transaction_items ti
-           JOIN transactions t ON t.id = ti.transaction_id
-           WHERE t.is_personal_take = 0 AND t.voided_at IS NULL
-             AND DATE(t.created_at) = ${dayExpr}
-         ), 0) AS store_margin,
+         si.store_gross,
+         si.store_margin,
          COALESCE((
            SELECT SUM(fee) FROM service_transactions
            WHERE voided_at IS NULL AND DATE(created_at) = ${dayExpr}
-         ), 0) AS eservice_fee`
+         ), 0) AS eservice_fee
+       FROM (${storeIncomeSql((column) => `DATE(${column}) = ${dayExpr}`)}) si`
     );
     const storeGross = Number(incomeRows[0]?.store_gross ?? 0);
     const storeMargin = Number(incomeRows[0]?.store_margin ?? 0);

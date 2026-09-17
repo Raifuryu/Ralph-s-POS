@@ -22,6 +22,7 @@ import { formatDateTime, formatPeso, storeDayKey } from "@/lib/format";
 import { roundMoney } from "@/lib/pricing";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { voidTransaction, type VoidState } from "../transactionActions";
 import {
   labelDebtor,
   settleDebt,
@@ -29,6 +30,7 @@ import {
 } from "./actions";
 
 const initialState: PersonalTakeActionState = { error: null };
+const initialVoidState: VoidState = { error: null };
 
 export type PersonalTake = {
   id: string;
@@ -86,6 +88,13 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
   const [settleState, settleActionFn, isSettling] = useActionState(
     settleDebt,
     initialState
+  );
+  // An unpaid take never appears in the Sales list (it only counts once
+  // it's paid — see lib/personalTakes.ts), so this is the one place a
+  // mistaken take can still be voided.
+  const [voidState, voidActionFn, isVoiding] = useActionState(
+    voidTransaction,
+    initialVoidState
   );
 
   return (
@@ -307,6 +316,35 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
                   </form>
                 ) : null}
               </div>
+
+              {voidState.error ? (
+                <p role="alert" className="text-xs text-destructive">
+                  {voidState.error}
+                </p>
+              ) : null}
+              <form
+                action={voidActionFn}
+                onSubmit={(event) => {
+                  if (
+                    !confirm(
+                      "Void this take? Stock will be returned. This can't be undone."
+                    )
+                  ) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                <input type="hidden" name="id" value={take.id} />
+                <Button
+                  type="submit"
+                  variant="ghost"
+                  size="sm"
+                  disabled={isVoiding || isSettling}
+                  className="w-full text-destructive hover:text-destructive"
+                >
+                  {isVoiding ? "Voiding…" : "Void this take"}
+                </Button>
+              </form>
             </div>
           )}
         </div>

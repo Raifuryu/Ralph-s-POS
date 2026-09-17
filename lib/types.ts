@@ -23,6 +23,18 @@ export type TransactionItem = Tables<"transaction_items">;
 /** A transaction with its line items, as returned by the dashboard query. */
 export type TransactionWithItems = Transaction & {
   transaction_items: TransactionItem[];
+  /** Only ever set on a PAID personal take — see lib/personalTakes.ts. */
+  settlement?: PersonalTakeSettlement;
+};
+
+/** How a personal take was paid back, read off the vault 'deposit' rows
+    settlePersonalTake posted (see lib/personalTakesQuery.ts). `account` is
+    null only when nothing was deposited at all — a take whose every item
+    has an unknown cost, settled at cost, posts no vault entry. */
+export type PersonalTakeSettlement = {
+  amount: number;
+  account: MoneyAccount | null;
+  atSellingPrice: boolean;
 };
 
 /** One amount-based fee tier — e.g. a ₱100–500 load charges ₱10.

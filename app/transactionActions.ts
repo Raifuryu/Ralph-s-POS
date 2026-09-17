@@ -31,6 +31,7 @@ export async function voidTransaction(
   revalidatePath("/checkout");
   revalidatePath("/statistics");
   revalidatePath("/inventory");
+  revalidatePath("/vault");
   return { error: null };
 }
 

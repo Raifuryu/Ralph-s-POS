@@ -4,6 +4,7 @@ import { PageError, PageShell } from "@/components/pageShell";
 import { Button } from "@/components/ui/button";
 import { formatPeso } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
+import { storeIncomeSql } from "@/lib/personalTakesQuery";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
 import {
   PROFIT_FUNDS,
@@ -170,7 +171,14 @@ export default async function VaultPage({
           `SELECT fund, COALESCE(SUM(amount), 0) AS amount
            FROM vault_entries
            WHERE fund IS NOT NULL
-             AND entry_type IN ('sale', 'service', 'void')
+             AND (
+               entry_type IN ('sale', 'service', 'void')
+               -- A personal take paid today: its settlement deposit is the
+               -- only deposit that carries a transaction_id, and it's
+               -- earnings on the day it's paid (see lib/personalTakes.ts) —
+               -- unlike a manual Cash in, which isn't.
+               OR (entry_type = 'deposit' AND transaction_id IS NOT NULL)
+             )
              AND DATE(created_at) = CURDATE()
            GROUP BY fund`
         ),
@@ -223,18 +231,8 @@ export default async function VaultPage({
         // Income card, just always scoped to today.
         showSnapshot
           ? queryRows<{ gross: number; margin: number }>(
-              `SELECT
-                 COALESCE(SUM(ti.line_total), 0) AS gross,
-                 COALESCE(SUM(
-                   CASE WHEN ti.unit_cost IS NOT NULL
-                     THEN ti.line_total - ti.unit_cost * ti.quantity
-                     ELSE 0
-                   END
-                 ), 0) AS margin
-               FROM transaction_items ti
-               JOIN transactions t ON t.id = ti.transaction_id
-               WHERE t.is_personal_take = 0 AND t.voided_at IS NULL
-                 AND DATE(t.created_at) = CURDATE()`
+              `SELECT si.store_gross AS gross, si.store_margin AS margin
+               FROM (${storeIncomeSql((column) => `DATE(${column}) = CURDATE()`)}) si`
             )
           : Promise.resolve([]),
         showSnapshot

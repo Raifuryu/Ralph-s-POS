@@ -9,6 +9,8 @@ import {
   storeDayRange,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
+import { effectiveTimestamp, incomeSales } from "@/lib/personalTakes";
+import { attachSettlements } from "@/lib/personalTakesQuery";
 import {
   SALES_FILTERS,
   type MoneyAccount,
@@ -58,7 +60,7 @@ function incomeCardCopy({
 }
 
 const TRANSACTION_COLUMNS =
-  "id, payment_method, cashier_id, total, tendered, created_at, is_personal_take, voided_at, voided_by, void_reason, visit_id";
+  "id, payment_method, cashier_id, total, tendered, created_at, is_personal_take, voided_at, voided_by, void_reason, visit_id, debtor_name, settled_at";
 const TRANSACTION_ITEM_COLUMNS =
   "id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total";
 const PRODUCT_COLUMNS =
@@ -66,12 +68,13 @@ const PRODUCT_COLUMNS =
 const SERVICE_COLUMNS =
   "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at";
 
-/** Newest-first merge of both money-in event kinds into one feed. */
-function sortByCreatedAtDesc(entries: SalesEntry[]): SalesEntry[] {
+/** Newest-first merge of both money-in event kinds into one feed — by
+    effectiveTimestamp, so a paid personal take sorts by when it was paid. */
+function sortByTimeDesc(entries: SalesEntry[]): SalesEntry[] {
   return [...entries].sort(
     (a, b) =>
-      new Date(b.data.created_at).getTime() -
-      new Date(a.data.created_at).getTime()
+      new Date(effectiveTimestamp(b)).getTime() -
+      new Date(effectiveTimestamp(a)).getTime()
   );
 }
 
@@ -139,10 +142,17 @@ export default async function Home({
     ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
-        // service_transactions into one chronological feed.
+        // service_transactions into one chronological feed. A personal take
+        // belongs to the day it was PAID, not taken (see lib/personalTakes.ts)
+        // — an unpaid one is a debt, tracked in Vault → Personal takes, and
+        // never appears here at all.
         queryRows<Transaction>(
-          `SELECT ${TRANSACTION_COLUMNS} FROM transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC`,
-          [fromTs, toTs]
+          `SELECT ${TRANSACTION_COLUMNS} FROM transactions
+           WHERE (is_personal_take = 0 AND created_at >= ? AND created_at <= ?)
+              OR (is_personal_take = 1 AND voided_at IS NULL
+                  AND settled_at >= ? AND settled_at <= ?)
+           ORDER BY created_at DESC`,
+          [fromTs, toTs, fromTs, toTs]
         ),
         queryRows<ServiceTransaction>(
           "SELECT * FROM service_transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC",
@@ -185,10 +195,12 @@ export default async function Home({
         else itemsByTxnId.set(item.transaction_id, [item]);
       }
     }
-    sales = transactions.map((t) => ({
-      ...t,
-      transaction_items: itemsByTxnId.get(t.id) ?? [],
-    }));
+    sales = await attachSettlements(
+      transactions.map((t) => ({
+        ...t,
+        transaction_items: itemsByTxnId.get(t.id) ?? [],
+      }))
+    );
   } catch (err) {
     return <LoadError message={(err as Error).message} />;
   }
@@ -198,19 +210,23 @@ export default async function Home({
   // fetched in full for the day and merged here. TransactionTabs/
   // TransactionTable reveal it to the cashier a page at a time via
   // "load more", entirely client-side.
-  const merged = sortByCreatedAtDesc([
+  const merged = sortByTimeDesc([
     ...sales.map((t) => ({ kind: "sale" as const, data: t })),
     ...serviceList.map((s) => ({ kind: "service" as const, data: s })),
   ]);
 
+  // Every sale that counts as income on this day — regular sales, plus
+  // personal takes PAID today rewritten as sales at whatever they were
+  // settled for (see incomeSales). Unpaid takes never made it into `sales`.
+  const countedSales = incomeSales(sales);
+
   // Store = all product sales in the window, regardless of payment method —
   // a sale is store revenue whether the customer paid cash, GCash, or Maya.
-  // This is the card's headline figure: gross income, not profit. Personal
-  // takes and voided sales are excluded here (and from itemsSold below) the
-  // same way they're excluded everywhere else — a voided sale had its stock
-  // and income both reversed, so it isn't really revenue anymore either.
-  const storeTotal = sales.reduce(
-    (sum, t) => sum + (t.is_personal_take || t.voided_at ? 0 : Number(t.total)),
+  // This is the card's headline figure: gross income, not profit. Voided
+  // sales are excluded — a voided sale had its stock and income both
+  // reversed, so it isn't really revenue anymore.
+  const storeTotal = countedSales.reduce(
+    (sum, t) => sum + (t.voided_at ? 0 : Number(t.total)),
     0
   );
 
@@ -229,8 +245,11 @@ export default async function Home({
   let storeMargin = 0;
   let storeCogs = 0;
   let storeRevenueWithUnknownCost = 0;
-  for (const t of sales) {
-    if (t.is_personal_take || t.voided_at) continue;
+  // A paid take settled at cost has line revenue equal to its known cost, so
+  // it adds to Invested with zero margin; settled at selling price, the
+  // excess over cost lands in profit — same split the vault deposit used.
+  for (const t of countedSales) {
+    if (t.voided_at) continue;
     for (const item of t.transaction_items) {
       const lineRevenue = Number(item.line_total);
       if (item.unit_cost !== null) {

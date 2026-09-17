@@ -14,6 +14,8 @@ import {
   WEEKDAY_ORDER,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
+import { incomeSales } from "@/lib/personalTakes";
+import { attachSettlements } from "@/lib/personalTakesQuery";
 import {
   MONEY_ACCOUNT_LABELS,
   type MoneyAccount,
@@ -33,7 +35,7 @@ import { type DailyProfitRow } from "./profitTrendTableSheet";
 import TopProductsTable, { type TopProduct } from "./topProductsTable";
 
 const TRANSACTION_COLUMNS =
-  "id, payment_method, cashier_id, total, tendered, created_at, is_personal_take, voided_at, voided_by, void_reason, visit_id";
+  "id, payment_method, cashier_id, total, tendered, created_at, is_personal_take, voided_at, voided_by, void_reason, visit_id, debtor_name, settled_at";
 const TRANSACTION_ITEM_COLUMNS =
   "id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total";
 
@@ -254,6 +256,15 @@ export default async function StatisticsPage({
     dateParams.push(params.to_ts);
   }
   const dateWhere = dateConditions.length > 0 ? `WHERE ${dateConditions.join(" AND ")}` : "";
+  // Same window, but on settled_at — a personal take counts as income on
+  // the day it was PAID, which can fall inside this range even when the
+  // take itself happened before it (see lib/personalTakes.ts).
+  const settledConditions = [
+    "is_personal_take = 1",
+    "voided_at IS NULL",
+    "settled_at IS NOT NULL",
+    ...dateConditions.map((c) => c.replace("created_at", "settled_at")),
+  ];
 
   // Category/product/service scope — narrows every figure on this page down
   // to just matching transaction_items/service_transactions (see
@@ -278,6 +289,7 @@ export default async function StatisticsPage({
   const hasAnyFilter = hasCategoryOrProductFilter || hasServiceFilter;
 
   let sales: TransactionWithItems[];
+  let settledTakes: TransactionWithItems[];
   let serviceData: ServiceRevenuePoint[];
   let restockData: {
     product_id: string | null;
@@ -297,8 +309,10 @@ export default async function StatisticsPage({
 
   try {
     let transactions: Transaction[];
+    let settledTakeRows: Transaction[];
     [
       transactions,
+      settledTakeRows,
       serviceData,
       restockData,
       vaultMovementData,
@@ -308,6 +322,12 @@ export default async function StatisticsPage({
     ] = await Promise.all([
         queryRows<Transaction>(
           `SELECT ${TRANSACTION_COLUMNS} FROM transactions ${dateWhere} ORDER BY created_at ASC`,
+          dateParams
+        ),
+        queryRows<Transaction>(
+          `SELECT ${TRANSACTION_COLUMNS} FROM transactions
+           WHERE ${settledConditions.join(" AND ")}
+           ORDER BY settled_at ASC`,
           dateParams
         ),
         queryRows<ServiceRevenuePoint>(
@@ -324,6 +344,9 @@ export default async function StatisticsPage({
           `SELECT product_id, cost, quantity, created_at FROM product_restocks ${dateWhere}`,
           dateParams
         ),
+        // transaction_id IS NULL leaves out a personal take's settlement
+        // deposit — that money is already counted as income on its payment
+        // day below, so showing it again as "Cash deposited" would double it.
         queryRows<{
           amount: number;
           account: MoneyAccount;
@@ -331,7 +354,8 @@ export default async function StatisticsPage({
           created_at: string;
         }>(
           `SELECT amount, account, entry_type, created_at FROM vault_entries
-           ${dateWhere ? `${dateWhere} AND` : "WHERE"} entry_type IN ('deposit', 'withdrawal')`,
+           ${dateWhere ? `${dateWhere} AND` : "WHERE"} entry_type IN ('deposit', 'withdrawal')
+             AND transaction_id IS NULL`,
           dateParams
         ),
         // Unfiltered by is_active: a sale of a since-deactivated product
@@ -351,10 +375,13 @@ export default async function StatisticsPage({
       ]);
 
     const itemsByTxnId = new Map<string, TransactionItem[]>();
-    if (transactions.length > 0) {
+    const itemTxnIds = [
+      ...new Set([...transactions, ...settledTakeRows].map((t) => t.id)),
+    ];
+    if (itemTxnIds.length > 0) {
       const items = await queryRows<TransactionItem>(
-        `SELECT ${TRANSACTION_ITEM_COLUMNS} FROM transaction_items WHERE transaction_id IN (${transactions.map(() => "?").join(",")})`,
-        transactions.map((t) => t.id)
+        `SELECT ${TRANSACTION_ITEM_COLUMNS} FROM transaction_items WHERE transaction_id IN (${itemTxnIds.map(() => "?").join(",")})`,
+        itemTxnIds
       );
       for (const item of items) {
         const list = itemsByTxnId.get(item.transaction_id);
@@ -366,6 +393,12 @@ export default async function StatisticsPage({
       ...t,
       transaction_items: itemsByTxnId.get(t.id) ?? [],
     }));
+    settledTakes = await attachSettlements(
+      settledTakeRows.map((t) => ({
+        ...t,
+        transaction_items: itemsByTxnId.get(t.id) ?? [],
+      }))
+    );
   } catch (err) {
     return <LoadError message={(err as Error).message} />;
   }
@@ -429,7 +462,16 @@ export default async function StatisticsPage({
   // so it's excluded the same way personal takes already are everywhere a
   // sum/count/average is computed below.
   const nonVoidedSales = sales.filter((t) => !t.voided_at);
-  const salesExcludingPersonal = nonVoidedSales.filter((t) => !t.is_personal_take);
+  // Personal takes PAID in this window, rewritten as ordinary sales dated on
+  // their payment day at whatever they were settled for — so every revenue,
+  // profit, product, category, payment-method, and traffic figure below
+  // counts them exactly like a sale (profit only at selling price, zero at
+  // cost). See asSettledSale.
+  const settledSales = incomeSales(settledTakes);
+  const salesExcludingPersonal = [
+    ...nonVoidedSales.filter((t) => !t.is_personal_take),
+    ...settledSales,
+  ];
 
   // costKnownRevenue/cost mirror storeRevenueWithKnownCost/storeCogs below,
   // but per product — a line only contributes to profit once its unit_cost
@@ -600,14 +642,16 @@ export default async function StatisticsPage({
   }
   const storeMargin = storeRevenueWithKnownCost - storeCogs;
 
-  // A personal take is valued at cost, not price (see checkout()'s own
-  // "no income" comment). Filtering narrows this the same way as a real
-  // sale: only the cost of matching items within each take counts, and a
-  // take only counts toward Transactions once it has at least one.
+  // An UNPAID personal take taken in this window, valued at cost (see
+  // checkout()'s own "no income" comment). A paid one is already counted
+  // above as a sale on its payment day, so it's skipped here rather than
+  // counted twice. Filtering narrows this the same way as a real sale: only
+  // the cost of matching items within each take counts, and a take only
+  // counts toward Transactions once it has at least one.
   let personalTakesValue = 0;
   const touchedPersonalTakeIds = new Set<string>();
   for (const t of nonVoidedSales) {
-    if (!t.is_personal_take) continue;
+    if (!t.is_personal_take || t.settled_at) continue;
     let matchedCost = 0;
     let touched = false;
     for (const item of t.transaction_items) {
@@ -781,7 +825,7 @@ export default async function StatisticsPage({
     .sort((a, b) => b.revenue - a.revenue);
 
   const profitPoints = buildProfitPoints(
-    sales,
+    [...sales, ...settledSales],
     effectiveServiceList,
     matchesItemFilter
   );
@@ -862,7 +906,7 @@ export default async function StatisticsPage({
           <SummaryCard label="Average sale" value={formatPeso(avgSale)} compact />
           <SummaryCard label="Items sold" value={String(itemsSold)} compact />
           <SummaryCard
-            label="Personal takes"
+            label="Unpaid personal takes"
             value={formatPeso(personalTakesValue)}
             compact
           />

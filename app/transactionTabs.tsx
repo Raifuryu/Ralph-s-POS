@@ -36,6 +36,12 @@ function searchableText(entry: SalesEntry): string {
           entry.data.is_personal_take
             ? "personal take"
             : PAYMENT_METHOD_LABELS[entry.data.payment_method!],
+          // A paid take is searchable by who paid and how, same as a sale is
+          // by its payment method.
+          entry.data.debtor_name,
+          entry.data.settlement?.account
+            ? PAYMENT_METHOD_LABELS[entry.data.settlement.account]
+            : null,
           entry.data.void_reason,
           ...entry.data.transaction_items.map((item) => item.product_name),
         ]
