@@ -56,7 +56,10 @@ export type RestockPaymentSplit = { source: RestockPaymentSource; amount: number
  * the batch's total cost: whatever isn't attributed to a source is simply
  * left with no vault effect at all, same as omitting `payment` entirely —
  * this is a bookkeeping aid, not a hard requirement to reconcile every
- * peso spent. */
+ * peso spent. Restock history (app/inventory/restockHistorySheet.tsx) reads
+ * that shortfall back out as "owner covered ₱X" — inferred from totalCost
+ * minus whatever these rows actually paid, not a separate thing the owner
+ * has to record. */
 export async function recordBulkRestock(
   params: { items: BulkRestockLine[]; payment?: RestockPaymentSplit[] },
   cashierId: string
@@ -127,6 +130,13 @@ export async function recordBulkRestock(
     );
   }
 
+  // Shared by every product_restocks line this call writes AND by every
+  // payment vault_entries row below — the correlation restock history uses
+  // to show which account/fund/wallet paid for a receipt, and to work out
+  // any gap the owner covered personally (see restock_batch's own comments
+  // in mariadb/schema.sql).
+  const restockBatch = randomUUID();
+
   return withTransaction(async (conn) => {
     // Lock every existing product referenced, in a stable order, before any
     // write — same deadlock-avoidance rationale as checkout(). A row count
@@ -176,6 +186,7 @@ export async function recordBulkRestock(
         quantity: line.quantity,
         cost: line.cost,
         cashierId,
+        restockBatch,
       });
 
       result.push({ productId, restockId });
@@ -206,8 +217,8 @@ export async function recordBulkRestock(
         // 'cash' is just a placeholder value, same reasoning
         // transferFund's fund-leaving leg already uses.
         await conn.query(
-          "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note) VALUES (?, 'withdrawal', ?, 'cash', ?, ?, ?)",
-          [randomUUID(), -amount, source, cashierId, "Restock payment"]
+          "INSERT INTO vault_entries (id, entry_type, amount, account, fund, created_by, note, restock_batch) VALUES (?, 'withdrawal', ?, 'cash', ?, ?, ?, ?)",
+          [randomUUID(), -amount, source, cashierId, "Restock payment", restockBatch]
         );
       } else if (isMoneyAccount(source)) {
         const rows = await queryConn<{ balance: number }>(
@@ -222,8 +233,8 @@ export async function recordBulkRestock(
           );
         }
         await conn.query(
-          "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note) VALUES (?, 'withdrawal', ?, ?, ?, ?)",
-          [randomUUID(), -amount, source, cashierId, "Restock payment"]
+          "INSERT INTO vault_entries (id, entry_type, amount, account, created_by, note, restock_batch) VALUES (?, 'withdrawal', ?, ?, ?, ?, ?)",
+          [randomUUID(), -amount, source, cashierId, "Restock payment", restockBatch]
         );
       } else {
         // Anything left over is a wallet id — same placeholder convention
@@ -242,8 +253,8 @@ export async function recordBulkRestock(
           );
         }
         await conn.query(
-          "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note) VALUES (?, 'withdrawal', 'cash', ?, ?, ?, ?)",
-          [randomUUID(), -amount, source, cashierId, "Restock payment"]
+          "INSERT INTO vault_entries (id, entry_type, amount, account, wallet_id, created_by, note, restock_batch) VALUES (?, 'withdrawal', 'cash', ?, ?, ?, ?, ?)",
+          [randomUUID(), -amount, source, cashierId, "Restock payment", restockBatch]
         );
       }
     }

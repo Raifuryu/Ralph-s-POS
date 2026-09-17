@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import {
   MONEY_ACCOUNT_LABELS,
   PROFIT_FUND_LABELS,
@@ -313,9 +314,12 @@ function TransferForm({
     gcash: breakdown.get("gcash") ? String(breakdown.get("gcash")) : "",
     maya: breakdown.get("maya") ? String(breakdown.get("maya")) : "",
   });
-  const total = ACCOUNTS.reduce(
-    (sum, account) => sum + (Number(splits[account]) || 0),
-    0
+  // Rounded once at the end — summing several already-2-decimal splits can
+  // still drift into e.g. 1886.6500000000003, which would then miss the
+  // `total > balance` check by a hair right at the boundary (see
+  // restockPaymentSheet.tsx's own paymentTotal() for the same fix).
+  const total = roundMoney(
+    ACCOUNTS.reduce((sum, account) => sum + (Number(splits[account]) || 0), 0)
   );
 
   useEffect(() => {
@@ -443,7 +447,7 @@ export default function FundCard({
           <DrawerDescription>{formatPeso(balance)} available</DrawerDescription>
         </DrawerHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
           <Tabs defaultValue="transfer" className="min-h-0 w-full min-w-0 flex-1">
             <TabsList className="w-full sm:w-fit">
               <TabsTrigger value="out">Cash out</TabsTrigger>

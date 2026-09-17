@@ -17,6 +17,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import {
   MONEY_ACCOUNTS,
   MONEY_ACCOUNT_LABELS,
@@ -324,10 +325,15 @@ function TransferForm({
     reinvest: "",
   });
   const [walletSplits, setWalletSplits] = useState<Record<string, string>>({});
-  const total =
+  // Rounded once at the end — summing several already-2-decimal splits can
+  // still drift into e.g. 1886.6500000000003, which would then miss the
+  // `total > balance` check by a hair right at the boundary (see
+  // restockPaymentSheet.tsx's own paymentTotal() for the same fix).
+  const total = roundMoney(
     otherAccounts.reduce((sum, a) => sum + (Number(accountSplits[a]) || 0), 0) +
-    PROFIT_FUNDS.reduce((sum, fund) => sum + (Number(fundSplits[fund]) || 0), 0) +
-    wallets.reduce((sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0), 0);
+      PROFIT_FUNDS.reduce((sum, fund) => sum + (Number(fundSplits[fund]) || 0), 0) +
+      wallets.reduce((sum, wallet) => sum + (Number(walletSplits[wallet.id]) || 0), 0)
+  );
 
   useEffect(() => {
     if (!state.result) return;
@@ -482,7 +488,7 @@ export default function AccountSheet({
           <DrawerDescription>{formatPeso(balance)} on hand</DrawerDescription>
         </DrawerHeader>
 
-        <div className="flex min-h-0 flex-1 flex-col p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
           <Tabs
             defaultValue="out"
             className="min-h-0 w-full min-w-0 flex-1"

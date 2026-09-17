@@ -20,8 +20,10 @@ import {
 } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
+import { roundMoney } from "@/lib/pricing";
 import {
   MONEY_ACCOUNT_LABELS,
+  PROFIT_FUND_LABELS,
   type Category,
   type MoneyAccount,
   type Product,
@@ -33,6 +35,7 @@ import HistorySheet, { type HistoryEntry } from "./historySheet";
 import ItemsBrowser from "./itemsBrowser";
 import ProductSheet from "./productSheet";
 import RestockHistorySheet, {
+  type RestockPaymentItem,
   type RestockReceipt,
   type RestockReceiptLine,
 } from "./restockHistorySheet";
@@ -79,14 +82,17 @@ type SearchParams = {
   restocks?: string;
 };
 
-// Every product_restocks row created in the same bulk-restock submission
-// shares the exact same cashier + created_at — there's no separate batch id
-// in the schema (see recordBulkRestock()), but every line is inserted
-// inside one DB transaction, and TIMESTAMP here has no fractional-second
-// precision, so same-submission lines always land on an identical whole
-// second. Grouping on that pair reconstructs "receipts" from existing data
-// without a migration; two different cashiers restocking in the exact same
-// second would wrongly merge, but that's not a real scenario for this store.
+// Every product_restocks row now carries restock_batch — a real id shared
+// by every line (and every payment vault_entries row) from the same
+// recordBulkRestock() call (see restock_batch's own comment in
+// mariadb/schema.sql) — so a batch-tagged row groups on that alone, exactly.
+// Rows written before that column existed (restock_batch NULL) fall back to
+// the old heuristic: same cashier + identical created_at, since every line
+// in one call lands inside one DB transaction and TIMESTAMP here has no
+// fractional-second precision. Two different cashiers restocking in the
+// exact same second would wrongly merge under the fallback, but that's not
+// a real scenario for this store, and it only applies to pre-migration data
+// anyway.
 const RESTOCK_HISTORY_LIMIT = 1000;
 
 function groupIntoReceipts(
@@ -95,26 +101,76 @@ function groupIntoReceipts(
   const receipts: RestockReceipt[] = [];
   for (const row of rows) {
     const last = receipts[receipts.length - 1];
-    if (
+    const sameBatch =
+      last && row.restock_batch !== null && last.restockBatch === row.restock_batch;
+    const sameLegacyGroup =
       last &&
+      row.restock_batch === null &&
+      last.restockBatch === null &&
       last.createdAt === row.created_at &&
-      last.cashierId === row.cashier_id
-    ) {
+      last.cashierId === row.cashier_id;
+    if (last && (sameBatch || sameLegacyGroup)) {
       last.lines.push(row);
       last.totalCost += Number(row.cost);
       last.totalUnits += row.quantity;
     } else {
       receipts.push({
         key: row.id,
+        restockBatch: row.restock_batch,
         createdAt: row.created_at,
         cashierId: row.cashier_id,
         lines: [row],
         totalCost: Number(row.cost),
         totalUnits: row.quantity,
+        // Filled in below, once the payment vault_entries rows for these
+        // batches are fetched — grouping and payment attribution are
+        // separate passes over the same data.
+        paymentBreakdown: [],
+        ownerCovered: 0,
       });
     }
   }
   return receipts;
+}
+
+type RestockPaymentRow = {
+  restock_batch: string;
+  amount: number;
+  account: MoneyAccount;
+  fund: ProfitFund | null;
+  wallet_id: string | null;
+  wallet_name: string | null;
+};
+
+/** Turns the raw payment vault_entries rows for a set of batches into each
+    receipt's own paymentBreakdown + ownerCovered — see RestockReceipt's own
+    comments for what each means. A receipt with no restockBatch (legacy
+    data) is left untouched (still the [] / 0 groupIntoReceipts gave it) —
+    there's nothing to correlate it to. */
+function attachPayments(
+  receipts: RestockReceipt[],
+  paymentRows: RestockPaymentRow[]
+): RestockReceipt[] {
+  const byBatch = new Map<string, RestockPaymentItem[]>();
+  for (const row of paymentRows) {
+    const amount = roundMoney(Number(row.amount));
+    const item: RestockPaymentItem = row.fund
+      ? { key: row.fund, label: PROFIT_FUND_LABELS[row.fund], amount }
+      : row.wallet_id
+        ? { key: row.wallet_id, label: row.wallet_name ?? "Wallet", amount }
+        : { key: row.account, label: MONEY_ACCOUNT_LABELS[row.account], amount };
+    const existing = byBatch.get(row.restock_batch);
+    if (existing) existing.push(item);
+    else byBatch.set(row.restock_batch, [item]);
+  }
+
+  return receipts.map((receipt) => {
+    if (!receipt.restockBatch) return receipt;
+    const paymentBreakdown = byBatch.get(receipt.restockBatch) ?? [];
+    const paid = paymentBreakdown.reduce((sum, item) => sum + item.amount, 0);
+    const ownerCovered = Math.max(0, roundMoney(receipt.totalCost - paid));
+    return { ...receipt, paymentBreakdown, ownerCovered };
+  });
 }
 
 export default async function InventoryPage({
@@ -181,7 +237,7 @@ export default async function InventoryPage({
         // "don't pay for a query nobody's looking at" reasoning as history.
         showRestockHistory
           ? queryRows<RestockReceiptLine & { cashier_id: string }>(
-              `SELECT id, product_id, product_name, quantity, cost, note, cashier_id, created_at
+              `SELECT id, product_id, product_name, quantity, cost, note, cashier_id, created_at, restock_batch
              FROM product_restocks
              ORDER BY created_at DESC, id ASC
              LIMIT ${RESTOCK_HISTORY_LIMIT}`
@@ -214,7 +270,37 @@ export default async function InventoryPage({
     );
   }
 
-  const restockReceipts = groupIntoReceipts(restockHistoryRows);
+  let restockReceipts = groupIntoReceipts(restockHistoryRows);
+
+  // Payment breakdown for exactly the batches just grouped above — a
+  // separate query for exactly the batch ids already selected (same "child
+  // rows for the parent ids we have" pattern the dashboard's own
+  // transaction_items follow-up query uses), so this never runs when the
+  // sheet is closed (restockReceipts is then empty) or when nothing visible
+  // has a real batch id yet (all-legacy data).
+  const batchIds = [
+    ...new Set(
+      restockReceipts
+        .map((receipt) => receipt.restockBatch)
+        .filter((id): id is string => id !== null)
+    ),
+  ];
+  if (batchIds.length > 0) {
+    try {
+      const paymentRows = await queryRows<RestockPaymentRow>(
+        `SELECT ve.restock_batch, -ve.amount AS amount, ve.account, ve.fund, ve.wallet_id, w.name AS wallet_name
+         FROM vault_entries ve
+         LEFT JOIN wallets w ON w.id = ve.wallet_id
+         WHERE ve.restock_batch IN (${batchIds.map(() => "?").join(",")})`,
+        batchIds
+      );
+      restockReceipts = attachPayments(restockReceipts, paymentRows);
+    } catch (err) {
+      return (
+        <PageError title="Could not load inventory" message={(err as Error).message} />
+      );
+    }
+  }
 
   const editing = params.edit
     ? products.find((p) => p.id === params.edit)
@@ -269,13 +355,17 @@ export default async function InventoryPage({
   const restocksAsc = [...restocks].sort((a, b) =>
     a.created_at.localeCompare(b.created_at)
   );
-  let remaining = sales.reduce((sum, sale) => sum + sale.lineTotal, 0);
+  // Rounded on the initial sum and after every subtraction — a running
+  // total over many already-2-decimal sale amounts can still drift past
+  // the centavo, which would then flip historySheet.tsx's own `net >= 0`
+  // right at an exact break-even.
+  let remaining = roundMoney(sales.reduce((sum, sale) => sum + sale.lineTotal, 0));
   let saleIdx = 0;
   const recoveredById = new Map<string, number>();
   for (const restock of restocksAsc) {
     const restockedAt = new Date(restock.created_at).getTime();
     while (saleIdx < sales.length && sales[saleIdx].soldAt < restockedAt) {
-      remaining -= sales[saleIdx].lineTotal;
+      remaining = roundMoney(remaining - sales[saleIdx].lineTotal);
       saleIdx++;
     }
     recoveredById.set(restock.id, remaining);

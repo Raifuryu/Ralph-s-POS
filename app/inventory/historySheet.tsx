@@ -14,6 +14,7 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import { formatDateTime, formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -145,7 +146,9 @@ function RestockRow({
 }: {
   entry: HistoryEntry & { kind: "restock" };
 }) {
-  const net = entry.recovered - entry.cost;
+  // Rounded — subtracting two already-2-decimal amounts can still drift
+  // right at an exact break-even, flipping the "ahead"/"short" label below.
+  const net = roundMoney(entry.recovered - entry.cost);
   return (
     <li className="rounded-lg border p-3">
       <div className="flex items-baseline justify-between gap-2">

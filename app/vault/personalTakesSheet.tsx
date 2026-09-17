@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDateTime, formatPeso, storeDayKey } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
@@ -47,9 +48,12 @@ export type PersonalTake = {
     sold for at the time of the take, offered as an alternative settlement
     amount to the take's own (cost-based) total. */
 function sellingPriceTotal(items: PersonalTake["items"]): number {
-  return items.reduce(
-    (sum, item) => sum + Number(item.unit_price) * item.quantity,
-    0
+  // Rounded — summing several already-2-decimal line amounts (each
+  // unit_price × quantity) can still drift past the centavo, which would
+  // then fail the `!== take.total` comparisons this feeds (see e.g. this
+  // component's own PersonalTakeRow) even when the two are really equal.
+  return roundMoney(
+    items.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0)
   );
 }
 
@@ -94,8 +98,14 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
       >
         <span className="min-w-0">
           <span className="flex items-center gap-2">
-            <span className="text-sm font-medium">
+            <span className="text-sm font-medium tabular-nums">
               {formatPeso(take.total)}
+              {priceTotal > 0 && priceTotal !== take.total ? (
+                <span className="font-normal text-muted-foreground">
+                  {" "}
+                  cost · {formatPeso(priceTotal)} selling
+                </span>
+              ) : null}
             </span>
             {isSettled ? (
               <Badge className="bg-success/10 text-success">Paid</Badge>
@@ -314,6 +324,10 @@ type DebtorGroup = {
   name: string;
   takes: PersonalTake[];
   total: number;
+  /** Sum of each take's own sellingPriceTotal — what this debtor's items
+      would have sold for, shown alongside `total` (cost) the same "cost ·
+      selling" way PersonalTakeRow's own headline does. */
+  sellingTotal: number;
 };
 
 /** Compresses a list of takes down to one row per debtor, each carrying its
@@ -327,16 +341,21 @@ function buildDebtorGroups(takes: PersonalTake[]): DebtorGroup[] {
   const map = new Map<string, DebtorGroup>();
   for (const take of takes) {
     const key = take.debtor_name ?? "";
+    const takeSelling = sellingPriceTotal(take.items);
     const existing = map.get(key);
     if (existing) {
       existing.takes.push(take);
-      existing.total += take.total;
+      // Rounded after each add — a running sum of several already-2-decimal
+      // amounts can drift the same way sellingPriceTotal's own reduce can.
+      existing.total = roundMoney(existing.total + take.total);
+      existing.sellingTotal = roundMoney(existing.sellingTotal + takeSelling);
     } else {
       map.set(key, {
         key,
         name: take.debtor_name ?? "Not labeled yet",
         takes: [take],
         total: take.total,
+        sellingTotal: takeSelling,
       });
     }
   }
@@ -375,8 +394,18 @@ function DebtorGroupRow({ group }: { group: DebtorGroup }) {
           </span>
         </span>
         <span className="flex shrink-0 items-center gap-2">
-          <span className="text-sm font-medium tabular-nums">
-            {formatPeso(group.total)}
+          <span className="flex flex-col items-end">
+            <span className="text-sm font-medium tabular-nums">
+              {formatPeso(group.total)}
+              {group.sellingTotal === 0 || group.sellingTotal === group.total ? null : (
+                <span className="font-normal text-muted-foreground"> cost</span>
+              )}
+            </span>
+            {group.sellingTotal > 0 && group.sellingTotal !== group.total ? (
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {formatPeso(group.sellingTotal)} selling
+              </span>
+            ) : null}
           </span>
           {expanded ? (
             <ChevronDownIcon className="size-4 text-muted-foreground" />
@@ -460,7 +489,12 @@ export default function PersonalTakesSheet({
   // Outstanding/All choice, so with the default Outstanding view this reads
   // as "how much stock is out there unpaid" (what's actually been lost so
   // far), and switching to All adds back everything already settled too.
-  const visibleTotal = visible.reduce((sum, take) => sum + take.total, 0);
+  const visibleTotal = roundMoney(
+    visible.reduce((sum, take) => sum + take.total, 0)
+  );
+  const visibleSellingTotal = roundMoney(
+    visible.reduce((sum, take) => sum + sellingPriceTotal(take.items), 0)
+  );
   const debtorGroups = buildDebtorGroups(visible);
 
   return (
@@ -555,8 +589,13 @@ export default function PersonalTakesSheet({
                   <p className="text-xs text-muted-foreground">
                     {showAll ? "Total, all takes" : "Total outstanding"}
                   </p>
-                  <p className="text-lg font-semibold tabular-nums">
+                  <p className="flex items-baseline gap-2 text-lg font-semibold tabular-nums">
                     {formatPeso(visibleTotal)}
+                    {visibleSellingTotal > 0 && visibleSellingTotal !== visibleTotal ? (
+                      <span className="text-sm font-normal text-muted-foreground">
+                        cost · {formatPeso(visibleSellingTotal)} selling
+                      </span>
+                    ) : null}
                   </p>
                 </div>
               ) : null}

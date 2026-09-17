@@ -18,9 +18,14 @@ export async function recordRestock(
     cost: number;
     note?: string | null;
     cashierId: string;
+    /** Shared by every line from the same recordBulkRestock() call, and by
+        that call's own payment vault_entries rows — see
+        vault_entries.restock_batch's own comment in mariadb/schema.sql. */
+    restockBatch?: string | null;
   }
 ): Promise<string> {
   const { productId, quantity, cashierId } = params;
+  const restockBatch = params.restockBatch ?? null;
   const note = params.note?.trim() || null;
   // Rounded once here rather than trusted as-is — the client can hand this
   // function a value with floating-point noise past the centavo (e.g. a
@@ -49,8 +54,8 @@ export async function recordRestock(
 
   const id = randomUUID();
   await conn.query(
-    "INSERT INTO product_restocks (id, product_id, product_name, quantity, cost, note, cashier_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
-    [id, productId, product.name, quantity, cost, note, cashierId]
+    "INSERT INTO product_restocks (id, product_id, product_name, quantity, cost, note, cashier_id, restock_batch) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    [id, productId, product.name, quantity, cost, note, cashierId, restockBatch]
   );
 
   await conn.query(

@@ -27,18 +27,44 @@ export type RestockReceiptLine = {
   cost: number;
   note: string | null;
   created_at: string;
+  restock_batch: string | null;
 };
 
+/** One source that covered part of a receipt's cost — an account, a fund,
+    or a wallet, whichever the owner picked when submitting the restock (see
+    recordBulkRestock's own `payment` param). Built in page.tsx from the
+    vault_entries withdrawal rows recordBulkRestock posts, correlated back
+    to this receipt via restock_batch. */
+export type RestockPaymentItem = { key: string; label: string; amount: number };
+
 export type RestockReceipt = {
-  /** First line's id — stable and unique per receipt without a real batch
-      id in the schema (see the grouping comment in page.tsx). */
+  /** First line's id — stable and unique per receipt even for legacy rows
+      with no restockBatch (see the grouping comment in page.tsx). */
   key: string;
+  /** Shared by every line in this receipt when it was submitted after
+      restock_batch existed — null for older rows, which fall back to the
+      cashier+timestamp heuristic instead (see groupIntoReceipts in
+      page.tsx). Payment breakdown/ownerCovered below are only ever
+      populated when this is set — there's no way to attribute payment to a
+      legacy, unbatched receipt. */
+  restockBatch: string | null;
   createdAt: string;
   cashierId: string;
   lines: (RestockReceiptLine & { cashier_id: string })[];
   /** Sum of every line's cost — the total actually spent on this receipt. */
   totalCost: number;
   totalUnits: number;
+  /** Which account(s)/fund(s)/wallet(s) actually paid for this receipt, and
+      how much each contributed — empty when nothing was logged (either a
+      legacy receipt, or one submitted with no payment split at all). */
+  paymentBreakdown: RestockPaymentItem[];
+  /** totalCost minus whatever paymentBreakdown actually covers, floored at
+      0 — the part of this receipt nothing in the vault paid for, which can
+      only mean the owner covered it out of pocket. Always 0 for a legacy
+      (restockBatch === null) receipt, since there's no way to tell "owner
+      paid" apart from "payment just wasn't logged" without the
+      correlation. */
+  ownerCovered: number;
 };
 
 type ReceiptDayGroup = {
@@ -89,8 +115,12 @@ function groupReceiptsByDay(receipts: RestockReceipt[]): ReceiptDayGroup[] {
  * Receipts are further grouped under a day header (same recipe
  * TransactionTable already uses for sales), so several restocks submitted
  * the same day sit under one heading with a combined total instead of
- * scrolling past as unrelated rows. URL-driven (?restocks) like the other
- * Inventory sheets.
+ * scrolling past as unrelated rows. Also shows which account/fund/wallet
+ * paid (receipt.paymentBreakdown) and, when the payment split didn't cover
+ * the full cost, an inferred "Owner (out of pocket)" line for the gap
+ * (receipt.ownerCovered) — both built in page.tsx from recordBulkRestock's
+ * own payment vault_entries rows, nothing the cashier enters separately.
+ * URL-driven (?restocks) like the other Inventory sheets.
  */
 export default function RestockHistorySheet({
   open,
@@ -189,6 +219,20 @@ export default function RestockHistorySheet({
                                 {receipt.totalUnits === 1 ? "" : "s"} ·{" "}
                                 {formatPeso(receipt.totalCost)}
                               </span>
+                              {receipt.paymentBreakdown.length > 0 ||
+                              receipt.ownerCovered > 0 ? (
+                                <span className="block truncate text-xs text-muted-foreground">
+                                  Paid:{" "}
+                                  {[
+                                    ...receipt.paymentBreakdown.map(
+                                      (item) => item.label
+                                    ),
+                                    ...(receipt.ownerCovered > 0
+                                      ? ["Owner"]
+                                      : []),
+                                  ].join(", ")}
+                                </span>
+                              ) : null}
                             </span>
                             {expanded ? (
                               <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground" />
@@ -233,6 +277,37 @@ export default function RestockHistorySheet({
                                   </li>
                                 );
                               })}
+                              {receipt.paymentBreakdown.length > 0 ||
+                              receipt.ownerCovered > 0 ? (
+                                <li className="flex flex-col gap-1 border-t pt-2">
+                                  <span className="text-xs text-muted-foreground">
+                                    Paid with
+                                  </span>
+                                  {receipt.paymentBreakdown.map((item) => (
+                                    <p
+                                      key={item.key}
+                                      className="flex items-baseline justify-between gap-2 text-xs"
+                                    >
+                                      <span className="text-muted-foreground">
+                                        {item.label}
+                                      </span>
+                                      <span className="font-medium tabular-nums">
+                                        {formatPeso(item.amount)}
+                                      </span>
+                                    </p>
+                                  ))}
+                                  {receipt.ownerCovered > 0 ? (
+                                    <p className="flex items-baseline justify-between gap-2 text-xs">
+                                      <span className="text-muted-foreground">
+                                        Owner (out of pocket)
+                                      </span>
+                                      <span className="font-medium tabular-nums">
+                                        {formatPeso(receipt.ownerCovered)}
+                                      </span>
+                                    </p>
+                                  ) : null}
+                                </li>
+                              ) : null}
                             </ul>
                           ) : null}
                         </li>

@@ -4,6 +4,7 @@ import { useActionState, useState } from "react";
 import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
+import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
@@ -24,11 +25,19 @@ export default function ProductForm({
   categories: Category[];
   /** Overrides the default Cancel behavior (navigating to /inventory) —
       BulkRestockSheet's own "New item" mode uses this to switch the toggle
-      back to "Restock" instead of closing the whole sheet. Omit to keep the
-      default (ProductSheet's own edit-mode usage). */
+      back to "Restock" instead of closing the whole sheet. Also the signal
+      this form uses to switch its own chrome to match BulkRestockForm's
+      (card-wrapped fields, a bottom DrawerFooter instead of a plain button
+      row) — the owner wants the two tabs to read as one consistent design,
+      not two different-looking forms glued together by a tab switch.
+      ProductSheet (the only other caller) never passes this, so it's a
+      reliable signal for "embedded in BulkRestockSheet" with no separate
+      prop needed. Omit to keep the plain layout (ProductSheet's own
+      edit-mode usage). */
   onCancel?: () => void;
 }) {
   const isEdit = Boolean(product);
+  const embedded = Boolean(onCancel);
   const [state, formAction, isPending] = useActionState(
     isEdit ? updateProduct : createProduct,
     initialState
@@ -36,13 +45,11 @@ export default function ProductForm({
 
   const [price, setPrice] = useState(String(product?.price ?? ""));
 
-  return (
-    <form action={formAction} className="flex flex-col gap-4">
-      {product ? <input type="hidden" name="id" value={product.id} /> : null}
-
-      <div className="flex flex-col gap-2">
+  const fields = (
+    <>
+      <div className="flex flex-col gap-1">
         <Label htmlFor="name" className="text-xs">
-          Name
+          {embedded ? "New item name" : "Name"}
         </Label>
         <Input
           id="name"
@@ -112,13 +119,13 @@ export default function ProductForm({
         </div>
       </div>
 
-      <p className="-mt-2 text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Cost is what you currently pay per item — drives the profit shown on
         sales. Restocking through Inventory → Restock updates this
         automatically; edit it here to correct it directly.
       </p>
 
-      <p className="-mt-2 text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Leave quantity blank for items you don&apos;t count — tingi, sold by
         scoop, services. Blank means stock is never checked or reduced. Entering{" "}
         <span className="font-medium">0</span> means the opposite: counted, and
@@ -161,7 +168,7 @@ export default function ProductForm({
         </div>
       </div>
 
-      <p className="-mt-2 text-xs text-muted-foreground">
+      <p className="text-xs text-muted-foreground">
         Low stock flags this item in the inventory list once its tracked
         count drops to this number or below (no effect on untracked items).
         Expiry date flags it as it approaches or passes that date. Leave
@@ -208,6 +215,62 @@ export default function ProductForm({
           />
         </div>
       </div>
+    </>
+  );
+
+  const cancelButton = onCancel ? (
+    <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
+      Cancel
+    </Button>
+  ) : (
+    <Button
+      variant="ghost"
+      size="sm"
+      nativeButton={false}
+      render={<Link href="/inventory" />}
+    >
+      Cancel
+    </Button>
+  );
+  const submitButton = (
+    <Button type="submit" size="sm" disabled={isPending}>
+      {isPending ? "Saving…" : isEdit ? "Save changes" : "Add item"}
+    </Button>
+  );
+
+  if (embedded) {
+    // Matches BulkRestockForm's own chrome exactly — a card-wrapped field
+    // group in a scrollable region, then a bordered DrawerFooter for the
+    // actions — so this tab and Restock's own cart read as one design
+    // instead of two forms glued together by a tab switch.
+    return (
+      <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-4">
+        {product ? <input type="hidden" name="id" value={product.id} /> : null}
+        <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+          <div className="flex flex-col gap-2 rounded-lg border bg-card p-2.5">
+            {fields}
+          </div>
+        </div>
+
+        {state.error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {state.error}
+          </p>
+        ) : null}
+
+        <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
+          {cancelButton}
+          {submitButton}
+        </DrawerFooter>
+      </form>
+    );
+  }
+
+  return (
+    <form action={formAction} className="flex flex-col gap-4">
+      {product ? <input type="hidden" name="id" value={product.id} /> : null}
+
+      {fields}
 
       {state.error ? (
         <p role="alert" className="text-sm text-destructive">
@@ -216,23 +279,8 @@ export default function ProductForm({
       ) : null}
 
       <div className="flex gap-2">
-        <Button type="submit" size="sm" disabled={isPending}>
-          {isPending ? "Saving…" : isEdit ? "Save changes" : "Add item"}
-        </Button>
-        {onCancel ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-            Cancel
-          </Button>
-        ) : (
-          <Button
-            variant="ghost"
-            size="sm"
-            nativeButton={false}
-            render={<Link href="/inventory" />}
-          >
-            Cancel
-          </Button>
-        )}
+        {submitButton}
+        {cancelButton}
       </div>
     </form>
   );

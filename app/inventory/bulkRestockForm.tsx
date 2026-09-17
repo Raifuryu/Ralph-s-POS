@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
 
@@ -40,10 +40,24 @@ const BULK_RESTOCK_FORM_ID = "bulk-restock-form";
 
 // Owners fill this out while walking around the mall picking up stock — a
 // long, interruptible session (phone locks, the sheet gets closed by
-// accident, the app backgrounds). The draft is saved to localStorage on
-// every change and restored on reopen so none of that gets lost before
-// they've actually submitted.
+// accident, the app backgrounds, or a payment attempt fails because a fund
+// needs topping up first and they step away to /vault to fix it). The draft
+// — both the cart AND the payment split, see BulkRestockDraft below — is
+// saved to localStorage on every change and restored on reopen so none of
+// that gets lost before they've actually submitted successfully.
 const STORAGE_KEY = "ralph-pos:bulk-restock-cart";
+
+/** What actually gets persisted — the cart lines AND the payment split
+    typed into RestockPaymentSheet, so a failed submit (e.g. "For Restock
+    only has ₱X available") that sends the owner off to /vault to adjust a
+    fund doesn't also throw away the split they'd already worked out when
+    they come back. Older drafts saved before `paidWith` existed are a bare
+    CartLine[] rather than this shape — see the restore effect's own
+    backward-compat handling. */
+type BulkRestockDraft = {
+  lines: CartLine[];
+  paidWith: Record<string, string>;
+};
 
 /** "pack" — Cost is the total for the whole batch, matching how a sealed
     case/pack is usually bought. "individual" — Cost per item is entered
@@ -121,6 +135,16 @@ function isValidCartLine(value: unknown): value is CartLine {
     typeof v.costTouched === "boolean" &&
     typeof v.categoryId === "string" &&
     typeof v.description === "string"
+  );
+}
+
+/** Loose on purpose — a stray/unexpected key just means a source no longer
+    in `paymentSources` (e.g. a wallet since archived), which the writer
+    below already drops when it filters against the current source list. */
+function isValidPaidWith(value: unknown): value is Record<string, string> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(
+    (v) => typeof v === "string"
   );
 }
 
@@ -677,7 +701,24 @@ export default function BulkRestockForm({
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (raw) {
-        const parsed: unknown = JSON.parse(raw);
+        const parsedRaw: unknown = JSON.parse(raw);
+        // Old drafts (saved before paidWith was persisted) are a bare
+        // CartLine[] instead of a BulkRestockDraft — treat that shape as
+        // "lines only, no payment split to restore" rather than rejecting
+        // it outright.
+        const parsed = Array.isArray(parsedRaw) ? parsedRaw : (parsedRaw as { lines?: unknown }).lines;
+        const paidWithRaw = Array.isArray(parsedRaw)
+          ? undefined
+          : (parsedRaw as { paidWith?: unknown }).paidWith;
+        if (isValidPaidWith(paidWithRaw)) {
+          // Merged onto the CURRENT paidWith (already correctly shaped by
+          // the useState initializer's own emptyPayment(paymentSources))
+          // rather than a fresh emptyPayment() call here — paymentSources
+          // isn't stable across renders, so depending on it would either be
+          // stale or force this mount-only effect to re-run on every one.
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setPaidWith((prev) => ({ ...prev, ...paidWithRaw }));
+        }
         if (Array.isArray(parsed) && parsed.length > 0 && parsed.every(isValidCartLine)) {
           // A draft saved before costMode/costPerItem/productCost existed
           // won't have them — default to "pack" (the old field's only prior
@@ -715,7 +756,8 @@ export default function BulkRestockForm({
             // happen after hydration completes, in an effect — reading it
             // any earlier (e.g. a lazy useState initializer) would make the
             // first client render diverge from the server-rendered HTML.
-            // eslint-disable-next-line react-hooks/set-state-in-effect
+            // (Already covered by the eslint-disable above this effect's
+            // first setState call — the rule only flags once per effect.)
             setLines(reconciled);
             setJustRestored(true);
             // The last line is the most likely one to have been mid-edit
@@ -733,11 +775,42 @@ export default function BulkRestockForm({
   useEffect(() => {
     if (!hydrated) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(lines));
+      const draft: BulkRestockDraft = { lines, paidWith };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
     } catch {
       // Storage full/unavailable — the draft just won't persist, not fatal.
     }
-  }, [lines, hydrated]);
+  }, [lines, paidWith, hydrated]);
+
+  // Clears the draft once — and only once — a submit has actually
+  // succeeded, instead of eagerly on every submit attempt (the bug this
+  // replaces: a failed submit, e.g. "For Restock only has ₱X available,"
+  // wiped the draft from storage immediately even though the cart was
+  // still sitting right there on screen; the owner then went to /vault to
+  // top up the fund, came back, and found the whole cart gone because
+  // there was nothing left in storage to restore). bulkRestock() either
+  // returns a fresh { error } on failure or calls redirect() on success,
+  // which never delivers a new resolved state back to this hook — so
+  // there's no direct "it worked" signal, only a comparison: snapshot
+  // state.error right before submitting, then once isPending settles back
+  // to false, treat it as success ONLY if state.error is still exactly
+  // what it was before (most commonly null, on a first attempt) — a
+  // GENUINELY NEW error value means this attempt failed and the draft
+  // stays; an UNCHANGED non-null value is ambiguous (could be a redirect
+  // that never touched state, or the same failure repeating) and is left
+  // alone rather than guessed at, same "don't risk losing it" bias.
+  const beforeSubmitErrorRef = useRef<string | null>(null);
+  const submittedRef = useRef(false);
+  useEffect(() => {
+    if (!submittedRef.current || isPending) return;
+    submittedRef.current = false;
+    if (state.error !== null || beforeSubmitErrorRef.current !== null) return;
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // Nothing to clean up if storage isn't available.
+    }
+  }, [isPending, state]);
 
   function updateLine(key: string, patch: Partial<CartLine>) {
     setLines((prev) =>
@@ -789,11 +862,12 @@ export default function BulkRestockForm({
   // Price — gross revenue, not profit (that's potentialIncome - total,
   // shown alongside it below rather than as its own figure, since it's
   // trivially the difference between two numbers already on screen).
-  const potentialIncome = lines.reduce(
-    (sum, line) => sum + toNumber(line.price) * toNumber(line.quantity),
-    0
+  const potentialIncome = roundMoney(
+    lines.reduce((sum, line) => sum + toNumber(line.price) * toNumber(line.quantity), 0)
   );
-  const potentialProfit = potentialIncome - total;
+  // Rounded — otherwise `potentialProfit !== 0` below could show a spurious
+  // "(+₱0.00)" suffix on a batch that really breaks exactly even.
+  const potentialProfit = roundMoney(potentialIncome - total);
 
   const hasIncompleteLine = lines.some((line) => !isLineComplete(line));
 
@@ -805,18 +879,11 @@ export default function BulkRestockForm({
       onSubmit={() => {
         // Only reachable via the submit button, which is disabled while any
         // line is incomplete — so a submit event here means the cart looked
-        // good client-side. Clear the draft now rather than waiting for a
-        // "success" signal from the server action: a successful submit
-        // redirects server-side, which never delivers a resolved state back
-        // to this component to hook a cleanup into. If the server ends up
-        // rejecting it anyway (rare — e.g. an item got deleted moments
-        // before submit), nothing on screen is lost, and the next edit
-        // re-persists this same draft to storage.
-        try {
-          localStorage.removeItem(STORAGE_KEY);
-        } catch {
-          // Nothing to clean up if storage isn't available.
-        }
+        // good client-side. Doesn't touch storage itself — see the
+        // isPending/state effect above for why clearing has to wait until
+        // we actually know whether this attempt succeeded.
+        beforeSubmitErrorRef.current = state.error;
+        submittedRef.current = true;
       }}
       className="flex min-h-0 flex-1 flex-col gap-4"
     >

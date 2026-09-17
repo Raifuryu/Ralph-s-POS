@@ -1,6 +1,7 @@
 import { MoneyBreakdownCard } from "@/components/moneyBreakdownCard";
 import { ACCOUNT_COLORS, ACCOUNT_ORDER } from "@/lib/accountColors";
 import { formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import SetBaselineFundTargetSheet from "./setBaselineFundTargetSheet";
 
@@ -32,10 +33,13 @@ export default function VaultCard({
     value: balances.get(account) ?? 0,
     color: ACCOUNT_COLORS[account],
   }));
-  const total = rows.reduce((sum, row) => sum + row.value, 0);
+  const total = roundMoney(rows.reduce((sum, row) => sum + row.value, 0));
+  // Rounded — subtracting two already-2-decimal amounts can still drift
+  // (e.g. 20043.51 - 20000 landing a hair off), which would misreport
+  // "on target" as a few-centavo "short"/"over" instead.
   const deficit =
     baselineFundTarget !== undefined && baselineFundTarget !== null
-      ? total - baselineFundTarget
+      ? roundMoney(total - baselineFundTarget)
       : undefined;
 
   return (

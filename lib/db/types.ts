@@ -75,6 +75,7 @@ export type Database = {
           note: string | null;
           cashier_id: string;
           created_at: string;
+          restock_batch: string | null;
         };
       };
       services: {
@@ -179,6 +180,7 @@ export type Database = {
           fund: ProfitFundEnum | null;
           wallet_id: string | null;
           transfer_group: string | null;
+          restock_batch: string | null;
         };
       };
       vault_snapshots: {

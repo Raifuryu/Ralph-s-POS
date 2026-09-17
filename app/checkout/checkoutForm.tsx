@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import {
   PAYMENT_METHODS,
   PAYMENT_METHOD_LABELS,
@@ -317,13 +318,16 @@ export default function CheckoutForm({
     (line) => line.product.stock !== null && line.quantity > line.product.stock
   );
 
-  // Display only. The authoritative total is computed by the database.
-  const previewTotal = cart.reduce(
-    (sum, line) => sum + (line.subtotal + line.surcharge - line.discount),
-    0
+  // Display only — the authoritative total is computed by the database.
+  // Still rounded here: a reduce() over several already-2-decimal line
+  // amounts can drift past the centavo, which would then miss the
+  // `insufficient`/Short-vs-change checks below by a hair right at an
+  // exact payment.
+  const previewTotal = roundMoney(
+    cart.reduce((sum, line) => sum + (line.subtotal + line.surcharge - line.discount), 0)
   );
-  const totalDiscount = cart.reduce((sum, line) => sum + line.discount, 0);
-  const totalSurcharge = cart.reduce((sum, line) => sum + line.surcharge, 0);
+  const totalDiscount = roundMoney(cart.reduce((sum, line) => sum + line.discount, 0));
+  const totalSurcharge = roundMoney(cart.reduce((sum, line) => sum + line.surcharge, 0));
   const pieceCount = cart.reduce((sum, line) => sum + line.quantity, 0);
 
   // Discount/surcharge only apply to a per-unit service line (it acts like
@@ -346,30 +350,33 @@ export default function CheckoutForm({
     [serviceDrafts, adjustmentDrafts]
   );
 
-  const serviceFeesTotal = serviceLines.reduce(
-    (sum, { netFee }) => sum + netFee,
-    0
+  const serviceFeesTotal = roundMoney(
+    serviceLines.reduce((sum, { netFee }) => sum + netFee, 0)
   );
   // Each service line's net cash impact on the sale's single combined total
   // — the same signed amount its own box-effect preview described when it
   // was added. Cash-in adds (the customer hands this much over); cash-out
   // subtracts (the store hands cash back out), mirroring how a cash-out
   // line already nets against the till on its own.
-  const serviceLinesTotal = serviceLines.reduce((sum, { draft, netFee }) => {
-    if (draft.cashFlow === "in") {
+  const serviceLinesTotal = roundMoney(
+    serviceLines.reduce((sum, { draft, netFee }) => {
+      if (draft.cashFlow === "in") {
+        return (
+          sum + (draft.deductFee ? draft.principal : draft.principal + netFee)
+        );
+      }
       return (
-        sum + (draft.deductFee ? draft.principal : draft.principal + netFee)
+        sum - (draft.feeInWallet ? draft.principal : draft.principal - netFee)
       );
-    }
-    return (
-      sum - (draft.feeInWallet ? draft.principal : draft.principal - netFee)
-    );
-  }, 0);
+    }, 0)
+  );
   // The sale's single combined total — cart plus every service line, all
   // collected/paid via the one payment method below. A personal take never
   // has a payment for the cart portion, so that part drops out here (any
-  // services alongside it still count normally).
-  const grandTotal = (personalTake ? 0 : previewTotal) + serviceLinesTotal;
+  // services alongside it still count normally). Rounded once more even
+  // though both halves are already rounded — adding two rounded values can
+  // still drift, same reasoning as everywhere else in this file.
+  const grandTotal = roundMoney((personalTake ? 0 : previewTotal) + serviceLinesTotal);
 
   // A personal take's cart needs no payment; a service line always does,
   // regardless of personalTake (that flag only concerns the cart).

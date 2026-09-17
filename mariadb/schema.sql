@@ -88,12 +88,20 @@ CREATE TABLE product_restocks (
   note         TEXT,
   cashier_id   CHAR(36)      NOT NULL,
   created_at   TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Correlates every line from the same bulk-restock submission with each
+  -- other AND with the vault_entries payment rows that funded them (see
+  -- vault_entries.restock_batch's own comment) — generated fresh per
+  -- recordBulkRestock() call, shared by every line in that call. NULL on
+  -- rows written before this column existed; restock history falls back to
+  -- its old cashier+timestamp grouping heuristic for those.
+  restock_batch CHAR(36),
   CONSTRAINT product_restocks_cashier_id_fkey FOREIGN KEY (cashier_id) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT product_restocks_product_id_fkey FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL,
   CONSTRAINT product_restocks_cost_check CHECK (cost >= 0),
   CONSTRAINT product_restocks_quantity_check CHECK (quantity > 0),
   INDEX product_restocks_created_at_idx (created_at DESC),
-  INDEX product_restocks_product_id_idx (product_id)
+  INDEX product_restocks_product_id_idx (product_id),
+  INDEX product_restocks_restock_batch_idx (restock_batch)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================
@@ -320,6 +328,15 @@ CREATE TABLE vault_entries (
   -- account), but every transfer-posting function sets it anyway for
   -- consistency.
   transfer_group         CHAR(36),
+  -- Correlates a restock payment's withdrawal row(s) back to the
+  -- product_restocks lines they funded — same value recordBulkRestock()
+  -- stamps on every product_restocks row from that same call (see its own
+  -- comment). Set only on the 'withdrawal' rows recordBulkRestock posts for
+  -- its payment split; NULL on every other entry_type. Restock history uses
+  -- this to show which account/fund/wallet paid for a receipt, and to work
+  -- out how much of it (if any) wasn't covered by a logged payment source at
+  -- all — money that came from the owner's own pocket.
+  restock_batch          CHAR(36),
   CONSTRAINT vault_entries_seq_key UNIQUE (seq),
   CONSTRAINT vault_entries_created_by_fkey FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT vault_entries_service_transaction_id_fkey FOREIGN KEY (service_transaction_id) REFERENCES service_transactions(id) ON DELETE SET NULL,
@@ -343,7 +360,8 @@ CREATE TABLE vault_entries (
   INDEX vault_entries_account_seq_idx (account, seq DESC),
   INDEX vault_entries_seq_idx (seq DESC),
   INDEX vault_entries_wallet_id_seq_idx (wallet_id, seq DESC),
-  INDEX vault_entries_transfer_group_idx (transfer_group)
+  INDEX vault_entries_transfer_group_idx (transfer_group),
+  INDEX vault_entries_restock_batch_idx (restock_batch)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =============================================================================

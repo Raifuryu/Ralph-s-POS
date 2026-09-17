@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import {
   feeForPrincipal,
   MONEY_ACCOUNT_LABELS,
@@ -221,7 +222,7 @@ export default function ServiceLineEditor({
   const hasWallet = Boolean(selected?.wallet);
   const isCashOut = selected?.cash_flow === "out";
   const cashInEffectivePrincipal = deductFee
-    ? Math.max(0, principalNum - feeNum)
+    ? Math.max(0, roundMoney(principalNum - feeNum))
     : principalNum;
   const feeExceedsAmount = deductFee && feeNum > principalNum;
 

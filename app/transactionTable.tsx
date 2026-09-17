@@ -11,6 +11,7 @@ import {
   friendlyDayLabel,
   storeDayKey
 } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import {
   MONEY_ACCOUNT_LABELS,
   PAYMENT_METHOD_LABELS,
@@ -74,7 +75,11 @@ function saleProfit(items: TransactionItem[]) {
       revenueWithUnknownCost += lineRevenue;
     }
   }
-  return { profit, revenueWithUnknownCost };
+  // Rounded — a running sum/difference over several already-2-decimal line
+  // amounts can still drift past the centavo, which would then miss the
+  // `revenueWithUnknownCost >= total` check below by a hair even when a
+  // sale's cost really is fully unknown.
+  return { profit: roundMoney(profit), revenueWithUnknownCost: roundMoney(revenueWithUnknownCost) };
 }
 
 /** Income contributed by one entry — the figure day totals sum. Sales count

@@ -104,13 +104,11 @@ export default function BulkRestockSheet({
               wallets={wallets}
             />
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <ProductForm
-                key="new-item"
-                categories={categories}
-                onCancel={() => setMode("restock")}
-              />
-            </div>
+            <ProductForm
+              key="new-item"
+              categories={categories}
+              onCancel={() => setMode("restock")}
+            />
           )}
         </div>
       </DrawerContent>
