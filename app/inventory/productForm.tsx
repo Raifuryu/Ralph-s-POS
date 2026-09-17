@@ -8,6 +8,8 @@ import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
+import { formatPeso } from "@/lib/format";
+import { roundMoney, sellingPriceFor, toNumber } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
 import { createProduct, updateProduct, type InventoryState } from "./actions";
 
@@ -44,6 +46,14 @@ export default function ProductForm({
   );
 
   const [price, setPrice] = useState(String(product?.price ?? ""));
+  // Controlled alongside `price` so the embedded layout can show the same
+  // live "₱X/pc · suggested ₱Y" hint and footer margin CartLineCard does.
+  const [cost, setCost] = useState(String(product?.cost ?? ""));
+
+  const priceNum = toNumber(price);
+  const costNum = toNumber(cost);
+  const suggested = costNum > 0 ? sellingPriceFor(costNum) : null;
+  const margin = priceNum > 0 && costNum > 0 ? roundMoney(priceNum - costNum) : null;
 
   const fields = (
     <>
@@ -93,7 +103,8 @@ export default function ProductForm({
             step="0.01"
             min="0"
             inputMode="decimal"
-            defaultValue={product?.cost ?? ""}
+            value={cost}
+            onChange={(event) => setCost(event.target.value)}
             placeholder="10.00"
           />
         </div>
@@ -218,37 +229,171 @@ export default function ProductForm({
     </>
   );
 
-  const cancelButton = onCancel ? (
-    <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-      Cancel
-    </Button>
-  ) : (
-    <Button
-      variant="ghost"
-      size="sm"
-      nativeButton={false}
-      render={<Link href="/inventory" />}
-    >
-      Cancel
-    </Button>
-  );
-  const submitButton = (
-    <Button type="submit" size="sm" disabled={isPending}>
-      {isPending ? "Saving…" : isEdit ? "Save changes" : "Add item"}
-    </Button>
-  );
-
   if (embedded) {
-    // Matches BulkRestockForm's own chrome exactly — a card-wrapped field
-    // group in a scrollable region, then a bordered DrawerFooter for the
-    // actions — so this tab and Restock's own cart read as one design
-    // instead of two forms glued together by a tab switch.
+    // Deliberately its own layout rather than the standalone one above in a
+    // card: the owner wants this tab and Restock to read as the same screen,
+    // so it mirrors CartLineCard field-for-field — same card, same gap-2
+    // rhythm, same "New item name" → Category/Description → Qty/Cost/Price
+    // order, same one-line suggested-price hint — and BulkRestockForm's own
+    // footer (a headline figure on the left, Cancel + primary on the right,
+    // both default-size). The long explanatory paragraphs the standalone
+    // editor carries are collapsed into the single hint line below, since
+    // Restock's own card has no room for that kind of prose either.
     return (
       <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-4">
         {product ? <input type="hidden" name="id" value={product.id} /> : null}
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
           <div className="flex flex-col gap-2 rounded-lg border bg-card p-2.5">
-            {fields}
+            <div className="flex flex-col gap-1">
+              <Label htmlFor="name" className="text-xs">
+                New item name
+              </Label>
+              <Input
+                id="name"
+                name="name"
+                required
+                defaultValue={product?.name}
+                placeholder="e.g. Sardinas"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="category_id" className="text-xs">
+                  Category
+                </Label>
+                <Select
+                  id="category_id"
+                  name="category_id"
+                  defaultValue={product?.category_id ?? ""}
+                >
+                  <option value="">No category</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="description" className="text-xs">
+                  Description
+                </Label>
+                <Input
+                  id="description"
+                  name="description"
+                  defaultValue={product?.description ?? ""}
+                  placeholder="Optional"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="stock" className="text-xs">
+                  Qty
+                </Label>
+                {/* No min: oversold items carry a negative count until
+                    recounted, and the row must remain saveable as-is. */}
+                <Input
+                  id="stock"
+                  name="stock"
+                  type="number"
+                  step="1"
+                  inputMode="numeric"
+                  defaultValue={product?.stock ?? ""}
+                  placeholder="Blank"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="cost" className="text-xs">
+                  Cost
+                </Label>
+                <Input
+                  id="cost"
+                  name="cost"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  inputMode="decimal"
+                  value={cost}
+                  onChange={(event) => setCost(event.target.value)}
+                  placeholder="10.00"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="price" className="text-xs">
+                  Price
+                </Label>
+                <Input
+                  id="price"
+                  name="price"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  required
+                  inputMode="decimal"
+                  value={price}
+                  onChange={(event) => setPrice(event.target.value)}
+                  placeholder="0.00"
+                />
+              </div>
+            </div>
+
+            {suggested !== null ? (
+              <p className="text-xs">
+                <span className="font-medium">{formatPeso(costNum)}/pc</span>
+                <span className="text-muted-foreground"> · suggested </span>
+                <span className="font-medium">{formatPeso(suggested)}</span>
+                {price === String(suggested) ? null : (
+                  <>
+                    <span className="text-muted-foreground"> — </span>
+                    <button
+                      type="button"
+                      className="font-medium text-primary underline underline-offset-2"
+                      onClick={() => setPrice(String(suggested))}
+                    >
+                      use this
+                    </button>
+                  </>
+                )}
+              </p>
+            ) : null}
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="low_stock_threshold" className="text-xs">
+                  Low stock alert
+                </Label>
+                <Input
+                  id="low_stock_threshold"
+                  name="low_stock_threshold"
+                  type="number"
+                  step="1"
+                  min="0"
+                  inputMode="numeric"
+                  defaultValue={product?.low_stock_threshold ?? ""}
+                  placeholder="Optional"
+                />
+              </div>
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="expiry_date" className="text-xs">
+                  Expiry date
+                </Label>
+                <Input
+                  id="expiry_date"
+                  name="expiry_date"
+                  type="date"
+                  defaultValue={product?.expiry_date ?? ""}
+                />
+              </div>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Nothing is bought here — Qty and Cost are optional. Leave Qty
+              blank for items you don&apos;t count (tingi, by scoop);
+              restocking through Restock fills Cost in for you.
+            </p>
           </div>
         </div>
 
@@ -258,9 +403,27 @@ export default function ProductForm({
           </p>
         ) : null}
 
-        <DrawerFooter className="flex-row items-center justify-end gap-2 border-t p-0 pt-4">
-          {cancelButton}
-          {submitButton}
+        <DrawerFooter className="flex-row items-center justify-between gap-3 border-t p-0 pt-4">
+          <div>
+            <p className="text-sm text-muted-foreground">Price</p>
+            <p className="text-2xl font-semibold tabular-nums">
+              {formatPeso(priceNum)}
+            </p>
+            {margin !== null ? (
+              <p className="text-xs text-muted-foreground tabular-nums">
+                {formatPeso(costNum)} cost · {margin >= 0 ? "+" : "-"}
+                {formatPeso(Math.abs(margin))}/pc
+              </p>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={isPending}>
+              {isPending ? "Saving…" : "Add item"}
+            </Button>
+          </div>
         </DrawerFooter>
       </form>
     );
@@ -279,8 +442,17 @@ export default function ProductForm({
       ) : null}
 
       <div className="flex gap-2">
-        {submitButton}
-        {cancelButton}
+        <Button type="submit" size="sm" disabled={isPending}>
+          {isPending ? "Saving…" : isEdit ? "Save changes" : "Add item"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          nativeButton={false}
+          render={<Link href="/inventory" />}
+        >
+          Cancel
+        </Button>
       </div>
     </form>
   );
