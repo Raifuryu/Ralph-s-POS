@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChevronDownIcon, ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
 
@@ -642,6 +643,7 @@ export default function BulkRestockForm({
       wallets' own comment in mariadb/schema.sql). */
   wallets: { id: string; name: string; balance: number }[];
 }) {
+  const router = useRouter();
   const [state, formAction, isPending] = useActionState(
     bulkRestock,
     initialState
@@ -782,35 +784,39 @@ export default function BulkRestockForm({
     }
   }, [lines, paidWith, hydrated]);
 
-  // Clears the draft once — and only once — a submit has actually
-  // succeeded, instead of eagerly on every submit attempt (the bug this
-  // replaces: a failed submit, e.g. "For Restock only has ₱X available,"
-  // wiped the draft from storage immediately even though the cart was
-  // still sitting right there on screen; the owner then went to /vault to
-  // top up the fund, came back, and found the whole cart gone because
-  // there was nothing left in storage to restore). bulkRestock() either
-  // returns a fresh { error } on failure or calls redirect() on success,
-  // which never delivers a new resolved state back to this hook — so
-  // there's no direct "it worked" signal, only a comparison: snapshot
-  // state.error right before submitting, then once isPending settles back
-  // to false, treat it as success ONLY if state.error is still exactly
-  // what it was before (most commonly null, on a first attempt) — a
-  // GENUINELY NEW error value means this attempt failed and the draft
-  // stays; an UNCHANGED non-null value is ambiguous (could be a redirect
-  // that never touched state, or the same failure repeating) and is left
-  // alone rather than guessed at, same "don't risk losing it" bias.
-  const beforeSubmitErrorRef = useRef<string | null>(null);
-  const submittedRef = useRef(false);
+  // A successful submit clears everything this form is holding — the cart,
+  // the payment split, the expanded line, and the saved draft — then closes
+  // the sheet. bulkRestock reports success as state.ok instead of
+  // redirecting precisely so this can run: the sheet stays mounted when the
+  // drawer closes, so without an explicit reset the submitted cart AND its
+  // payment split would still be sitting here the next time it's opened.
+  // On failure state.ok is never set, so everything stays exactly as typed
+  // — including the draft in storage, which the owner needs when a payment
+  // is rejected (e.g. "For Restock only has ₱X available") and they step
+  // away to /vault to fix it before retrying.
   useEffect(() => {
-    if (!submittedRef.current || isPending) return;
-    submittedRef.current = false;
-    if (state.error !== null || beforeSubmitErrorRef.current !== null) return;
+    if (!state.ok) return;
     try {
       localStorage.removeItem(STORAGE_KEY);
     } catch {
       // Nothing to clean up if storage isn't available.
     }
-  }, [isPending, state]);
+    const fresh = emptyLine();
+    // Reacting to an action result is exactly what this effect is for —
+    // there's no render-time value to derive this from.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLines([fresh]);
+    setExpandedKey(fresh.key);
+    setJustRestored(false);
+    // Keyed off whatever sources the split currently has rather than
+    // rebuilding from paymentSources — that array is rebuilt every render,
+    // so depending on it here would re-run this effect constantly.
+    setPaidWith((prev) =>
+      Object.fromEntries(Object.keys(prev).map((source) => [source, ""]))
+    );
+    setPaymentSheetOpen(false);
+    router.push("/inventory", { scroll: false });
+  }, [state.ok, router]);
 
   function updateLine(key: string, patch: Partial<CartLine>) {
     setLines((prev) =>
@@ -876,15 +882,6 @@ export default function BulkRestockForm({
     <form
       id={BULK_RESTOCK_FORM_ID}
       action={formAction}
-      onSubmit={() => {
-        // Only reachable via the submit button, which is disabled while any
-        // line is incomplete — so a submit event here means the cart looked
-        // good client-side. Doesn't touch storage itself — see the
-        // isPending/state effect above for why clearing has to wait until
-        // we actually know whether this attempt succeeded.
-        beforeSubmitErrorRef.current = state.error;
-        submittedRef.current = true;
-      }}
       className="flex min-h-0 flex-1 flex-col gap-4"
     >
       <input

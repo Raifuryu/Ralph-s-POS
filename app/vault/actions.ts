@@ -8,7 +8,9 @@ import { parseMoney } from "@/lib/money";
 import { pool } from "@/lib/mysql/pool";
 import {
   labelPersonalTake,
+  labelServiceTake,
   settlePersonalTake,
+  settleServiceTake,
 } from "@/lib/mysql/operations/settlePersonalTake";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
 import { adjustVaultBalance } from "@/lib/mysql/operations/adjustVaultBalance";
@@ -782,8 +784,20 @@ export async function labelDebtor(
 ): Promise<PersonalTakeActionState> {
   const transactionId = String(formData.get("transaction_id") ?? "");
   if (!transactionId) return { error: "Missing transaction." };
+  // A take is either a cart (transactions) or an e-service
+  // (service_transactions) — same sheet, two tables. See PersonalTake.kind.
+  const isService = formData.get("kind") === "service";
 
   try {
+    if (isService) {
+      await labelServiceTake({
+        serviceTransactionId: transactionId,
+        ...debtorFields(formData),
+      });
+      revalidatePath("/vault");
+      revalidatePath("/");
+      return { error: null, ok: true };
+    }
     await labelPersonalTake({ transactionId, ...debtorFields(formData) });
     revalidatePath("/vault");
     revalidatePath("/");
@@ -811,9 +825,26 @@ export async function settleDebt(
   // pair in personalTakesSheet.tsx, each submitting the same form with a
   // different name="at_selling_price" value baked into the button itself.
   const atSellingPrice = formData.get("at_selling_price") === "1";
+  const isService = formData.get("kind") === "service";
 
   try {
     const user = await requireCurrentUser();
+    if (isService) {
+      // A service take has no cost-vs-selling choice — its debt is simply
+      // the principal + fee that never got handed over (see
+      // settleServiceTake).
+      await settleServiceTake(
+        {
+          serviceTransactionId: transactionId,
+          account,
+          ...debtorFields(formData),
+        },
+        user.id
+      );
+      revalidatePath("/vault");
+      revalidatePath("/");
+      return { error: null, ok: true };
+    }
     await settlePersonalTake(
       { transactionId, account, atSellingPrice, ...debtorFields(formData) },
       user.id

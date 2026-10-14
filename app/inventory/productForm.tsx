@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { DrawerFooter } from "@/components/ui/drawer";
@@ -41,6 +42,8 @@ export default function ProductForm({
 }) {
   const isEdit = Boolean(product);
   const embedded = Boolean(onCancel);
+  const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, isPending] = useActionState(
     isEdit ? updateProduct : createProduct,
     initialState
@@ -89,6 +92,24 @@ export default function ProductForm({
   // CartLineCard's own handleCostModeChange gives: a stale pack total
   // silently reappearing as a per-item figure (or vice versa) is worse than
   // retyping it.
+  // Same reset-on-success the cart tab needs, and for the same reason:
+  // createProduct reports success instead of redirecting because this sheet
+  // stays mounted when the drawer closes, so without clearing here the item
+  // just registered would still be filled in the next time it's opened.
+  // form.reset() covers the uncontrolled fields (name, category, the two
+  // flags); the controlled ones are reset alongside it.
+  useEffect(() => {
+    if (!state.ok || !embedded) return;
+    formRef.current?.reset();
+    // Reacting to an action result — nothing render-time to derive it from.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPrice("");
+    setCost("");
+    setStock("");
+    setCostMode("individual");
+    router.push("/inventory", { scroll: false });
+  }, [state.ok, embedded, router]);
+
   function handleCostModeChange(next: "pack" | "individual") {
     setCostMode(next);
     setCost("");
@@ -279,7 +300,11 @@ export default function ProductForm({
     // editor carries are collapsed into the single hint line below, since
     // Restock's own card has no room for that kind of prose either.
     return (
-      <form action={formAction} className="flex min-h-0 flex-1 flex-col gap-4">
+      <form
+        ref={formRef}
+        action={formAction}
+        className="flex min-h-0 flex-1 flex-col gap-4"
+      >
         {product ? <input type="hidden" name="id" value={product.id} /> : null}
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
           <div className="flex flex-col gap-2 rounded-lg border bg-card p-2.5">

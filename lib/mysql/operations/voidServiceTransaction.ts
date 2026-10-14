@@ -16,15 +16,27 @@ export async function voidServiceTransaction(
   const reason = params.reason?.trim() || null;
 
   await withTransaction(async (conn) => {
-    const rows = await queryConn<{ voided_at: string | null }>(
+    const rows = await queryConn<{
+      voided_at: string | null;
+      is_personal_take: boolean;
+      settled_at: string | null;
+    }>(
       conn,
-      "SELECT voided_at FROM service_transactions WHERE id = ? FOR UPDATE",
+      "SELECT voided_at, is_personal_take, settled_at FROM service_transactions WHERE id = ? FOR UPDATE",
       [serviceTransactionId]
     );
     const serviceTransaction = rows[0];
     if (!serviceTransaction) throw new Error("Service transaction not found");
     if (serviceTransaction.voided_at !== null) {
       throw new Error("This service transaction has already been voided");
+    }
+    // Same rule voidTransaction applies to a settled product take: the
+    // debtor has already paid, and that deposit is real money on record —
+    // there's nothing left to void.
+    if (serviceTransaction.is_personal_take && serviceTransaction.settled_at !== null) {
+      throw new Error(
+        "This take has already been settled (paid back) — it can't be voided anymore"
+      );
     }
 
     await conn.query(

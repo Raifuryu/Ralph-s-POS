@@ -26,6 +26,7 @@ export default function ServicePickerDrawer({
   services,
   balances,
   paymentMethod,
+  personalTake = false,
   drafts,
   onAdd
 }: {
@@ -34,6 +35,8 @@ export default function ServicePickerDrawer({
   /** The sale's single payment method — passed straight through to
       ServiceLineEditor, which no longer picks its own. */
   paymentMethod: MoneyAccount;
+  /** Forwarded to ServiceLineEditor — see its own personalTake comment. */
+  personalTake?: boolean;
   drafts: ServiceDraft[];
   onAdd: (draft: ServiceDraft) => void;
 }) {
@@ -67,6 +70,7 @@ export default function ServicePickerDrawer({
             services={services}
             balances={balances}
             paymentMethod={paymentMethod}
+            personalTake={personalTake}
             drafts={drafts}
             onAdd={onAdd}
             onClose={() => setOpen(false)}

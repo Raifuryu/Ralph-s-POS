@@ -485,6 +485,10 @@ function ServiceBlock({
   const tendered = data.tendered !== null ? Number(data.tendered) : null;
   const due = Number(data.principal) + Number(data.fee);
   const isVoided = data.voided_at !== null;
+  // A service taken on utang shows on the day it was PAID, and like a paid
+  // cart take it can't be voided anymore (voidServiceTransaction refuses),
+  // so it isn't tappable either.
+  const isPaidTake = data.is_personal_take && data.settled_at !== null;
 
   const [state, formAction, isPending] = useActionState(
     voidServiceTransaction,
@@ -496,7 +500,7 @@ function ServiceBlock({
   }, [state.error]);
 
   function handleClick() {
-    if (isVoided || isPending) return;
+    if (isVoided || isPending || isPaidTake) return;
     if (
       !confirm(
         "Void this service transaction? The income it posted will be removed from the vault. This can't be undone."
@@ -512,8 +516,8 @@ function ServiceBlock({
   return (
     <div
       role="button"
-      tabIndex={isVoided ? -1 : 0}
-      aria-disabled={isVoided || isPending}
+      tabIndex={isVoided || isPaidTake ? -1 : 0}
+      aria-disabled={isVoided || isPending || isPaidTake}
       onClick={handleClick}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -525,7 +529,9 @@ function ServiceBlock({
         "-mx-2 flex gap-2 border-b border-l-2 px-2 py-2.5 transition-colors last:border-b-0",
         isVoided
           ? "cursor-default border-l-destructive bg-destructive/5 opacity-70"
-          : "cursor-pointer border-l-transparent hover:bg-muted/50 active:bg-muted",
+          : isPaidTake
+            ? "cursor-default border-l-transparent"
+            : "cursor-pointer border-l-transparent hover:bg-muted/50 active:bg-muted",
         isPending && "opacity-50"
       )}
     >
@@ -533,7 +539,7 @@ function ServiceBlock({
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline justify-between gap-2">
           <p className="min-w-0 truncate text-sm font-medium">
-            {formatTime(data.created_at)}
+            {formatTime(isPaidTake ? data.settled_at! : data.created_at)}
             <span className="ml-2 font-normal text-muted-foreground">
               {data.service_name}
             </span>
@@ -577,6 +583,14 @@ function ServiceBlock({
             </>
           )}
         </p>
+
+        {isPaidTake ? (
+          <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+            Personal take · {formatPeso(due)} paid
+            {data.debtor_name ? ` · ${data.debtor_name}` : ""} · taken{" "}
+            {formatDate(data.created_at)}
+          </p>
+        ) : null}
 
         {data.reference || data.description ? (
           <p className="mt-0.5 text-xs text-muted-foreground">

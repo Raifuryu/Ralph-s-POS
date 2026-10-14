@@ -14,7 +14,8 @@ import {
   WEEKDAY_ORDER,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
-import { incomeSales } from "@/lib/personalTakes";
+import { incomeSales, serviceOnPaidDate } from "@/lib/personalTakes";
+import { roundMoney } from "@/lib/pricing";
 import { attachSettlements } from "@/lib/personalTakesQuery";
 import {
   MONEY_ACCOUNT_LABELS,
@@ -67,6 +68,8 @@ type ServiceRevenuePoint = {
   service_name: string;
   unit_label: string | null;
   unit_quantity: number | null;
+  is_personal_take: boolean;
+  settled_at: string | null;
 };
 
 function LoadError({ message }: { message: string }) {
@@ -290,6 +293,11 @@ export default async function StatisticsPage({
 
   let sales: TransactionWithItems[];
   let settledTakes: TransactionWithItems[];
+  let unpaidServiceTakes: {
+    service_id: string | null;
+    principal: number;
+    fee: number;
+  }[];
   let serviceData: ServiceRevenuePoint[];
   let restockData: {
     product_id: string | null;
@@ -313,6 +321,7 @@ export default async function StatisticsPage({
     [
       transactions,
       settledTakeRows,
+      unpaidServiceTakes,
       serviceData,
       restockData,
       vaultMovementData,
@@ -330,10 +339,30 @@ export default async function StatisticsPage({
            ORDER BY settled_at ASC`,
           dateParams
         ),
-        queryRows<ServiceRevenuePoint>(
-          `SELECT service_id, fee, wallet, payment_account, created_at, voided_at, service_name, unit_label, unit_quantity
-           FROM service_transactions ${dateWhere} ORDER BY created_at ASC`,
+        // E-services taken on utang and still unpaid — counted alongside
+        // unpaid cart takes below, by the day they were taken (they aren't
+        // income yet, so there's no payment day to file them under).
+        queryRows<{ service_id: string | null; principal: number; fee: number }>(
+          `SELECT service_id, principal, fee FROM service_transactions
+           WHERE is_personal_take = 1 AND voided_at IS NULL AND settled_at IS NULL
+             ${dateWhere ? `AND ${dateConditions.join(" AND ")}` : ""}`,
           dateParams
+        ),
+        // Services paid for normally fall in the window by created_at; one
+        // taken on utang counts only once paid, by settled_at (see
+        // serviceOnPaidDate, which rewrites its date for aggregation).
+        queryRows<ServiceRevenuePoint>(
+          `SELECT service_id, fee, wallet, payment_account, created_at, voided_at,
+                  service_name, unit_label, unit_quantity, is_personal_take, settled_at
+           FROM service_transactions
+           WHERE (is_personal_take = 0${dateWhere ? ` AND ${dateConditions.join(" AND ")}` : ""})
+              OR (is_personal_take = 1 AND voided_at IS NULL AND settled_at IS NOT NULL${
+                dateWhere
+                  ? ` AND ${dateConditions.map((c) => c.replace("created_at", "settled_at")).join(" AND ")}`
+                  : ""
+              })
+           ORDER BY created_at ASC`,
+          [...dateParams, ...dateParams]
         ),
         queryRows<{
           product_id: string | null;
@@ -355,7 +384,7 @@ export default async function StatisticsPage({
         }>(
           `SELECT amount, account, entry_type, created_at FROM vault_entries
            ${dateWhere ? `${dateWhere} AND` : "WHERE"} entry_type IN ('deposit', 'withdrawal')
-             AND transaction_id IS NULL`,
+             AND transaction_id IS NULL AND service_transaction_id IS NULL`,
           dateParams
         ),
         // Unfiltered by is_active: a sale of a since-deactivated product
@@ -454,7 +483,9 @@ export default async function StatisticsPage({
 
   // A voided service transaction had every entry it posted reversed — same
   // "excluded everywhere" treatment as a voided/personal-take sale.
-  const serviceList = serviceData.filter((s) => !s.voided_at);
+  const serviceList = serviceData
+    .filter((s) => !s.voided_at)
+    .map(serviceOnPaidDate);
   const effectiveServiceList = serviceList.filter(matchesServiceFilter);
 
   // A voided sale had its stock and any posted income both reversed — it
@@ -667,13 +698,36 @@ export default async function StatisticsPage({
     }
   }
 
+  // Unpaid service takes join the same figure — what's owed on one is its
+  // principal + fee (see settleServiceTake).
+  let unpaidServiceTakesCount = 0;
+  for (const take of unpaidServiceTakes) {
+    if (
+      hasAnyFilter &&
+      !(
+        hasServiceFilter &&
+        take.service_id !== null &&
+        selectedServices.has(take.service_id)
+      )
+    ) {
+      continue;
+    }
+    unpaidServiceTakesCount += 1;
+    personalTakesValue = roundMoney(
+      personalTakesValue + Number(take.principal) + Number(take.fee)
+    );
+  }
+
   const eServiceTotal = effectiveServiceList.reduce(
     (sum, s) => sum + Number(s.fee),
     0
   );
   const totalRevenue = storeTotal + eServiceTotal;
   const transactionCount =
-    touchedSaleIds.size + touchedPersonalTakeIds.size + effectiveServiceList.length;
+    touchedSaleIds.size +
+    touchedPersonalTakeIds.size +
+    unpaidServiceTakesCount +
+    effectiveServiceList.length;
   const avgSale = touchedSaleIds.size > 0 ? storeTotal / touchedSaleIds.size : 0;
   const grossProfit = storeMargin + eServiceTotal;
 

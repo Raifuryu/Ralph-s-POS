@@ -14,7 +14,16 @@ import {
   type RestockPaymentSource,
 } from "@/lib/mysql/operations/recordBulkRestock";
 
-export type InventoryState = { error: string | null };
+export type InventoryState = {
+  error: string | null;
+  /** Set once a submit actually succeeded. Only bulkRestock/createProduct
+      report it: both are submitted from a sheet that stays mounted after
+      the drawer closes, so the form needs a real success signal to clear
+      itself on — a redirect() here would close the drawer but leave the
+      cart, the payment split, and the typed fields sitting in React state,
+      ready to reappear the next time the sheet is opened. */
+  ok?: boolean;
+};
 
 type Parsed = {
   name: string;
@@ -165,7 +174,9 @@ export async function createProduct(
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
-  redirect("/inventory");
+  // Same reason as bulkRestock below — the "New item" tab lives in a sheet
+  // that stays mounted, so it needs a success signal to clear itself on.
+  return { error: null, ok: true };
 }
 
 /** Logs a whole supplier receipt at once via recordBulkRestock — every line
@@ -300,7 +311,9 @@ export async function bulkRestock(
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
-  redirect("/inventory");
+  // Deliberately not a redirect — see InventoryState.ok. BulkRestockForm
+  // resets itself and closes the sheet once it sees this.
+  return { error: null, ok: true };
 }
 
 export async function deleteProduct(

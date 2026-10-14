@@ -137,6 +137,11 @@ export type Database = {
           fee: number;
           cashier_id: string;
           created_at: string;
+          is_personal_take: boolean;
+          debtor_name: string | null;
+          debtor_description: string | null;
+          settled_at: string | null;
+          settled_by: string | null;
           wallet: MoneyAccountEnum | null;
           payment_account: MoneyAccountEnum;
           contact_number: string | null;

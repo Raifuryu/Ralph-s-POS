@@ -376,12 +376,25 @@ export default function CheckoutForm({
   // services alongside it still count normally). Rounded once more even
   // though both halves are already rounded — adding two rounded values can
   // still drift, same reasoning as everywhere else in this file.
-  const grandTotal = roundMoney((personalTake ? 0 : previewTotal) + serviceLinesTotal);
+  // A take collects nothing at the counter — not for the cart, and not for
+  // a service line either: the debtor owes each service's principal + fee
+  // until they pay it back (see recordService's own personalTake handling).
+  const grandTotal = roundMoney(
+    personalTake ? 0 : previewTotal + serviceLinesTotal
+  );
+  // What a take puts on the debtor's tab: the services' own principal+fee.
+  // The cart's share isn't shown here — a take is valued at COST, which
+  // only the server knows (see checkout()'s own personal-take total).
+  const serviceTakeOwed = roundMoney(
+    serviceDrafts.reduce(
+      (sum, draft) => sum + draft.principal + draft.fee,
+      0
+    )
+  );
 
-  // A personal take's cart needs no payment; a service line always does,
-  // regardless of personalTake (that flag only concerns the cart).
+  // Nothing is paid for on a take, cart or service alike.
   const showPaymentSection =
-    (cart.length > 0 && !personalTake) || serviceDrafts.length > 0;
+    !personalTake && (cart.length > 0 || serviceDrafts.length > 0);
 
   const insufficient =
     showPaymentSection &&
@@ -504,6 +517,7 @@ export default function CheckoutForm({
           services={services}
           balances={balances}
           paymentMethod={paymentMethod}
+          personalTake={personalTake}
           drafts={serviceDrafts}
           onAdd={(draft) => setServiceDrafts((prev) => [...prev, draft])}
         />
@@ -1036,10 +1050,8 @@ export default function CheckoutForm({
 
       {/* One payment method and one "Customer gave" for the whole sale —
           cart and every service line together, same as an item-only sale
-          always worked. Shown whenever there's a cart to pay for (and it's
-          not a personal take, which has no payment) or at least one
-          service (services always need a payment method regardless of
-          personalTake, since that flag only concerns the cart). */}
+          always worked. Hidden entirely on a personal take: nothing is
+          collected for either the cart or the services on it. */}
       {showPaymentSection ? (
         // 65/35 fr split — payment method gets 65%, Customer gave gets
         // 35% — rather than content-sized, so the split holds steady
@@ -1114,6 +1126,9 @@ export default function CheckoutForm({
         <div>
           <p className="text-sm text-muted-foreground">
             {personalTake ? "Value taken" : "Total"}
+            {personalTake && serviceTakeOwed > 0
+              ? ` · ${formatPeso(serviceTakeOwed)} in services owed`
+              : ""}
             {pieceCount > 0
               ? ` · ${pieceCount} pc${pieceCount === 1 ? "" : "s"}`
               : ""}

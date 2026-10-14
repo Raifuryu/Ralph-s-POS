@@ -213,6 +213,17 @@ CREATE TABLE service_transactions (
   fee              DECIMAL(10,2) NOT NULL,
   cashier_id       CHAR(36)      NOT NULL,
   created_at       TIMESTAMP     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  -- Taken on utang rather than paid for — the exact mirror of
+  -- transactions.is_personal_take, for a service instead of a cart. The
+  -- store-side leg still posts (the load still sends, the cash still
+  -- leaves the till); the incoming legs don't, so the debtor owes
+  -- principal + fee. See recordService's own vault-posting comment, and
+  -- settlePersonalTake for how paying it back lands in the vault.
+  is_personal_take   TINYINT(1)  NOT NULL DEFAULT 0,
+  debtor_name        VARCHAR(255),
+  debtor_description TEXT,
+  settled_at         TIMESTAMP   NULL,
+  settled_by         CHAR(36),
   wallet           ENUM('cash','gcash','maya'),
   payment_account  ENUM('cash','gcash','maya') NOT NULL,
   contact_number   TEXT,
@@ -231,9 +242,13 @@ CREATE TABLE service_transactions (
   CONSTRAINT service_transactions_cashier_id_fkey FOREIGN KEY (cashier_id) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT service_transactions_service_id_fkey FOREIGN KEY (service_id) REFERENCES services(id) ON DELETE SET NULL,
   CONSTRAINT service_transactions_voided_by_fkey FOREIGN KEY (voided_by) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT service_transactions_settled_by_fkey FOREIGN KEY (settled_by) REFERENCES users(id) ON DELETE RESTRICT,
+  CONSTRAINT service_transactions_settled_fields_check CHECK (settled_at IS NOT NULL OR settled_by IS NULL),
+  CONSTRAINT service_transactions_settled_personal_take_check CHECK (settled_at IS NULL OR is_personal_take = 1),
   CONSTRAINT service_transactions_principal_fee_check CHECK ((principal + fee) > 0),
   CONSTRAINT service_transactions_tendered_check CHECK (
-    tendered IS NULL OR (cash_flow = 'in' AND payment_account = 'cash' AND tendered >= (principal + fee))
+    tendered IS NULL
+    OR (is_personal_take = 0 AND cash_flow = 'in' AND payment_account = 'cash' AND tendered >= (principal + fee))
   ),
   CONSTRAINT service_transactions_discount_amount_check CHECK (discount_amount >= 0),
   CONSTRAINT service_transactions_surcharge_amount_check CHECK (surcharge_amount >= 0),

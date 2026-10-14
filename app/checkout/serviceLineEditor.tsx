@@ -145,6 +145,7 @@ export default function ServiceLineEditor({
   services,
   balances,
   paymentMethod,
+  personalTake = false,
   drafts,
   onAdd,
   onClose
@@ -157,6 +158,11 @@ export default function ServiceLineEditor({
   /** The sale's single payment method, chosen once for the whole sale
       (cart + every service line) — not picked per service anymore. */
   paymentMethod: MoneyAccount;
+  /** The whole sale is on utang — nothing is collected for this line
+      either, so the debtor owes its principal + fee (see recordService's
+      own personalTake handling). Only changes the preview copy here; the
+      split itself is decided server-side. */
+  personalTake?: boolean;
   /** Service lines already in the sale — drives the per-row "×N" badge and
       the list screen's footer count. */
   drafts: ServiceDraft[];
@@ -562,7 +568,14 @@ export default function ServiceLineEditor({
         </div>
 
         <p className="text-sm text-muted-foreground" data-testid="box-effect">
-          {selected.cash_flow === "in"
+          {personalTake
+            ? `On utang: ${formatPeso(principalNum + feeNum)} owed` +
+              (selected.cash_flow === "in"
+                ? selected.wallet
+                  ? ` · still sends ${formatPeso(principalNum)} from ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`
+                  : "."
+                : ` · still takes ${formatPeso(principalNum)} from ${payLabel}.`)
+            : selected.cash_flow === "in"
             ? `Adds ${formatPeso(cashInEffectivePrincipal + feeNum)} to ${payLabel}` +
               (selected.wallet
                 ? ` · sends ${formatPeso(cashInEffectivePrincipal)} from ${MONEY_ACCOUNT_LABELS[selected.wallet]}.`

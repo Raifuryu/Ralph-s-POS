@@ -3,6 +3,7 @@ import Link from "next/link";
 import { PageError, PageShell } from "@/components/pageShell";
 import { Button } from "@/components/ui/button";
 import { formatPeso } from "@/lib/format";
+import { roundMoney } from "@/lib/pricing";
 import { queryRows } from "@/lib/mysql/pool";
 import { storeIncomeSql } from "@/lib/personalTakesQuery";
 import { fetchVaultLedgerPage } from "@/lib/vault/ledgerQuery";
@@ -106,7 +107,18 @@ export default async function VaultPage({
   let todayFundRows: { fund: ProfitFund; amount: number }[];
   let walletBalanceRows: WalletBalance[];
   let ledgerPage: Awaited<ReturnType<typeof fetchVaultLedgerPage>>;
-  let personalTakeRows: Omit<PersonalTake, "items">[];
+  let personalTakeRows: Omit<PersonalTake, "items" | "kind">[];
+  let serviceTakeRows: {
+    id: string;
+    service_name: string;
+    principal: number;
+    fee: number;
+    unit_quantity: number | null;
+    created_at: string;
+    debtor_name: string | null;
+    debtor_description: string | null;
+    settled_at: string | null;
+  }[];
   let todaySnapshotRows: TodaySnapshot[];
   let yesterdaySnapshotRows: TodaySnapshot[];
   let todayStoreRows: { gross: number; margin: number }[];
@@ -132,6 +144,7 @@ export default async function VaultPage({
       walletBalanceRows,
       ledgerPage,
       personalTakeRows,
+      serviceTakeRows,
       todaySnapshotRows,
       yesterdaySnapshotRows,
       todayStoreRows,
@@ -177,7 +190,8 @@ export default async function VaultPage({
                -- only deposit that carries a transaction_id, and it's
                -- earnings on the day it's paid (see lib/personalTakes.ts) —
                -- unlike a manual Cash in, which isn't.
-               OR (entry_type = 'deposit' AND transaction_id IS NOT NULL)
+               OR (entry_type = 'deposit'
+                   AND (transaction_id IS NOT NULL OR service_transaction_id IS NOT NULL))
              )
              AND DATE(created_at) = CURDATE()
            GROUP BY fund`
@@ -197,9 +211,34 @@ export default async function VaultPage({
         // history. Voided takes are excluded — a voided one never happened,
         // there's nothing left to settle.
         showDebts
-          ? queryRows<Omit<PersonalTake, "items">>(
+          ? queryRows<Omit<PersonalTake, "items" | "kind">>(
               `SELECT id, total, created_at, debtor_name, debtor_description, settled_at
              FROM transactions
+             WHERE is_personal_take = 1 AND voided_at IS NULL
+             ORDER BY (settled_at IS NULL) DESC, created_at DESC
+             LIMIT ${PERSONAL_TAKES_LIMIT}`
+            )
+          : Promise.resolve([]),
+        // E-services taken on utang — the same debt, just recorded against
+        // service_transactions instead of a cart (see its own
+        // is_personal_take comment in mariadb/schema.sql). What's owed is
+        // principal + fee, since recordService posted only the leg that
+        // actually left the store.
+        showDebts
+          ? queryRows<{
+              id: string;
+              service_name: string;
+              principal: number;
+              fee: number;
+              unit_quantity: number | null;
+              created_at: string;
+              debtor_name: string | null;
+              debtor_description: string | null;
+              settled_at: string | null;
+            }>(
+              `SELECT id, service_name, principal, fee, unit_quantity, created_at,
+                      debtor_name, debtor_description, settled_at
+             FROM service_transactions
              WHERE is_personal_take = 1 AND voided_at IS NULL
              ORDER BY (settled_at IS NULL) DESC, created_at DESC
              LIMIT ${PERSONAL_TAKES_LIMIT}`
@@ -239,7 +278,12 @@ export default async function VaultPage({
           ? queryRows<{ wallet: MoneyAccount | null; fee: number }>(
               `SELECT wallet, COALESCE(SUM(fee), 0) AS fee
                FROM service_transactions
-               WHERE voided_at IS NULL AND DATE(created_at) = CURDATE()
+               WHERE voided_at IS NULL
+                 AND (
+                   (is_personal_take = 0 AND DATE(created_at) = CURDATE())
+                   OR (is_personal_take = 1 AND settled_at IS NOT NULL
+                       AND DATE(settled_at) = CURDATE())
+                 )
                GROUP BY wallet`
             )
           : Promise.resolve([]),
@@ -274,8 +318,32 @@ export default async function VaultPage({
   // off a take's own item list once enough other takes had items before it.
   // Fetching items for exactly the ids already selected keeps the cap
   // meaning "up to 500 takes," not "up to 500 take/item combinations."
+  // A service take carries no line items of its own — it shows as a single
+  // line worth exactly what's owed, so the sheet's "settle at selling price"
+  // alternative (which compares an items-derived retail total against the
+  // take's own total) correctly never offers itself for one.
+  const serviceTakes: PersonalTake[] = serviceTakeRows.map((take) => ({
+    kind: "service" as const,
+    id: take.id,
+    total: roundMoney(Number(take.principal) + Number(take.fee)),
+    created_at: take.created_at,
+    debtor_name: take.debtor_name,
+    debtor_description: take.debtor_description,
+    settled_at: take.settled_at,
+    items: [
+      {
+        product_name: take.service_name,
+        quantity: take.unit_quantity ?? 1,
+        unit_price: roundMoney(
+          (Number(take.principal) + Number(take.fee)) / (take.unit_quantity ?? 1)
+        ),
+      },
+    ],
+  }));
+
   let personalTakes: PersonalTake[] = personalTakeRows.map((take) => ({
     ...take,
+    kind: "sale" as const,
     items: [],
   }));
   if (personalTakeRows.length > 0) {
@@ -301,12 +369,21 @@ export default async function VaultPage({
       }
       personalTakes = personalTakeRows.map((take) => ({
         ...take,
+        kind: "sale" as const,
         items: itemsByTakeId.get(take.id) ?? [],
       }));
     } catch (err) {
       return <PageError title="Could not load the vault" message={(err as Error).message} />;
     }
   }
+
+  // One list over both tables, in the same order each query already used:
+  // unsettled first, newest first within that.
+  const allTakes: PersonalTake[] = [...personalTakes, ...serviceTakes].sort(
+    (a, b) =>
+      Number(a.settled_at !== null) - Number(b.settled_at !== null) ||
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+  );
 
   function mapSnapshotRow(row: TodaySnapshot | undefined): TodaySnapshot | null {
     if (!row) return null;
@@ -539,7 +616,7 @@ export default async function VaultPage({
         )}
       />
 
-      <PersonalTakesSheet open={showDebts} takes={personalTakes} />
+      <PersonalTakesSheet open={showDebts} takes={allTakes} />
       <VaultSnapshotSheet
         open={showSnapshot}
         today={todaySnapshot}

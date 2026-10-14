@@ -154,9 +154,15 @@ export default async function Home({
            ORDER BY created_at DESC`,
           [fromTs, toTs, fromTs, toTs]
         ),
+        // Same paid-day rule as the cart takes above: a service taken on
+        // utang only counts once it's paid, and then on its payment day.
         queryRows<ServiceTransaction>(
-          "SELECT * FROM service_transactions WHERE created_at >= ? AND created_at <= ? ORDER BY created_at DESC",
-          [fromTs, toTs]
+          `SELECT * FROM service_transactions
+           WHERE (is_personal_take = 0 AND created_at >= ? AND created_at <= ?)
+              OR (is_personal_take = 1 AND voided_at IS NULL
+                  AND settled_at >= ? AND settled_at <= ?)
+           ORDER BY created_at DESC`,
+          [fromTs, toTs, fromTs, toTs]
         ),
         queryRows<Product>(
           `SELECT ${PRODUCT_COLUMNS} FROM products WHERE is_active = 1 ORDER BY name`

@@ -15,10 +15,22 @@ import type {
 /** When an entry "happened" for sorting and day grouping — a paid personal
     take lands on its settled_at, everything else on created_at. */
 export function effectiveTimestamp(entry: SalesEntry): string {
-  if (entry.kind === "sale" && entry.data.is_personal_take && entry.data.settled_at) {
+  if (entry.data.is_personal_take && entry.data.settled_at) {
     return entry.data.settled_at;
   }
   return entry.data.created_at;
+}
+
+/** A service taken on utang counts on the day it was PAID too — same rule
+    as a cart take, applied to a service_transactions row. Returns the row
+    with created_at rewritten to its settled_at so existing by-date
+    aggregation picks it up on the right day; anything else is untouched. */
+export function serviceOnPaidDate<
+  T extends { is_personal_take: boolean; settled_at: string | null; created_at: string },
+>(row: T): T {
+  return row.is_personal_take && row.settled_at
+    ? { ...row, created_at: row.settled_at }
+    : row;
 }
 
 /** What one line of a paid take counts for as revenue. At cost the debtor

@@ -22,7 +22,11 @@ import { formatDateTime, formatPeso, storeDayKey } from "@/lib/format";
 import { roundMoney } from "@/lib/pricing";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { voidTransaction, type VoidState } from "../transactionActions";
+import {
+  voidServiceTransaction,
+  voidTransaction,
+  type VoidState,
+} from "../transactionActions";
 import {
   labelDebtor,
   settleDebt,
@@ -33,6 +37,11 @@ const initialState: PersonalTakeActionState = { error: null };
 const initialVoidState: VoidState = { error: null };
 
 export type PersonalTake = {
+  /** A cart taken on utang (transactions) or an e-service taken on utang
+      (service_transactions) — one sheet over two tables. A service take's
+      `total` is the principal + fee that never got handed over, and it has
+      no cost-vs-selling-price choice when settling (see settleServiceTake). */
+  kind: "sale" | "service";
   id: string;
   total: number;
   created_at: string;
@@ -73,7 +82,9 @@ const ACCOUNTS: MoneyAccount[] = ["cash", "gcash", "maya"];
 
 function PersonalTakeRow({ take }: { take: PersonalTake }) {
   const isSettled = take.settled_at !== null;
-  const priceTotal = sellingPriceTotal(take.items);
+  // A service take is owed at exactly one amount, so the "settle at selling
+  // price" alternative never applies to it.
+  const priceTotal = take.kind === "service" ? 0 : sellingPriceTotal(take.items);
   const [expanded, setExpanded] = useState(false);
   const [debtorName, setDebtorName] = useState(take.debtor_name ?? "");
   const [debtorDescription, setDebtorDescription] = useState(
@@ -93,7 +104,7 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
   // it's paid — see lib/personalTakes.ts), so this is the one place a
   // mistaken take can still be voided.
   const [voidState, voidActionFn, isVoiding] = useActionState(
-    voidTransaction,
+    take.kind === "service" ? voidServiceTransaction : voidTransaction,
     initialVoidState
   );
 
@@ -148,7 +159,9 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
       {expanded ? (
         <div className="flex flex-col gap-3 border-t p-3 pt-2">
           <div className="flex flex-col gap-1">
-            <Label className="text-xs">Items taken</Label>
+            <Label className="text-xs">
+              {take.kind === "service" ? "Service taken" : "Items taken"}
+            </Label>
             {take.items.length === 0 ? (
               <p className="text-xs text-muted-foreground">
                 No items recorded
@@ -205,6 +218,7 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
 
           <form action={labelAction} className="flex flex-col gap-1">
             <input type="hidden" name="transaction_id" value={take.id} />
+            <input type="hidden" name="kind" value={take.kind} />
             <input type="hidden" name="debtor_name" value={debtorName} />
             <input
               type="hidden"
@@ -264,6 +278,7 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
               <div className="flex flex-col gap-1.5">
                 <form action={settleActionFn}>
                   <input type="hidden" name="transaction_id" value={take.id} />
+                  <input type="hidden" name="kind" value={take.kind} />
                   <input type="hidden" name="debtor_name" value={debtorName} />
                   <input
                     type="hidden"
@@ -280,7 +295,9 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
                   >
                     {isSettling
                       ? "Recording…"
-                      : `Mark ${formatPeso(take.total)} as paid (cost)`}
+                      : take.kind === "service"
+                        ? `Mark ${formatPeso(take.total)} as paid`
+                        : `Mark ${formatPeso(take.total)} as paid (cost)`}
                   </Button>
                 </form>
                 {priceTotal > 0 && priceTotal !== take.total ? (
@@ -290,6 +307,7 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
                       name="transaction_id"
                       value={take.id}
                     />
+                    <input type="hidden" name="kind" value={take.kind} />
                     <input
                       type="hidden"
                       name="debtor_name"
@@ -327,7 +345,9 @@ function PersonalTakeRow({ take }: { take: PersonalTake }) {
                 onSubmit={(event) => {
                   if (
                     !confirm(
-                      "Void this take? Stock will be returned. This can't be undone."
+                      take.kind === "service"
+                        ? "Void this take? Whatever it moved in the vault will be reversed. This can't be undone."
+                        : "Void this take? Stock will be returned. This can't be undone."
                     )
                   ) {
                     event.preventDefault();

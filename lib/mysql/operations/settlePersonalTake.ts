@@ -143,3 +143,108 @@ export async function settlePersonalTake(
     }
   });
 }
+
+/**
+ * The service twin of labelPersonalTake — same "name the debtor later"
+ * affordance, for a take recorded against an e-service instead of a cart.
+ */
+export async function labelServiceTake(params: {
+  serviceTransactionId: string;
+  debtorName: string | null;
+  debtorDescription: string | null;
+}): Promise<void> {
+  const { serviceTransactionId, debtorName, debtorDescription } = params;
+
+  const rows = await queryRows<{ is_personal_take: boolean }>(
+    "SELECT is_personal_take FROM service_transactions WHERE id = ?",
+    [serviceTransactionId]
+  );
+  const serviceTransaction = rows[0];
+  if (!serviceTransaction) throw new Error("Service transaction not found");
+  if (!serviceTransaction.is_personal_take) {
+    throw new Error("Only a personal take can be labeled with a debtor");
+  }
+
+  await pool.query(
+    "UPDATE service_transactions SET debtor_name = ?, debtor_description = ? WHERE id = ?",
+    [debtorName, debtorDescription, serviceTransactionId]
+  );
+}
+
+/**
+ * The service twin of settlePersonalTake — marks an e-service taken on
+ * utang as paid back, in one transaction.
+ *
+ * The debt is always principal + fee: recordService posted only what
+ * actually left the store for a take (the load it sent, or the cash it
+ * handed out) and nothing incoming, so this is the first time any of it
+ * reaches the vault. There's no cost-vs-selling-price choice the way a
+ * product take has — a service has no COGS, just a pass-through principal
+ * and a fee — so the deposit splits exactly the way recordService's own
+ * posting does: the fee is 100% 'profit', the principal is tagged with no
+ * fund at all, since recovering the customer's own money was never income.
+ */
+export async function settleServiceTake(
+  params: {
+    serviceTransactionId: string;
+    debtorName: string | null;
+    debtorDescription: string | null;
+    account: MoneyAccount;
+  },
+  userId: string
+): Promise<void> {
+  const { serviceTransactionId, debtorName, debtorDescription, account } = params;
+
+  await withTransaction(async (conn) => {
+    const rows = await queryConn<{
+      is_personal_take: boolean;
+      principal: number;
+      fee: number;
+      service_name: string;
+      voided_at: string | null;
+      settled_at: string | null;
+    }>(
+      conn,
+      `SELECT is_personal_take, principal, fee, service_name, voided_at, settled_at
+       FROM service_transactions WHERE id = ? FOR UPDATE`,
+      [serviceTransactionId]
+    );
+    const serviceTransaction = rows[0];
+    if (!serviceTransaction) throw new Error("Service transaction not found");
+    if (!serviceTransaction.is_personal_take) {
+      throw new Error("Only a personal take can be settled");
+    }
+    if (serviceTransaction.voided_at !== null) {
+      throw new Error("This take was voided — there's nothing to settle");
+    }
+    if (serviceTransaction.settled_at !== null) {
+      throw new Error("This take has already been settled");
+    }
+
+    await conn.query(
+      `UPDATE service_transactions
+       SET debtor_name = ?, debtor_description = ?, settled_at = NOW(), settled_by = ?
+       WHERE id = ?`,
+      [debtorName, debtorDescription, userId, serviceTransactionId]
+    );
+
+    const note = debtorName
+      ? `Service take settled — ${debtorName}`
+      : "Service take settled";
+    const principal = roundMoney(Number(serviceTransaction.principal));
+    const fee = roundMoney(Number(serviceTransaction.fee));
+
+    if (principal > 0) {
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, created_by, note) VALUES (?, 'deposit', ?, ?, ?, ?, ?)",
+        [randomUUID(), principal, serviceTransactionId, account, userId, note]
+      );
+    }
+    if (fee > 0) {
+      await conn.query(
+        "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, fund, created_by, note) VALUES (?, 'deposit', ?, ?, ?, 'profit', ?, ?)",
+        [randomUUID(), fee, serviceTransactionId, account, userId, note]
+      );
+    }
+  });
+}

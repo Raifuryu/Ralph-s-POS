@@ -87,7 +87,7 @@ export async function recordVisit(
   if (items.length === 0 && rawServices.length === 0) {
     return {
       error: personalTake
-        ? "Add at least one item before recording the take."
+        ? "Add at least one item or service before recording the take."
         : "Add at least one item or service before recording the sale."
     };
   }
@@ -223,7 +223,13 @@ export async function recordVisit(
       unitPrice: line.unit_price ?? null,
       contactNumber: line.contact_number || undefined,
       reference: line.reference || undefined,
-      description: line.description || undefined
+      description: line.description || undefined,
+      // A take covers every line in the visit, services included — the
+      // debtor owes each service's principal + fee (see recordService's own
+      // personalTake handling).
+      personalTake,
+      debtorName,
+      debtorDescription
     };
   });
 

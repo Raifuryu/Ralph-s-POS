@@ -56,5 +56,6 @@ export async function voidServiceTransaction(
 
   revalidatePath("/");
   revalidatePath("/statistics");
+  revalidatePath("/vault");
   return { error: null };
 }

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { withTransaction } from "@/lib/mysql/pool";
 import type { MoneyAccount } from "@/lib/types";
-import { storeIncomeSql } from "@/lib/personalTakesQuery";
+import { eServiceFeeSql, storeIncomeSql } from "@/lib/personalTakesQuery";
 import { queryConn, roundMoney } from "./helpers";
 
 export type VaultSnapshotTargetDay = "today" | "yesterday";
@@ -82,10 +82,7 @@ export async function recordVaultSnapshot(
       `SELECT
          si.store_gross,
          si.store_margin,
-         COALESCE((
-           SELECT SUM(fee) FROM service_transactions
-           WHERE voided_at IS NULL AND DATE(created_at) = ${dayExpr}
-         ), 0) AS eservice_fee
+         (${eServiceFeeSql((column) => `DATE(${column}) = ${dayExpr}`)}) AS eservice_fee
        FROM (${storeIncomeSql((column) => `DATE(${column}) = ${dayExpr}`)}) si`
     );
     const storeGross = Number(incomeRows[0]?.store_gross ?? 0);

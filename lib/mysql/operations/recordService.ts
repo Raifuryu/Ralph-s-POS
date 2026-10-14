@@ -20,6 +20,13 @@ export type RecordServiceParams = {
   unitPrice?: number | null;
   visitId?: string | null;
   discountAmount?: number;
+  /** Taken on utang instead of paid for — see service_transactions'
+      is_personal_take comment in mariadb/schema.sql. The store-side leg
+      still posts; nothing incoming does, so the debtor owes principal +
+      fee until settlePersonalTake records them paying it back. */
+  personalTake?: boolean;
+  debtorName?: string | null;
+  debtorDescription?: string | null;
   /** Extra charged on top of a per-unit line's own subtotal — the inverse
       of discountAmount, for a line sold above its usual price. Same scope
       restriction as discount: only meaningful on a per-unit line. */
@@ -45,7 +52,14 @@ export async function recordService(
     visitId = null,
     discountAmount: discountAmountInput = 0,
     surchargeAmount: surchargeAmountInput = 0,
+    personalTake = false,
   } = params;
+  const debtorName = personalTake
+    ? params.debtorName?.trim() || null
+    : null;
+  const debtorDescription = personalTake
+    ? params.debtorDescription?.trim() || null
+    : null;
   const contactNumber = params.contactNumber?.trim() || null;
   const reference = params.reference?.trim() || null;
   const description = params.description?.trim() || null;
@@ -130,6 +144,9 @@ export async function recordService(
   }
 
   if (tendered !== null) {
+    if (personalTake) {
+      throw new Error("A personal take has nothing handed over to record");
+    }
     if (service.cash_flow !== "in" || paymentAccount !== "cash") {
       throw new Error("Amount received only applies to cash-in services paid in cash");
     }
@@ -143,9 +160,10 @@ export async function recordService(
   const id = randomUUID();
   await conn.query(
     `INSERT INTO service_transactions
-      (id, service_id, service_name, cash_flow, principal, fee, cashier_id, wallet, payment_account,
+      (id, service_id, service_name, cash_flow, principal, fee, cashier_id,
+       is_personal_take, debtor_name, debtor_description, wallet, payment_account,
        contact_number, reference, description, tendered, unit_label, unit_quantity, unit_price, visit_id, discount_amount, surcharge_amount)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       serviceId,
@@ -154,6 +172,9 @@ export async function recordService(
       principal,
       fee,
       cashierId,
+      personalTake,
+      debtorName,
+      debtorDescription,
       service.wallet,
       paymentAccount,
       contactNumber,
@@ -181,6 +202,12 @@ export async function recordService(
     // everywhere else in this file.
     const rounded = roundMoney(amount);
     if (rounded === 0) return;
+    // A personal take posts only what actually LEFT the store — the load
+    // still sends, the cash still comes out of the till — and nothing
+    // incoming, because nothing was handed over. That makes the debt
+    // exactly principal + fee, which settlePersonalTake later deposits
+    // back with the same fund split this function uses below.
+    if (personalTake && rounded > 0) return;
     await conn.query(
       "INSERT INTO vault_entries (id, entry_type, amount, service_transaction_id, account, fund, created_by, note) VALUES (?, 'service', ?, ?, ?, ?, ?, ?)",
       [randomUUID(), rounded, id, account, fund, cashierId, note ?? null]

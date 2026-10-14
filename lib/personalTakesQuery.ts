@@ -105,3 +105,21 @@ export function storeIncomeSql(dayCondition: (column: string) => string): string
       ) s ON s.id = ti.transaction_id
     ) x`;
 }
+
+/**
+ * SQL condition picking the e-service fees that count in a window — the
+ * service twin of storeIncomeSql's own personal-take handling. A service
+ * paid for normally counts on created_at; one taken on utang counts only
+ * once it's paid, on settled_at (see lib/personalTakes.ts).
+ */
+export function eServiceFeeSql(dayCondition: (column: string) => string): string {
+  return `
+    SELECT COALESCE(SUM(fee), 0) AS eservice_fee
+    FROM service_transactions
+    WHERE voided_at IS NULL
+      AND (
+        (is_personal_take = 0 AND ${dayCondition("created_at")})
+        OR (is_personal_take = 1 AND settled_at IS NOT NULL
+            AND ${dayCondition("settled_at")})
+      )`;
+}
