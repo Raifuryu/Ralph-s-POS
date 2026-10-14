@@ -2,13 +2,24 @@
 
 Run before deploying. One column: which amount a cart take is owed at, so a
 partially-paid balance can't shift under the debtor once payments start.
+Defaults to selling price — utang is normally paid back at the shelf price.
 
 ```sql
 ALTER TABLE transactions
-  ADD COLUMN settle_at_selling_price BOOLEAN NOT NULL DEFAULT FALSE AFTER settled_by;
+  ADD COLUMN settle_at_selling_price BOOLEAN NOT NULL DEFAULT TRUE AFTER settled_by;
 ```
 
-Existing takes default to being owed at cost, exactly as before. Verify with:
+Note this also applies to utang already outstanding: every unpaid take
+becomes owed at selling price. To keep the ones taken before today at cost
+instead, run this straight after:
+
+```sql
+UPDATE transactions
+SET settle_at_selling_price = FALSE
+WHERE is_personal_take = 1 AND settled_at IS NULL AND created_at < CURDATE();
+```
+
+Verify with:
 
 ```sql
 SELECT COUNT(*) AS ok FROM information_schema.COLUMNS

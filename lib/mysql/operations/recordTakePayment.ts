@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PoolConnection } from "mysql2/promise";
 
 import { withTransaction } from "@/lib/mysql/pool";
+import { allocatePayment } from "@/lib/personalTakes";
 import type { MoneyAccount } from "@/lib/types";
 import { queryConn, roundMoney } from "./helpers";
 
@@ -217,10 +218,10 @@ export async function recordTakePayment(
     }
 
     // Oldest first — a debtor chipping away at several utangs clears the
-    // ones they've owed longest, which is what both sides expect.
-    const payable = balances
-      .filter((balance) => balance.remaining > 0)
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    // ones they've owed longest, which is what both sides expect. Shared
+    // with the sheet's own review step so what the owner confirms is
+    // exactly what gets recorded.
+    const allocations = allocatePayment(balances, amount);
 
     let left = amount;
     const settled: TakeRef[] = [];
@@ -228,10 +229,7 @@ export async function recordTakePayment(
       ? `Personal take payment — ${debtorName}`
       : "Personal take payment";
 
-    for (const balance of payable) {
-      if (left <= 0) break;
-      const applied = roundMoney(Math.min(left, balance.remaining));
-      if (applied <= 0) continue;
+    for (const { take: balance, applied } of allocations) {
       left = roundMoney(left - applied);
 
       if (balance.kind === "sale") {
@@ -346,6 +344,23 @@ export async function setTakeSellingPriceBasis(params: {
       throw new Error(
         "Something's already been paid on this take — the amount owed can't change now"
       );
+    }
+
+    // Switching to cost on a take whose items have no recorded cost would
+    // make it owed ₱0 — i.e. silently forgiven. Refuse rather than let a
+    // debt evaporate on a tap (see checkout(): a take's cost-based total
+    // skips any line whose product was never restocked through the app).
+    if (!atSellingPrice) {
+      const totalRows = await queryConn<{ total: number }>(
+        conn,
+        "SELECT total FROM transactions WHERE id = ?",
+        [transactionId]
+      );
+      if (roundMoney(Number(totalRows[0]?.total ?? 0)) <= 0) {
+        throw new Error(
+          "This take has no recorded cost, so it can only be charged at selling price"
+        );
+      }
     }
 
     await conn.query(

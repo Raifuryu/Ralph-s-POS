@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 
@@ -19,6 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { formatDateTime, formatPeso, storeDayKey } from "@/lib/format";
+import { allocatePayment } from "@/lib/personalTakes";
 import { roundMoney } from "@/lib/pricing";
 import { MONEY_ACCOUNT_LABELS, type MoneyAccount } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -230,7 +231,10 @@ function PersonalTakeRow({
           {take.kind === "sale" &&
           !isSettled &&
           take.paid === 0 &&
-          take.sellingTotal !== take.costTotal ? (
+          take.sellingTotal !== take.costTotal &&
+          // Nothing to switch to if the other basis is ₱0 — see
+          // setTakeSellingPriceBasis, which refuses it server-side too.
+          (take.atSellingPrice ? take.costTotal > 0 : take.sellingTotal > 0) ? (
             <form action={basisAction} className="flex flex-col gap-1">
               <input type="hidden" name="transaction_id" value={take.id} />
               <input
@@ -417,10 +421,21 @@ function DebtorGroupRow({
   onToggleGroup: (takes: PersonalTake[]) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const outstandingCount = group.takes.filter((t) => t.settled_at === null).length;
+  const payable = group.takes.filter((t) => t.settled_at === null);
+  const outstandingCount = payable.length;
+  const selectedCount = payable.filter((t) =>
+    selectedRefs.has(takeRef(t))
+  ).length;
+  const allSelected = outstandingCount > 0 && selectedCount === outstandingCount;
+  const someSelected = selectedCount > 0;
 
   return (
-    <li className="rounded-lg border">
+    <li
+      className={cn(
+        "rounded-lg border",
+        someSelected && "border-primary bg-primary/5"
+      )}
+    >
       <div className="flex items-center gap-2 p-3">
         <button
           type="button"
@@ -442,6 +457,12 @@ function DebtorGroupRow({
               {outstandingCount > 0 && outstandingCount < group.takes.length
                 ? ` · ${outstandingCount} outstanding`
                 : ""}
+              {someSelected ? (
+                <span className="font-medium text-primary">
+                  {" · "}
+                  {selectedCount} of {outstandingCount} selected
+                </span>
+              ) : null}
             </span>
           </span>
           <span className="flex shrink-0 items-center gap-2">
@@ -458,11 +479,12 @@ function DebtorGroupRow({
         {outstandingCount > 0 ? (
           <Button
             type="button"
-            variant="ghost"
+            variant={allSelected ? "default" : "outline"}
             size="sm"
+            className="shrink-0"
             onClick={() => onToggleGroup(group.takes)}
           >
-            Select all
+            {allSelected ? "Unselect all" : "Select all"}
           </Button>
         ) : null}
       </div>
@@ -517,8 +539,21 @@ export default function PersonalTakesSheet({
   const [account, setAccount] = useState<MoneyAccount>("cash");
   const [amount, setAmount] = useState("");
   const [amountTouched, setAmountTouched] = useState(false);
+  // The payment panel is a two-step: fill it in, then review exactly what
+  // each take will take from it before anything is recorded.
+  const [reviewing, setReviewing] = useState(false);
 
   const [payState, payAction, isPaying] = useActionState(payTakes, initialState);
+
+  // A recorded payment clears the selection — those balances have moved on,
+  // and leaving them ticked invites paying the same debt twice.
+  useEffect(() => {
+    if (!payState.ok) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedRefs(new Set());
+    setReviewing(false);
+    setAmountTouched(false);
+  }, [payState.ok]);
 
   const outstanding = takes.filter((t) => t.settled_at === null);
 
@@ -557,7 +592,21 @@ export default function PersonalTakesSheet({
   const amountInvalid =
     !Number.isFinite(amountNum) || amountNum <= 0 || amountNum > selectedBalance;
 
+  // Exactly what the server will do with this amount (same helper it
+  // uses), so the review can't show an allocation that won't happen.
+  const allocation = amountInvalid
+    ? []
+    : allocatePayment(
+        selectedTakes.map((take) => ({
+          ...take,
+          remaining: remainingOf(take),
+          createdAt: take.created_at,
+        })),
+        amountNum
+      );
+
   function toggleSelect(take: PersonalTake) {
+    setReviewing(false);
     setSelectedRefs((prev) => {
       const next = new Set(prev);
       const ref = takeRef(take);
@@ -569,6 +618,7 @@ export default function PersonalTakesSheet({
   }
 
   function toggleGroup(groupTakes: PersonalTake[]) {
+    setReviewing(false);
     const payable = groupTakes.filter((take) => take.settled_at === null);
     setSelectedRefs((prev) => {
       const next = new Set(prev);
@@ -739,7 +789,12 @@ export default function PersonalTakesSheet({
                     </p>
                   </div>
 
-                  <div className="flex flex-col gap-1">
+                  <div
+                    className={cn(
+                      "flex flex-col gap-1",
+                      reviewing && "hidden"
+                    )}
+                  >
                     <Label htmlFor="take-payment-amount" className="text-xs">
                       Amount paid
                     </Label>
@@ -763,7 +818,12 @@ export default function PersonalTakesSheet({
                     </p>
                   </div>
 
-                  <div className="flex flex-col gap-1">
+                  <div
+                    className={cn(
+                      "flex flex-col gap-1",
+                      reviewing && "hidden"
+                    )}
+                  >
                     <Label className="text-xs">Paid into</Label>
                     <Tabs
                       value={account}
@@ -779,6 +839,47 @@ export default function PersonalTakesSheet({
                     </Tabs>
                   </div>
 
+                  {/* Review step — nothing is recorded until this is
+                      confirmed. Shows which take each peso goes to, since
+                      the payment is applied oldest first and that isn't
+                      obvious from the amount alone. */}
+                  {reviewing ? (
+                    <div className="flex flex-col gap-1 rounded-lg border bg-muted/30 p-2">
+                      <p className="text-xs font-medium">
+                        Review — {formatPeso(amountNum)} into{" "}
+                        {MONEY_ACCOUNT_LABELS[account]}
+                      </p>
+                      {allocation.map(({ take, applied }) => {
+                        const after = roundMoney(remainingOf(take) - applied);
+                        return (
+                          <p
+                            key={takeRef(take)}
+                            className="flex items-baseline justify-between gap-2 text-xs"
+                          >
+                            <span className="min-w-0 truncate text-muted-foreground">
+                              {take.debtor_name ?? "Not labeled"} ·{" "}
+                              {itemsSummary(take.items)}
+                            </span>
+                            <span className="shrink-0 tabular-nums">
+                              {formatPeso(applied)}
+                              <span className="text-muted-foreground">
+                                {after > 0
+                                  ? ` · ${formatPeso(after)} left`
+                                  : " · cleared"}
+                              </span>
+                            </span>
+                          </p>
+                        );
+                      })}
+                      <p className="flex items-baseline justify-between gap-2 border-t pt-1 text-xs font-medium tabular-nums">
+                        <span>Still owed after this</span>
+                        <span>
+                          {formatPeso(roundMoney(selectedBalance - amountNum))}
+                        </span>
+                      </p>
+                    </div>
+                  ) : null}
+
                   {payState.error ? (
                     <p role="alert" className="text-sm text-destructive">
                       {payState.error}
@@ -786,20 +887,43 @@ export default function PersonalTakesSheet({
                   ) : null}
 
                   <div className="flex items-center justify-end gap-2">
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedRefs(new Set());
-                        setAmountTouched(false);
-                      }}
-                    >
-                      Clear
-                    </Button>
-                    <Button type="submit" size="sm" disabled={isPaying || amountInvalid}>
-                      {isPaying ? "Recording…" : "Record payment"}
-                    </Button>
+                    {reviewing ? (
+                      <>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setReviewing(false)}
+                        >
+                          Back
+                        </Button>
+                        <Button type="submit" size="sm" disabled={isPaying}>
+                          {isPaying ? "Recording…" : "Confirm payment"}
+                        </Button>
+                      </>
+                    ) : (
+                      <>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedRefs(new Set());
+                            setAmountTouched(false);
+                          }}
+                        >
+                          Clear
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={amountInvalid}
+                          onClick={() => setReviewing(true)}
+                        >
+                          Review payment
+                        </Button>
+                      </>
+                    )}
                   </div>
                 </form>
               ) : null}
