@@ -1,5 +1,25 @@
+## PENDING MIGRATION — partial utang payments
 
-## Done: personal takes now cover e-services, not just products
+Run before deploying. One column: which amount a cart take is owed at, so a
+partially-paid balance can't shift under the debtor once payments start.
+
+```sql
+ALTER TABLE transactions
+  ADD COLUMN settle_at_selling_price BOOLEAN NOT NULL DEFAULT FALSE AFTER settled_by;
+```
+
+Existing takes default to being owed at cost, exactly as before. Verify with:
+
+```sql
+SELECT COUNT(*) AS ok FROM information_schema.COLUMNS
+WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'transactions'
+  AND COLUMN_NAME = 'settle_at_selling_price';   -- expect 1
+```
+
+Paid-to-date needs no column — it's summed from the vault deposits each
+payment posts, so it can't drift from what the vault actually holds.
+
+## Done (migration applied): personal takes now cover e-services, not just products
 
 Requested 2026-10-14, implemented same day. The debtor owes **principal + fee**: recordService posts only the leg that actually left the store (the load it sent, or the cash it handed out) and nothing incoming, so a service take's whole value stays off the books until it's paid — same rule cart takes already follow.
 

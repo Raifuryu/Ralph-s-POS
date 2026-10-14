@@ -36,23 +36,25 @@ function searchableText(entry: SalesEntry): string {
           entry.data.is_personal_take
             ? "personal take"
             : PAYMENT_METHOD_LABELS[entry.data.payment_method!],
-          // A paid take is searchable by who paid and how, same as a sale is
-          // by its payment method.
           entry.data.debtor_name,
-          entry.data.settlement?.account
-            ? PAYMENT_METHOD_LABELS[entry.data.settlement.account]
-            : null,
           entry.data.void_reason,
           ...entry.data.transaction_items.map((item) => item.product_name),
         ]
-      : [
+      : entry.kind === "takePayment"
+        ? [
+            "utang payment personal take",
+            entry.data.debtor_name,
+            entry.data.label,
+            PAYMENT_METHOD_LABELS[entry.data.account],
+          ]
+        : [
           entry.data.service_name,
           entry.data.reference,
           entry.data.description,
           MONEY_ACCOUNT_LABELS[entry.data.payment_account],
-          entry.data.wallet ? MONEY_ACCOUNT_LABELS[entry.data.wallet] : null,
-          entry.data.void_reason,
-        ];
+            entry.data.wallet ? MONEY_ACCOUNT_LABELS[entry.data.wallet] : null,
+            entry.data.void_reason,
+          ];
   return parts.filter((part): part is string => Boolean(part)).join(" ").toLowerCase();
 }
 
@@ -92,11 +94,10 @@ export default function TransactionTabs({
     () => entries.filter((entry) => entry.data.voided_at !== null).length,
     [entries]
   );
+  // Utang payments received on this day — the only way a personal take
+  // shows up in the sales feed at all now (see TakePayment).
   const personalTakeCount = useMemo(
-    () =>
-      entries.filter(
-        (entry) => entry.kind === "sale" && entry.data.is_personal_take
-      ).length,
+    () => entries.filter((entry) => entry.kind === "takePayment").length,
     [entries]
   );
 
@@ -109,10 +110,7 @@ export default function TransactionTabs({
         if (voidFilter === "voided" && entry.data.voided_at === null) {
           return false;
         }
-        if (
-          personalTakeFilter === "personal" &&
-          !(entry.kind === "sale" && entry.data.is_personal_take)
-        ) {
+        if (personalTakeFilter === "personal" && entry.kind !== "takePayment") {
           return false;
         }
         return true;
@@ -177,7 +175,7 @@ export default function TransactionTabs({
             onClick={() => setPersonalTakeFilter("all")}
           />
           <FilterChip
-            label={`Personal take (${personalTakeCount})`}
+            label={`Utang paid (${personalTakeCount})`}
             active={personalTakeFilter === "personal"}
             onClick={() =>
               setPersonalTakeFilter((prev) =>

@@ -158,6 +158,12 @@ CREATE TABLE transactions (
   debtor_description TEXT,
   settled_at         TIMESTAMP     NULL,
   settled_by         CHAR(36),
+  -- Which amount this take is owed at: its own cost-based `total` (0, the
+  -- default) or what its items would have sold for (1). Chosen on the
+  -- unpaid debt and locked once any payment lands, so a partially-paid
+  -- balance can't shift underneath the debtor. Meaningless on a normal
+  -- sale. See recordTakePayment for how a payment is applied against it.
+  settle_at_selling_price BOOLEAN NOT NULL DEFAULT FALSE,
   CONSTRAINT transactions_cashier_id_fkey FOREIGN KEY (cashier_id) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT transactions_voided_by_fkey FOREIGN KEY (voided_by) REFERENCES users(id) ON DELETE RESTRICT,
   CONSTRAINT transactions_settled_by_fkey FOREIGN KEY (settled_by) REFERENCES users(id) ON DELETE RESTRICT,

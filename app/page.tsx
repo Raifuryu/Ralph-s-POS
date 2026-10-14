@@ -9,8 +9,12 @@ import {
   storeDayRange,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
-import { effectiveTimestamp, incomeSales } from "@/lib/personalTakes";
-import { attachSettlements } from "@/lib/personalTakesQuery";
+import { roundMoney } from "@/lib/pricing";
+import { effectiveTimestamp } from "@/lib/personalTakes";
+import {
+  fetchTakePayments,
+  takePaymentTotals,
+} from "@/lib/personalTakesQuery";
 import {
   SALES_FILTERS,
   type MoneyAccount,
@@ -128,6 +132,7 @@ export default async function Home({
   let services: Service[];
   let vaultRows: { account: MoneyAccount; balance: number }[];
   let baselineFundTargetRows: { baseline_fund_target: number | null }[];
+  let takePayments: Awaited<ReturnType<typeof fetchTakePayments>>;
   let sales: TransactionWithItems[];
 
   try {
@@ -139,6 +144,7 @@ export default async function Home({
       services,
       vaultRows,
       baselineFundTargetRows,
+      takePayments,
     ] = await Promise.all([
         // Sales list: every transaction on the picked day, unpaginated —
         // pagination happens in JS below, after merging with
@@ -148,21 +154,18 @@ export default async function Home({
         // never appears here at all.
         queryRows<Transaction>(
           `SELECT ${TRANSACTION_COLUMNS} FROM transactions
-           WHERE (is_personal_take = 0 AND created_at >= ? AND created_at <= ?)
-              OR (is_personal_take = 1 AND voided_at IS NULL
-                  AND settled_at >= ? AND settled_at <= ?)
+           WHERE is_personal_take = 0 AND created_at >= ? AND created_at <= ?
            ORDER BY created_at DESC`,
-          [fromTs, toTs, fromTs, toTs]
+          [fromTs, toTs]
         ),
-        // Same paid-day rule as the cart takes above: a service taken on
-        // utang only counts once it's paid, and then on its payment day.
+        // Takes are excluded from both feeds entirely — what shows is the
+        // PAYMENTS made against them (takePayments below), on the day each
+        // was received.
         queryRows<ServiceTransaction>(
           `SELECT * FROM service_transactions
-           WHERE (is_personal_take = 0 AND created_at >= ? AND created_at <= ?)
-              OR (is_personal_take = 1 AND voided_at IS NULL
-                  AND settled_at >= ? AND settled_at <= ?)
+           WHERE is_personal_take = 0 AND created_at >= ? AND created_at <= ?
            ORDER BY created_at DESC`,
-          [fromTs, toTs, fromTs, toTs]
+          [fromTs, toTs]
         ),
         queryRows<Product>(
           `SELECT ${PRODUCT_COLUMNS} FROM products WHERE is_active = 1 ORDER BY name`
@@ -185,6 +188,10 @@ export default async function Home({
         queryRows<{ baseline_fund_target: number | null }>(
           "SELECT baseline_fund_target FROM store_settings WHERE id = 1"
         ),
+        // Utang paid on this day — the only way a personal take reaches the
+        // dashboard, counted for exactly what was received (see
+        // fetchTakePayments).
+        fetchTakePayments(fromTs, toTs),
       ]);
 
     // transaction_items are a separate query (no PostgREST-style nested
@@ -201,12 +208,10 @@ export default async function Home({
         else itemsByTxnId.set(item.transaction_id, [item]);
       }
     }
-    sales = await attachSettlements(
-      transactions.map((t) => ({
-        ...t,
-        transaction_items: itemsByTxnId.get(t.id) ?? [],
-      }))
-    );
+    sales = transactions.map((t) => ({
+      ...t,
+      transaction_items: itemsByTxnId.get(t.id) ?? [],
+    }));
   } catch (err) {
     return <LoadError message={(err as Error).message} />;
   }
@@ -219,21 +224,23 @@ export default async function Home({
   const merged = sortByTimeDesc([
     ...sales.map((t) => ({ kind: "sale" as const, data: t })),
     ...serviceList.map((s) => ({ kind: "service" as const, data: s })),
+    ...takePayments.map((p) => ({ kind: "takePayment" as const, data: p })),
   ]);
 
-  // Every sale that counts as income on this day — regular sales, plus
-  // personal takes PAID today rewritten as sales at whatever they were
-  // settled for (see incomeSales). Unpaid takes never made it into `sales`.
-  const countedSales = incomeSales(sales);
+  // What utang paid today contributed — a cart take's payment counts as
+  // store revenue (its profit part being whatever was paid above cost), a
+  // service take's only for its fee part. Partial payments count for
+  // exactly what came in, nothing more.
+  const fromTakePayments = takePaymentTotals(takePayments);
 
   // Store = all product sales in the window, regardless of payment method —
   // a sale is store revenue whether the customer paid cash, GCash, or Maya.
   // This is the card's headline figure: gross income, not profit. Voided
   // sales are excluded — a voided sale had its stock and income both
   // reversed, so it isn't really revenue anymore.
-  const storeTotal = countedSales.reduce(
-    (sum, t) => sum + (t.voided_at ? 0 : Number(t.total)),
-    0
+  const storeTotal = roundMoney(
+    sales.reduce((sum, t) => sum + (t.voided_at ? 0 : Number(t.total)), 0) +
+      fromTakePayments.storeRevenue
   );
 
   // storeMargin is real profit (price - cost) on the same sales — shown
@@ -251,10 +258,7 @@ export default async function Home({
   let storeMargin = 0;
   let storeCogs = 0;
   let storeRevenueWithUnknownCost = 0;
-  // A paid take settled at cost has line revenue equal to its known cost, so
-  // it adds to Invested with zero margin; settled at selling price, the
-  // excess over cost lands in profit — same split the vault deposit used.
-  for (const t of countedSales) {
+  for (const t of sales) {
     if (t.voided_at) continue;
     for (const item of t.transaction_items) {
       const lineRevenue = Number(item.line_total);
@@ -268,12 +272,22 @@ export default async function Home({
     }
   }
 
+  // Utang payments fold into the same three figures (see
+  // takePaymentTotals): what was paid counts as revenue, the part above
+  // cost as margin, the rest as cost recovered.
+  storeMargin = roundMoney(storeMargin + fromTakePayments.storeMargin);
+  storeCogs = roundMoney(storeCogs + fromTakePayments.storeCogs);
+
   // E-Service = service fee income, further split by which wallet the
   // service touches. "Other" catches wallet-less services (e.g. printing)
   // paid in cash — still fee income, just not tied to a specific e-wallet.
   // Derived from serviceList (already fetched, same date range) rather than
   // a second query for the same table/window.
-  const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
+  const eServiceFees: EServiceFees = {
+    gcash: fromTakePayments.eServiceFees.gcash,
+    maya: fromTakePayments.eServiceFees.maya,
+    other: fromTakePayments.eServiceFees.other,
+  };
   for (const row of serviceList) {
     if (row.voided_at) continue;
     const fee = Number(row.fee);

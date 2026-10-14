@@ -128,7 +128,7 @@ export default function CheckoutForm({
   const [personalTake, setPersonalTake] = useState(false);
   // Optional, personal-take only — who it's for and why. Can always be
   // added/edited later from Vault → Personal takes instead (see
-  // settlePersonalTake), this is just the "cashier already knows" shortcut.
+  // labelPersonalTake), this is just the "cashier already knows" shortcut.
   const [debtorName, setDebtorName] = useState("");
   const [debtorDescription, setDebtorDescription] = useState("");
   const [hydrated, setHydrated] = useState(false);

@@ -23,7 +23,7 @@ export type RecordServiceParams = {
   /** Taken on utang instead of paid for — see service_transactions'
       is_personal_take comment in mariadb/schema.sql. The store-side leg
       still posts; nothing incoming does, so the debtor owes principal +
-      fee until settlePersonalTake records them paying it back. */
+      fee until recordTakePayment records them paying it back. */
   personalTake?: boolean;
   debtorName?: string | null;
   debtorDescription?: string | null;
@@ -205,7 +205,7 @@ export async function recordService(
     // A personal take posts only what actually LEFT the store — the load
     // still sends, the cash still comes out of the till — and nothing
     // incoming, because nothing was handed over. That makes the debt
-    // exactly principal + fee, which settlePersonalTake later deposits
+    // exactly principal + fee, which recordTakePayment later deposits
     // back with the same fund split this function uses below.
     if (personalTake && rounded > 0) return;
     await conn.query(

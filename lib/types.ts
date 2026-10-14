@@ -23,18 +23,6 @@ export type TransactionItem = Tables<"transaction_items">;
 /** A transaction with its line items, as returned by the dashboard query. */
 export type TransactionWithItems = Transaction & {
   transaction_items: TransactionItem[];
-  /** Only ever set on a PAID personal take — see lib/personalTakes.ts. */
-  settlement?: PersonalTakeSettlement;
-};
-
-/** How a personal take was paid back, read off the vault 'deposit' rows
-    settlePersonalTake posted (see lib/personalTakesQuery.ts). `account` is
-    null only when nothing was deposited at all — a take whose every item
-    has an unknown cost, settled at cost, posts no vault entry. */
-export type PersonalTakeSettlement = {
-  amount: number;
-  account: MoneyAccount | null;
-  atSellingPrice: boolean;
 };
 
 /** One amount-based fee tier — e.g. a ₱100–500 load charges ₱10.
@@ -191,9 +179,41 @@ export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
  * (`service_transactions`) — into one chronological feed. They render very
  * differently (line items vs. principal/fee), so callers switch on `kind`.
  */
+/** One payment received against a personal take — the money-in event for
+    utang. A take itself never appears in the sales feed (it isn't income
+    when it's taken, and a partly-paid one isn't income yet either); each
+    payment does, on the day it's received. Shaped to carry the few fields
+    the shared feed code reads off every entry. */
+export type TakePayment = {
+  id: string;
+  created_at: string;
+  /** Always null/false — a payment has no visit, can't be voided, and
+      isn't itself a take. Present so the shared feed helpers can read the
+      same fields off any entry. */
+  visit_id: null;
+  voided_at: null;
+  is_personal_take: false;
+  settled_at: null;
+  /** What this payment covered on this take. */
+  amount: number;
+  /** The part of `amount` that counts as profit — what was paid above the
+      store's own cost (a cart) or the pass-through principal (a service).
+      See recordTakePayment's own split. */
+  profit: number;
+  account: MoneyAccount;
+  debtor_name: string | null;
+  /** What was taken: the service's name, or "Personal take" for a cart. */
+  label: string;
+  takeKind: "sale" | "service";
+  /** The service's own wallet, for attributing its fee the same way a
+      normal e-service fee is attributed. Null for a cart take. */
+  wallet: MoneyAccount | null;
+};
+
 export type SalesEntry =
   | { kind: "sale"; data: TransactionWithItems }
-  | { kind: "service"; data: ServiceTransaction };
+  | { kind: "service"; data: ServiceTransaction }
+  | { kind: "takePayment"; data: TakePayment };
 
 /**
  * Dashboard category, distinct from payment method: a product sale is
@@ -206,6 +226,14 @@ export type SalesCategory = "store" | "gcash" | "maya" | "other";
 
 export function salesEntryCategory(entry: SalesEntry): SalesCategory {
   if (entry.kind === "sale") return "store";
+  // A payment is categorized by what was taken: a cart reads as store
+  // income, a service by the wallet it ran through.
+  if (entry.kind === "takePayment") {
+    if (entry.data.takeKind === "sale") return "store";
+    if (entry.data.wallet === "gcash") return "gcash";
+    if (entry.data.wallet === "maya") return "maya";
+    return "other";
+  }
   if (entry.data.wallet === "gcash") return "gcash";
   if (entry.data.wallet === "maya") return "maya";
   return "other";

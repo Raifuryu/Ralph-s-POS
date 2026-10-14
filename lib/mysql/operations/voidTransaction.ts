@@ -36,7 +36,7 @@ export async function voidTransaction(
       throw new Error("This transaction has already been voided");
     }
     // A settled personal take already has its own vault deposit recording
-    // the debtor's payment (see settlePersonalTake) — voiding the take now
+    // the debtor's payment (see recordTakePayment) — voiding the take now
     // wouldn't touch that deposit (the block below never reverses vault
     // entries for a personal take), leaving money on record for a take
     // that's supposedly never happened. Simplest correct rule: it's already

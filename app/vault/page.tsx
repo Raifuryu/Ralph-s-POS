@@ -107,12 +107,25 @@ export default async function VaultPage({
   let todayFundRows: { fund: ProfitFund; amount: number }[];
   let walletBalanceRows: WalletBalance[];
   let ledgerPage: Awaited<ReturnType<typeof fetchVaultLedgerPage>>;
-  let personalTakeRows: Omit<PersonalTake, "items" | "kind">[];
+  let personalTakeRows: {
+    id: string;
+    visit_id: string | null;
+    cost_total: number;
+    selling_total: number;
+    settle_at_selling_price: boolean;
+    paid: number;
+    created_at: string;
+    debtor_name: string | null;
+    debtor_description: string | null;
+    settled_at: string | null;
+  }[];
   let serviceTakeRows: {
     id: string;
+    visit_id: string | null;
     service_name: string;
     principal: number;
     fee: number;
+    paid: number;
     unit_quantity: number | null;
     created_at: string;
     debtor_name: string | null;
@@ -210,12 +223,38 @@ export default async function VaultPage({
         // for a query nobody's looking at" reasoning as Inventory's restock
         // history. Voided takes are excluded — a voided one never happened,
         // there's nothing left to settle.
+        // Owed-vs-paid per take: `paid` is summed from the deposits
+        // recorded against it rather than stored, so it can never drift
+        // from what the vault actually holds (see recordTakePayment), and
+        // `selling_total` is recomputed from the line snapshots so the
+        // "charge at selling price" option shows a real figure.
         showDebts
-          ? queryRows<Omit<PersonalTake, "items" | "kind">>(
-              `SELECT id, total, created_at, debtor_name, debtor_description, settled_at
-             FROM transactions
-             WHERE is_personal_take = 1 AND voided_at IS NULL
-             ORDER BY (settled_at IS NULL) DESC, created_at DESC
+          ? queryRows<{
+              id: string;
+              visit_id: string | null;
+              cost_total: number;
+              selling_total: number;
+              settle_at_selling_price: boolean;
+              paid: number;
+              created_at: string;
+              debtor_name: string | null;
+              debtor_description: string | null;
+              settled_at: string | null;
+            }>(
+              `SELECT t.id, t.visit_id, t.total AS cost_total,
+                      t.settle_at_selling_price, t.created_at,
+                      t.debtor_name, t.debtor_description, t.settled_at,
+                      COALESCE((
+                        SELECT SUM(ti.unit_price * ti.quantity)
+                        FROM transaction_items ti WHERE ti.transaction_id = t.id
+                      ), 0) AS selling_total,
+                      COALESCE((
+                        SELECT SUM(ve.amount) FROM vault_entries ve
+                        WHERE ve.transaction_id = t.id AND ve.entry_type = 'deposit'
+                      ), 0) AS paid
+             FROM transactions t
+             WHERE t.is_personal_take = 1 AND t.voided_at IS NULL
+             ORDER BY (t.settled_at IS NULL) DESC, t.created_at DESC
              LIMIT ${PERSONAL_TAKES_LIMIT}`
             )
           : Promise.resolve([]),
@@ -227,20 +266,28 @@ export default async function VaultPage({
         showDebts
           ? queryRows<{
               id: string;
+              visit_id: string | null;
               service_name: string;
               principal: number;
               fee: number;
+              paid: number;
               unit_quantity: number | null;
               created_at: string;
               debtor_name: string | null;
               debtor_description: string | null;
               settled_at: string | null;
             }>(
-              `SELECT id, service_name, principal, fee, unit_quantity, created_at,
-                      debtor_name, debtor_description, settled_at
-             FROM service_transactions
-             WHERE is_personal_take = 1 AND voided_at IS NULL
-             ORDER BY (settled_at IS NULL) DESC, created_at DESC
+              `SELECT st.id, st.visit_id, st.service_name, st.principal, st.fee,
+                      st.unit_quantity, st.created_at, st.debtor_name,
+                      st.debtor_description, st.settled_at,
+                      COALESCE((
+                        SELECT SUM(ve.amount) FROM vault_entries ve
+                        WHERE ve.service_transaction_id = st.id
+                          AND ve.entry_type = 'deposit'
+                      ), 0) AS paid
+             FROM service_transactions st
+             WHERE st.is_personal_take = 1 AND st.voided_at IS NULL
+             ORDER BY (st.settled_at IS NULL) DESC, st.created_at DESC
              LIMIT ${PERSONAL_TAKES_LIMIT}`
             )
           : Promise.resolve([]),
@@ -319,33 +366,60 @@ export default async function VaultPage({
   // Fetching items for exactly the ids already selected keeps the cap
   // meaning "up to 500 takes," not "up to 500 take/item combinations."
   // A service take carries no line items of its own — it shows as a single
-  // line worth exactly what's owed, so the sheet's "settle at selling price"
-  // alternative (which compares an items-derived retail total against the
-  // take's own total) correctly never offers itself for one.
-  const serviceTakes: PersonalTake[] = serviceTakeRows.map((take) => ({
-    kind: "service" as const,
-    id: take.id,
-    total: roundMoney(Number(take.principal) + Number(take.fee)),
-    created_at: take.created_at,
-    debtor_name: take.debtor_name,
-    debtor_description: take.debtor_description,
-    settled_at: take.settled_at,
-    items: [
-      {
-        product_name: take.service_name,
-        quantity: take.unit_quantity ?? 1,
-        unit_price: roundMoney(
-          (Number(take.principal) + Number(take.fee)) / (take.unit_quantity ?? 1)
-        ),
-      },
-    ],
-  }));
+  // line worth exactly what's owed (principal + fee), and has no
+  // cost-vs-selling choice, so costTotal/sellingTotal both equal it.
+  const serviceTakes: PersonalTake[] = serviceTakeRows.map((take) => {
+    const owed = roundMoney(Number(take.principal) + Number(take.fee));
+    return {
+      kind: "service" as const,
+      id: take.id,
+      visit_id: take.visit_id,
+      owed,
+      paid: roundMoney(Number(take.paid)),
+      costTotal: owed,
+      sellingTotal: owed,
+      atSellingPrice: false,
+      created_at: take.created_at,
+      debtor_name: take.debtor_name,
+      debtor_description: take.debtor_description,
+      settled_at: take.settled_at,
+      items: [
+        {
+          product_name: take.service_name,
+          quantity: take.unit_quantity ?? 1,
+          unit_price: roundMoney(owed / (take.unit_quantity ?? 1)),
+        },
+      ],
+    };
+  });
 
-  let personalTakes: PersonalTake[] = personalTakeRows.map((take) => ({
-    ...take,
-    kind: "sale" as const,
-    items: [],
-  }));
+  /** Owed at whichever basis the take is currently set to. */
+  function saleTake(
+    row: (typeof personalTakeRows)[number],
+    items: PersonalTake["items"]
+  ): PersonalTake {
+    const costTotal = roundMoney(Number(row.cost_total));
+    const sellingTotal = roundMoney(Number(row.selling_total));
+    return {
+      kind: "sale",
+      id: row.id,
+      visit_id: row.visit_id,
+      owed: row.settle_at_selling_price ? sellingTotal : costTotal,
+      paid: roundMoney(Number(row.paid)),
+      costTotal,
+      sellingTotal,
+      atSellingPrice: Boolean(row.settle_at_selling_price),
+      created_at: row.created_at,
+      debtor_name: row.debtor_name,
+      debtor_description: row.debtor_description,
+      settled_at: row.settled_at,
+      items,
+    };
+  }
+
+  let personalTakes: PersonalTake[] = personalTakeRows.map((take) =>
+    saleTake(take, [])
+  );
   if (personalTakeRows.length > 0) {
     try {
       const itemRows = await queryRows<{
@@ -367,11 +441,9 @@ export default async function VaultPage({
         if (list) list.push(item);
         else itemsByTakeId.set(item.transaction_id, [item]);
       }
-      personalTakes = personalTakeRows.map((take) => ({
-        ...take,
-        kind: "sale" as const,
-        items: itemsByTakeId.get(take.id) ?? [],
-      }));
+      personalTakes = personalTakeRows.map((take) =>
+        saleTake(take, itemsByTakeId.get(take.id) ?? [])
+      );
     } catch (err) {
       return <PageError title="Could not load the vault" message={(err as Error).message} />;
     }

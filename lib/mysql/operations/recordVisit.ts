@@ -25,7 +25,7 @@ export async function recordVisit(
     personalTake: boolean;
     /** Personal-take only — who it's for and why, capturable right at
         checkout instead of only later from Vault → Personal takes (see
-        settlePersonalTake/labelPersonalTake). */
+        recordTakePayment/labelPersonalTake). */
     debtorName?: string | null;
     debtorDescription?: string | null;
     services?: ServiceLine[];

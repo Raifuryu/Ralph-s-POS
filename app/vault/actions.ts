@@ -9,9 +9,12 @@ import { pool } from "@/lib/mysql/pool";
 import {
   labelPersonalTake,
   labelServiceTake,
-  settlePersonalTake,
-  settleServiceTake,
-} from "@/lib/mysql/operations/settlePersonalTake";
+} from "@/lib/mysql/operations/labelPersonalTake";
+import {
+  recordTakePayment,
+  setTakeSellingPriceBasis,
+  type TakeRef,
+} from "@/lib/mysql/operations/recordTakePayment";
 import { recordVaultCount } from "@/lib/mysql/operations/recordVaultCount";
 import { adjustVaultBalance } from "@/lib/mysql/operations/adjustVaultBalance";
 import { adjustFundBalance } from "@/lib/mysql/operations/adjustFundBalance";
@@ -807,50 +810,73 @@ export async function labelDebtor(
   }
 }
 
-/** Marks a personal take as paid back — posts the amount into whichever
-    account the debtor actually paid into, the first time that take's value
-    ever reaches the vault (see settlePersonalTake's own comment on why
-    nothing was posted at the time it was taken). */
-export async function settleDebt(
+/** Records one payment against one or more personal takes — partial or in
+    full, across a cart take and a service take together if the debtor is
+    paying both off at once. The amount is applied oldest debt first; see
+    recordTakePayment for the split and for why a half payment books no
+    profit until the store's own cost is back. */
+export async function payTakes(
+  _prev: PersonalTakeActionState,
+  formData: FormData
+): Promise<PersonalTakeActionState> {
+  const account = parseAccount(formData.get("account"));
+  if (!account) return { error: "Pick which account received the payment." };
+
+  const amount = parseMoney(formData.get("amount"), { requirePositive: true });
+  if (amount === "bad" || amount === null) {
+    return { error: "Enter how much was paid." };
+  }
+
+  // "sale:<id>,service:<id>" — the sheet's own selection, flattened into
+  // one field so a plain form submit carries it without a nested shape.
+  let takes: TakeRef[];
+  try {
+    takes = String(formData.get("takes") ?? "")
+      .split(",")
+      .filter(Boolean)
+      .map((part) => {
+        const [kind, id] = part.split(":");
+        if ((kind !== "sale" && kind !== "service") || !id) {
+          throw new Error("bad take reference");
+        }
+        return { kind, id };
+      });
+  } catch {
+    return { error: "Something went wrong reading the selected takes." };
+  }
+  if (takes.length === 0) return { error: "Pick at least one take to pay." };
+
+  try {
+    const user = await requireCurrentUser();
+    await recordTakePayment(
+      { takes, amount, account, ...debtorFields(formData) },
+      user.id
+    );
+    revalidatePath("/vault");
+    revalidatePath("/");
+    revalidatePath("/statistics");
+    return { error: null, ok: true };
+  } catch (err) {
+    return { error: (err as Error).message };
+  }
+}
+
+/** Switches an unpaid cart take between being owed at cost and at what its
+    items would have sold for — refused once anything has been paid on it
+    (see setTakeSellingPriceBasis). */
+export async function setTakeBasis(
   _prev: PersonalTakeActionState,
   formData: FormData
 ): Promise<PersonalTakeActionState> {
   const transactionId = String(formData.get("transaction_id") ?? "");
   if (!transactionId) return { error: "Missing transaction." };
 
-  const account = parseAccount(formData.get("account"));
-  if (!account) return { error: "Pick which account received the payment." };
-
-  // Which of the two "Mark as paid" buttons was clicked — see the button
-  // pair in personalTakesSheet.tsx, each submitting the same form with a
-  // different name="at_selling_price" value baked into the button itself.
-  const atSellingPrice = formData.get("at_selling_price") === "1";
-  const isService = formData.get("kind") === "service";
-
   try {
-    const user = await requireCurrentUser();
-    if (isService) {
-      // A service take has no cost-vs-selling choice — its debt is simply
-      // the principal + fee that never got handed over (see
-      // settleServiceTake).
-      await settleServiceTake(
-        {
-          serviceTransactionId: transactionId,
-          account,
-          ...debtorFields(formData),
-        },
-        user.id
-      );
-      revalidatePath("/vault");
-      revalidatePath("/");
-      return { error: null, ok: true };
-    }
-    await settlePersonalTake(
-      { transactionId, account, atSellingPrice, ...debtorFields(formData) },
-      user.id
-    );
+    await setTakeSellingPriceBasis({
+      transactionId,
+      atSellingPrice: formData.get("at_selling_price") === "1",
+    });
     revalidatePath("/vault");
-    revalidatePath("/");
     return { error: null, ok: true };
   } catch (err) {
     return { error: (err as Error).message };

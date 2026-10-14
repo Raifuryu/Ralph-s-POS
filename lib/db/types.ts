@@ -111,6 +111,7 @@ export type Database = {
           debtor_description: string | null;
           settled_at: string | null;
           settled_by: string | null;
+          settle_at_selling_price: boolean;
         };
       };
       transaction_items: {

@@ -12,7 +12,7 @@ import {
   friendlyDayLabel,
   storeDayKey
 } from "@/lib/format";
-import { asSettledSale, effectiveTimestamp } from "@/lib/personalTakes";
+import { effectiveTimestamp } from "@/lib/personalTakes";
 import { roundMoney } from "@/lib/pricing";
 import {
   MONEY_ACCOUNT_LABELS,
@@ -93,21 +93,19 @@ function saleProfit(items: TransactionItem[]) {
 function entryIncome(entry: SalesEntry): number {
   if (entry.data.voided_at) return 0;
   if (entry.kind === "sale") {
-    if (entry.data.is_personal_take) {
-      const settled = asSettledSale(entry.data);
-      return settled ? saleProfit(settled.transaction_items).profit : 0;
-    }
+    // An unpaid take never reaches this list, and a paid one is
+    // represented by its payments instead (see TakePayment).
+    if (entry.data.is_personal_take) return 0;
     return saleProfit(entry.data.transaction_items).profit;
   }
+  if (entry.kind === "takePayment") return entry.data.profit;
   return Number(entry.data.fee);
 }
 
-/** What one paid personal take brought in (its settlement amount) — 0 for
-    anything else. */
+/** What personal-take payments brought in on this day — the full amount
+    received, not just its profit part. */
 function personalTakeValue(entry: SalesEntry): number {
-  if (entry.kind !== "sale" || !entry.data.is_personal_take) return 0;
-  if (entry.data.voided_at) return 0;
-  return entry.data.settlement?.amount ?? 0;
+  return entry.kind === "takePayment" ? entry.data.amount : 0;
 }
 
 /** Groups one day's entries into render items — a sale or service only gets
@@ -198,104 +196,7 @@ function RowNumber({ number }: { number: number }) {
   );
 }
 
-function SaleBlock(props: {
-  number: number;
-  transaction: SalesEntry & { kind: "sale" };
-}) {
-  // Split here rather than branching inside one component — the regular
-  // row owns hooks (its void action), and a paid take has no void at all.
-  return props.transaction.data.is_personal_take &&
-    props.transaction.data.settlement ? (
-    <PaidTakeBlock {...props} />
-  ) : (
-    <RegularSaleBlock {...props} />
-  );
-}
-
-/** A personal take on the day it was PAID. Laid out like a sale row — the
-    right-hand figure is profit — but read-only: a settled take can't be
-    voided anymore (voidTransaction refuses), so it isn't tappable. */
-function PaidTakeBlock({
-  number,
-  transaction
-}: {
-  number: number;
-  transaction: SalesEntry & { kind: "sale" };
-}) {
-  const { data } = transaction;
-  const settlement = data.settlement!;
-  const settled = asSettledSale(data);
-  const lines = settled?.transaction_items ?? data.transaction_items;
-  const { profit, revenueWithUnknownCost } = saleProfit(lines);
-  const partialCostUnknown = revenueWithUnknownCost > 0;
-
-  return (
-    <div className="-mx-2 flex gap-2 border-b border-l-2 border-l-transparent px-2 py-2.5 last:border-b-0">
-      <RowNumber number={number} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <p className="text-sm font-medium">
-            {formatTime(data.settled_at ?? data.created_at)}
-            <span className="ml-2 font-normal text-muted-foreground">
-              Personal take
-              {settlement.account
-                ? ` · paid via ${PAYMENT_METHOD_LABELS[settlement.account]}`
-                : " · paid"}
-            </span>
-          </p>
-          <p className="text-sm font-semibold tabular-nums">
-            +{formatPeso(profit)}
-            {partialCostUnknown ? "*" : ""}
-          </p>
-        </div>
-
-        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
-          {formatPeso(settlement.amount)} paid at{" "}
-          {settlement.atSellingPrice ? "selling price" : "cost"}
-          {data.debtor_name ? ` · ${data.debtor_name}` : ""} · taken{" "}
-          {formatDate(data.created_at)}
-          {partialCostUnknown
-            ? ` · *${formatPeso(revenueWithUnknownCost)} of that has no recorded cost yet`
-            : ""}
-        </p>
-
-        <div className="mt-1 flex flex-col gap-0.5">
-          {lines.map((item) => {
-            const unitCost =
-              item.unit_cost !== null ? Number(item.unit_cost) : null;
-            const lineValue = Number(item.line_total ?? 0);
-            const lineProfit =
-              unitCost !== null ? lineValue - unitCost * item.quantity : null;
-            return (
-              <div
-                key={item.id}
-                className="flex items-baseline justify-between gap-2 text-xs text-muted-foreground"
-              >
-                <span className="min-w-0 truncate">
-                  {item.product_name}
-                  {unitCost === null ? "*" : ""}
-                  <span className="tabular-nums">
-                    {" "}
-                    · {item.quantity} × {formatPeso(Number(item.unit_price))}
-                    {unitCost !== null ? ` · cost ${formatPeso(unitCost)}` : ""}
-                  </span>
-                </span>
-                <span className="shrink-0 text-right tabular-nums">
-                  <div>{formatPeso(lineValue)}</div>
-                  {lineProfit !== null && settlement.atSellingPrice ? (
-                    <div>+{formatPeso(lineProfit)}</div>
-                  ) : null}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RegularSaleBlock({
+function SaleBlock({
   number,
   transaction
 }: {
@@ -474,6 +375,45 @@ function RegularSaleBlock({
   );
 }
 
+/** One payment received against a personal take, on the day it was
+    received — read-only: the take it belongs to lives in Vault → Personal
+    takes, and the payment itself is just a vault deposit. */
+function TakePaymentBlock({
+  number,
+  payment
+}: {
+  number: number;
+  payment: SalesEntry & { kind: "takePayment" };
+}) {
+  const { data } = payment;
+  return (
+    <div className="-mx-2 flex gap-2 border-b border-l-2 border-l-transparent px-2 py-2.5 last:border-b-0">
+      <RowNumber number={number} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline justify-between gap-2">
+          <p className="min-w-0 truncate text-sm font-medium">
+            {formatTime(data.created_at)}
+            <span className="ml-2 font-normal text-muted-foreground">
+              Utang payment
+            </span>
+          </p>
+          <p className="shrink-0 text-sm font-semibold tabular-nums">
+            +{formatPeso(data.profit)}
+          </p>
+        </div>
+        <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
+          {formatPeso(data.amount)} received
+          {data.debtor_name ? ` · ${data.debtor_name}` : ""} ·{" "}
+          {MONEY_ACCOUNT_LABELS[data.account]}
+        </p>
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          for {data.label}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function ServiceBlock({
   number,
   service
@@ -636,6 +576,12 @@ function VisitGroup({ entries }: { entries: NumberedEntry[] }) {
               number={number}
               transaction={entry}
             />
+          ) : entry.kind === "takePayment" ? (
+            <TakePaymentBlock
+              key={entry.data.id}
+              number={number}
+              payment={entry}
+            />
           ) : (
             <ServiceBlock key={entry.data.id} number={number} service={entry} />
           )
@@ -708,7 +654,7 @@ export default function TransactionTable({
                 </p>
                 {group.personalTakeTotal > 0 ? (
                   <p className="text-xs text-muted-foreground tabular-nums">
-                    Personal takes paid {formatPeso(group.personalTakeTotal)}
+                    Utang paid {formatPeso(group.personalTakeTotal)}
                   </p>
                 ) : null}
               </span>
@@ -721,6 +667,12 @@ export default function TransactionTable({
                   key={item.entry.entry.data.id}
                   number={item.entry.number}
                   transaction={item.entry.entry}
+                />
+              ) : item.entry.entry.kind === "takePayment" ? (
+                <TakePaymentBlock
+                  key={item.entry.entry.data.id}
+                  number={item.entry.number}
+                  payment={item.entry.entry}
                 />
               ) : (
                 <ServiceBlock

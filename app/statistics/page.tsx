@@ -14,9 +14,11 @@ import {
   WEEKDAY_ORDER,
 } from "@/lib/format";
 import { queryRows } from "@/lib/mysql/pool";
-import { incomeSales, serviceOnPaidDate } from "@/lib/personalTakes";
 import { roundMoney } from "@/lib/pricing";
-import { attachSettlements } from "@/lib/personalTakesQuery";
+import {
+  fetchTakePayments,
+  takePaymentTotals,
+} from "@/lib/personalTakesQuery";
 import {
   MONEY_ACCOUNT_LABELS,
   type MoneyAccount,
@@ -259,15 +261,7 @@ export default async function StatisticsPage({
     dateParams.push(params.to_ts);
   }
   const dateWhere = dateConditions.length > 0 ? `WHERE ${dateConditions.join(" AND ")}` : "";
-  // Same window, but on settled_at — a personal take counts as income on
-  // the day it was PAID, which can fall inside this range even when the
-  // take itself happened before it (see lib/personalTakes.ts).
-  const settledConditions = [
-    "is_personal_take = 1",
-    "voided_at IS NULL",
-    "settled_at IS NOT NULL",
-    ...dateConditions.map((c) => c.replace("created_at", "settled_at")),
-  ];
+
 
   // Category/product/service scope — narrows every figure on this page down
   // to just matching transaction_items/service_transactions (see
@@ -292,7 +286,7 @@ export default async function StatisticsPage({
   const hasAnyFilter = hasCategoryOrProductFilter || hasServiceFilter;
 
   let sales: TransactionWithItems[];
-  let settledTakes: TransactionWithItems[];
+  let takePayments: Awaited<ReturnType<typeof fetchTakePayments>>;
   let unpaidServiceTakes: {
     service_id: string | null;
     principal: number;
@@ -317,10 +311,9 @@ export default async function StatisticsPage({
 
   try {
     let transactions: Transaction[];
-    let settledTakeRows: Transaction[];
     [
       transactions,
-      settledTakeRows,
+      takePayments,
       unpaidServiceTakes,
       serviceData,
       restockData,
@@ -333,12 +326,9 @@ export default async function StatisticsPage({
           `SELECT ${TRANSACTION_COLUMNS} FROM transactions ${dateWhere} ORDER BY created_at ASC`,
           dateParams
         ),
-        queryRows<Transaction>(
-          `SELECT ${TRANSACTION_COLUMNS} FROM transactions
-           WHERE ${settledConditions.join(" AND ")}
-           ORDER BY settled_at ASC`,
-          dateParams
-        ),
+        // Utang PAID in this window — income follows the payments, not the
+        // takes (see fetchTakePayments).
+        fetchTakePayments(params.from_ts, params.to_ts),
         // E-services taken on utang and still unpaid — counted alongside
         // unpaid cart takes below, by the day they were taken (they aren't
         // income yet, so there's no payment day to file them under).
@@ -348,21 +338,15 @@ export default async function StatisticsPage({
              ${dateWhere ? `AND ${dateConditions.join(" AND ")}` : ""}`,
           dateParams
         ),
-        // Services paid for normally fall in the window by created_at; one
-        // taken on utang counts only once paid, by settled_at (see
-        // serviceOnPaidDate, which rewrites its date for aggregation).
+        // Takes are excluded — a service taken on utang contributes only
+        // through the payments made against it.
         queryRows<ServiceRevenuePoint>(
           `SELECT service_id, fee, wallet, payment_account, created_at, voided_at,
                   service_name, unit_label, unit_quantity, is_personal_take, settled_at
            FROM service_transactions
-           WHERE (is_personal_take = 0${dateWhere ? ` AND ${dateConditions.join(" AND ")}` : ""})
-              OR (is_personal_take = 1 AND voided_at IS NULL AND settled_at IS NOT NULL${
-                dateWhere
-                  ? ` AND ${dateConditions.map((c) => c.replace("created_at", "settled_at")).join(" AND ")}`
-                  : ""
-              })
+           ${dateWhere ? `${dateWhere} AND` : "WHERE"} is_personal_take = 0
            ORDER BY created_at ASC`,
-          [...dateParams, ...dateParams]
+          dateParams
         ),
         queryRows<{
           product_id: string | null;
@@ -404,9 +388,7 @@ export default async function StatisticsPage({
       ]);
 
     const itemsByTxnId = new Map<string, TransactionItem[]>();
-    const itemTxnIds = [
-      ...new Set([...transactions, ...settledTakeRows].map((t) => t.id)),
-    ];
+    const itemTxnIds = [...new Set(transactions.map((t) => t.id))];
     if (itemTxnIds.length > 0) {
       const items = await queryRows<TransactionItem>(
         `SELECT ${TRANSACTION_ITEM_COLUMNS} FROM transaction_items WHERE transaction_id IN (${itemTxnIds.map(() => "?").join(",")})`,
@@ -422,12 +404,6 @@ export default async function StatisticsPage({
       ...t,
       transaction_items: itemsByTxnId.get(t.id) ?? [],
     }));
-    settledTakes = await attachSettlements(
-      settledTakeRows.map((t) => ({
-        ...t,
-        transaction_items: itemsByTxnId.get(t.id) ?? [],
-      }))
-    );
   } catch (err) {
     return <LoadError message={(err as Error).message} />;
   }
@@ -483,9 +459,7 @@ export default async function StatisticsPage({
 
   // A voided service transaction had every entry it posted reversed — same
   // "excluded everywhere" treatment as a voided/personal-take sale.
-  const serviceList = serviceData
-    .filter((s) => !s.voided_at)
-    .map(serviceOnPaidDate);
+  const serviceList = serviceData.filter((s) => !s.voided_at);
   const effectiveServiceList = serviceList.filter(matchesServiceFilter);
 
   // A voided sale had its stock and any posted income both reversed — it
@@ -493,16 +467,12 @@ export default async function StatisticsPage({
   // so it's excluded the same way personal takes already are everywhere a
   // sum/count/average is computed below.
   const nonVoidedSales = sales.filter((t) => !t.voided_at);
-  // Personal takes PAID in this window, rewritten as ordinary sales dated on
-  // their payment day at whatever they were settled for — so every revenue,
-  // profit, product, category, payment-method, and traffic figure below
-  // counts them exactly like a sale (profit only at selling price, zero at
-  // cost). See asSettledSale.
-  const settledSales = incomeSales(settledTakes);
-  const salesExcludingPersonal = [
-    ...nonVoidedSales.filter((t) => !t.is_personal_take),
-    ...settledSales,
-  ];
+  const salesExcludingPersonal = nonVoidedSales.filter((t) => !t.is_personal_take);
+  // What utang paid in this window contributed. Not attributable to a
+  // product/category/service of its own, so — like cash deposits — it's
+  // left out entirely while a filter is active rather than shown as a
+  // whole-store number next to filtered ones.
+  const fromTakePayments = takePaymentTotals(hasAnyFilter ? [] : takePayments);
 
   // costKnownRevenue/cost mirror storeRevenueWithKnownCost/storeCogs below,
   // but per product — a line only contributes to profit once its unit_cost
@@ -671,7 +641,15 @@ export default async function StatisticsPage({
       }
     }
   }
-  const storeMargin = storeRevenueWithKnownCost - storeCogs;
+  // Utang paid in this window counts the same way it does on the
+  // dashboard: the whole payment is store revenue, the part paid above the
+  // store's own cost is margin, and the rest is cost recovered.
+  storeTotal = roundMoney(storeTotal + fromTakePayments.storeRevenue);
+  storeCogs = roundMoney(storeCogs + fromTakePayments.storeCogs);
+  const storeMargin = roundMoney(
+    storeRevenueWithKnownCost - (storeCogs - fromTakePayments.storeCogs) +
+      fromTakePayments.storeMargin
+  );
 
   // An UNPAID personal take taken in this window, valued at cost (see
   // checkout()'s own "no income" comment). A paid one is already counted
@@ -699,7 +677,7 @@ export default async function StatisticsPage({
   }
 
   // Unpaid service takes join the same figure — what's owed on one is its
-  // principal + fee (see settleServiceTake).
+  // principal + fee (see recordTakePayment).
   let unpaidServiceTakesCount = 0;
   for (const take of unpaidServiceTakes) {
     if (
@@ -718,9 +696,11 @@ export default async function StatisticsPage({
     );
   }
 
-  const eServiceTotal = effectiveServiceList.reduce(
-    (sum, s) => sum + Number(s.fee),
-    0
+  const eServiceTotal = roundMoney(
+    effectiveServiceList.reduce((sum, s) => sum + Number(s.fee), 0) +
+      fromTakePayments.eServiceFees.gcash +
+      fromTakePayments.eServiceFees.maya +
+      fromTakePayments.eServiceFees.other
   );
   const totalRevenue = storeTotal + eServiceTotal;
   const transactionCount =
@@ -735,7 +715,11 @@ export default async function StatisticsPage({
   // IncomeBreakdownCard, just range-scoped instead of daily. Empty whenever
   // effectiveServiceList is (a category/product-only filter, or a Service
   // filter matching nothing in this window).
-  const eServiceFees: EServiceFees = { gcash: 0, maya: 0, other: 0 };
+  const eServiceFees: EServiceFees = {
+    gcash: fromTakePayments.eServiceFees.gcash,
+    maya: fromTakePayments.eServiceFees.maya,
+    other: fromTakePayments.eServiceFees.other,
+  };
   for (const s of effectiveServiceList) {
     const fee = Number(s.fee);
     if (s.wallet === "gcash") eServiceFees.gcash += fee;
@@ -879,7 +863,7 @@ export default async function StatisticsPage({
     .sort((a, b) => b.revenue - a.revenue);
 
   const profitPoints = buildProfitPoints(
-    [...sales, ...settledSales],
+    sales,
     effectiveServiceList,
     matchesItemFilter
   );
