@@ -160,7 +160,13 @@ export async function checkout(
 
   const transactionId = randomUUID();
   await conn.query(
-    "INSERT INTO transactions (id, payment_method, cashier_id, total, tendered, is_personal_take, visit_id, debtor_name, debtor_description) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    // settle_at_selling_price is set explicitly rather than left to the
+    // column default: a take is owed at the shelf price unless the owner
+    // switches it (see recordTakePayment/setTakeSellingPriceBasis), and
+    // that shouldn't silently depend on which DEFAULT a given database
+    // happens to have been migrated with. Always false on a real sale,
+    // where it means nothing.
+    "INSERT INTO transactions (id, payment_method, cashier_id, total, tendered, is_personal_take, visit_id, debtor_name, debtor_description, settle_at_selling_price) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       transactionId,
       paymentMethod,
@@ -171,6 +177,7 @@ export async function checkout(
       visitId,
       debtorName,
       debtorDescription,
+      personalTake,
     ]
   );
 

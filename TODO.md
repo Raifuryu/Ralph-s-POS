@@ -9,14 +9,24 @@ ALTER TABLE transactions
   ADD COLUMN settle_at_selling_price BOOLEAN NOT NULL DEFAULT TRUE AFTER settled_by;
 ```
 
-Note this also applies to utang already outstanding: every unpaid take
-becomes owed at selling price. To keep the ones taken before today at cost
-instead, run this straight after:
+**If the column already exists** (added by an earlier run of this with
+`DEFAULT FALSE`), the ALTER above will fail as a duplicate — that's fine.
+New takes no longer depend on the column default at all: checkout() now
+writes the basis explicitly. But takes ALREADY recorded still carry
+whatever the old default gave them, so switch the outstanding ones over:
 
 ```sql
 UPDATE transactions
-SET settle_at_selling_price = FALSE
-WHERE is_personal_take = 1 AND settled_at IS NULL AND created_at < CURDATE();
+SET settle_at_selling_price = TRUE
+WHERE is_personal_take = 1 AND settled_at IS NULL;
+```
+
+That only touches unpaid takes. Anything already part-paid or settled keeps
+the amount it was being paid against. To also fix the column's own default
+for safety:
+
+```sql
+ALTER TABLE transactions ALTER COLUMN settle_at_selling_price SET DEFAULT TRUE;
 ```
 
 Verify with:
