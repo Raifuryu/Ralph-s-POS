@@ -245,7 +245,7 @@ export default async function VaultPage({
                       t.settle_at_selling_price, t.created_at,
                       t.debtor_name, t.debtor_description, t.settled_at,
                       COALESCE((
-                        SELECT SUM(ti.unit_price * ti.quantity)
+                        SELECT SUM(ti.line_total)
                         FROM transaction_items ti WHERE ti.transaction_id = t.id
                       ), 0) AS selling_total,
                       COALESCE((

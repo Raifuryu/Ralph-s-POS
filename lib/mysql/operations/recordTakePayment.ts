@@ -61,13 +61,16 @@ async function loadSaleBalance(
   const costOwed = roundMoney(Number(take.total));
   let owed = costOwed;
   if (take.settle_at_selling_price) {
-    const itemRows = await queryConn<{ unit_price: number; quantity: number }>(
+    // line_total, not unit_price × quantity — it's the generated column
+    // that already nets out any discount/surcharge put on the line, which
+    // IS what the debtor is being charged (see checkout()'s take branch).
+    const itemRows = await queryConn<{ line_total: number }>(
       conn,
-      "SELECT unit_price, quantity FROM transaction_items WHERE transaction_id = ?",
+      "SELECT line_total FROM transaction_items WHERE transaction_id = ?",
       [id]
     );
     owed = roundMoney(
-      itemRows.reduce((sum, item) => sum + Number(item.unit_price) * item.quantity, 0)
+      itemRows.reduce((sum, item) => sum + Number(item.line_total ?? 0), 0)
     );
   }
 

@@ -126,13 +126,24 @@ export async function checkout(
   let reinvestRaw = 0;
   const lines = cart.map((line) => {
     const product = productById.get(line.productId)!;
+    const subtotal = roundMoney(product.price * line.quantity);
     if (personalTake) {
+      // `total` on a take is its COST — what the stock was worth to the
+      // store — and a markdown doesn't change that. The discount/surcharge
+      // is still stored on the line, because it's what the debtor is
+      // actually being charged: a take is owed at selling price by default
+      // (see transactions.settle_at_selling_price), and that figure is read
+      // off line_total, which already nets the adjustment out.
       if (product.cost !== null) {
         total += roundMoney(product.cost * line.quantity);
       }
-      return { ...line, product, discount: 0, surcharge: 0 };
+      return {
+        ...line,
+        product,
+        discount: roundMoney(Math.min(line.discountAmount, subtotal)),
+        surcharge: roundMoney(line.surchargeAmount),
+      };
     }
-    const subtotal = roundMoney(product.price * line.quantity);
     // Rounded here (transaction_items.discount_amount/surcharge_amount are
     // both DECIMAL) rather than trusted as-is — a percent-of-subtotal
     // adjustment computed client-side can leave floating-point noise past
