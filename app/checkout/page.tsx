@@ -7,7 +7,7 @@ import type { MoneyAccount, Product, Service } from "@/lib/types";
 import CheckoutForm from "./checkoutForm";
 
 const PRODUCT_COLUMNS =
-  "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at";
+  "id, name, barcode, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at";
 const SERVICE_COLUMNS =
   "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at";
 

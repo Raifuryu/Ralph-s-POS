@@ -2,7 +2,7 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { MinusIcon, PlusIcon, XIcon } from "lucide-react";
+import { MinusIcon, PlusIcon, ScanBarcodeIcon, XIcon } from "lucide-react";
 
 import { EmptyState } from "@/components/emptyState";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isShort } from "../changeCalculator";
 import { recordVisit, type VisitState } from "./actions";
+import BarcodeScanner from "@/components/barcodeScanner";
 import ItemPickerDrawer from "./itemPickerDrawer";
 import ServicePickerDrawer from "./servicePickerDrawer";
 import type { ServiceDraft } from "./serviceLineEditor";
@@ -126,6 +127,14 @@ export default function CheckoutForm({
   // Stock still leaves the shelf, but nothing was sold — no payment method,
   // no change to tender, no income. See app/checkout/actions.ts.
   const [personalTake, setPersonalTake] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  // What the last scan did, shown right under the scanner — the owner is
+  // looking at the goods, not the screen, so it has to be readable at a
+  // glance and survive until the next scan.
+  const [scanFeedback, setScanFeedback] = useState<{
+    kind: "hit" | "miss";
+    text: string;
+  } | null>(null);
   // Optional, personal-take only — who it's for and why. Can always be
   // added/edited later from Vault → Personal takes instead (see
   // labelPersonalTake), this is just the "cashier already knows" shortcut.
@@ -402,6 +411,23 @@ export default function CheckoutForm({
     isShort(tendered, grandTotal);
   const tenderedAmount = toAmount(tendered);
 
+  // Scanning adds straight to the cart — the whole point is not having to
+  // find the item in a list. Matched against the products already loaded
+  // for the picker, so there's no round trip between scan and beep.
+  function handleScan(code: string) {
+    const match = products.find((product) => product.barcode === code);
+    if (!match) {
+      setScanFeedback({
+        kind: "miss",
+        text: `No item has barcode ${code}. Add it to that item in Inventory first.`,
+      });
+      return;
+    }
+    const next = (quantities[match.id] ?? 0) + 1;
+    setQuantity(match.id, next);
+    setScanFeedback({ kind: "hit", text: `${match.name} · ${next} in cart` });
+  }
+
   function setQuantity(id: string, next: number) {
     setQuantities((prev) => ({ ...prev, [id]: Math.max(0, next) }));
     // Removing a line clears its adjustment too — re-adding the same
@@ -513,6 +539,42 @@ export default function CheckoutForm({
           onAdd={(id) => setQuantity(id, (quantities[id] ?? 0) + 1)}
           pieceCount={pieceCount}
         />
+
+        <Button
+          type="button"
+          variant={scanning ? "default" : "outline"}
+          className="w-full justify-between"
+          onClick={() => {
+            setScanning((on) => !on);
+            setScanFeedback(null);
+          }}
+        >
+          <span>{scanning ? "Stop scanning" : "Scan barcode"}</span>
+          <ScanBarcodeIcon />
+        </Button>
+
+        {scanning ? (
+          <div className="flex flex-col gap-2 rounded-lg border p-2">
+            <BarcodeScanner
+              hint="Each scan adds one. Scan the same item again for another."
+              onScan={handleScan}
+              onCancel={() => setScanning(false)}
+            />
+            {scanFeedback ? (
+              <p
+                role="status"
+                className={cn(
+                  "rounded-lg p-2 text-sm font-medium",
+                  scanFeedback.kind === "hit"
+                    ? "bg-success/10 text-success"
+                    : "bg-warning/10 text-warning"
+                )}
+              >
+                {scanFeedback.text}
+              </p>
+            ) : null}
+          </div>
+        ) : null}
         <ServicePickerDrawer
           services={services}
           balances={balances}

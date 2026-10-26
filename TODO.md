@@ -1,3 +1,18 @@
+## PENDING MIGRATION — barcode scanning
+
+Run before deploying. One column, plus the uniqueness that lets a scan
+identify exactly one item.
+
+```sql
+ALTER TABLE products
+  ADD COLUMN barcode VARCHAR(64) AFTER name,
+  ADD CONSTRAINT products_barcode_unique UNIQUE (barcode);
+```
+
+Existing items get `NULL` (no code yet) — scan each one in Inventory to
+assign it. NULL repeats are fine under UNIQUE in MariaDB, so only real
+codes have to be distinct.
+
 ## PENDING MIGRATION — partial utang payments
 
 Run before deploying. One column: which amount a cart take is owed at, so a

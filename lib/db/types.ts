@@ -53,6 +53,7 @@ export type Database = {
         Row: {
           id: string;
           name: string;
+          barcode: string | null;
           price: number;
           stock: number | null;
           is_active: boolean;

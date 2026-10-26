@@ -6,3 +6,10 @@ ignoredBuiltDependencies:
   - esbuild
   - sharp
   - unrs-resolver
+# Transitive pins, not workspace packages. Both arrive under postcss (a
+# build-time dependency of Next) and are denial-of-service fixes; pinning
+# them keeps `pnpm audit --prod` clean without waiting for postcss to
+# release a bump of its own. Safe to drop once it does.
+overrides:
+  nanoid: ">=3.3.18"
+  source-map-js: ">=1.2.2"

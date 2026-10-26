@@ -6,7 +6,7 @@ import { redirect } from "next/navigation";
 
 import { requireCurrentUser } from "@/lib/auth/session";
 import { parseMoney, parseWholeNumber } from "@/lib/money";
-import { pool } from "@/lib/mysql/pool";
+import { pool, queryRows } from "@/lib/mysql/pool";
 import {
   recordBulkRestock,
   type BulkRestockLine,
@@ -27,6 +27,9 @@ export type InventoryState = {
 
 type Parsed = {
   name: string;
+  /** Scanned once in Inventory, then used at the counter to add this item
+      to a sale. Blank means the item has no code (tingi, repacked). */
+  barcode: string | null;
   price: number;
   /** Current per-item cost — drives the profit shown on sales. Blank means
       "unknown," not zero. Normally kept up to date by restocking; editable
@@ -66,6 +69,13 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     return { error: "Quantity must be a whole number, or left blank." };
   }
 
+  // Kept as typed, minus surrounding space — a barcode is an identifier,
+  // not a number: leading zeros in EAN/UPC are significant.
+  const barcode = String(formData.get("barcode") ?? "").trim();
+  if (barcode.length > 64) {
+    return { error: "That barcode is too long to store." };
+  }
+
   const description = String(formData.get("description") ?? "").trim();
 
   // Empty means "no category". A non-empty value must reference a real row —
@@ -97,6 +107,7 @@ function parseForm(formData: FormData): Parsed | { error: string } {
 
   return {
     name,
+    barcode: barcode || null,
     price,
     cost,
     stock: counted,
@@ -105,6 +116,26 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     low_stock_threshold: lowStockThreshold,
     expiry_date: expiryDate,
   };
+}
+
+/** A barcode is UNIQUE across products, so assigning one that's already on
+    another item fails at the database. Turn that into something the owner
+    can act on — which item already has it — instead of a driver error. */
+async function describeDuplicateBarcode(
+  barcode: string | null
+): Promise<string | null> {
+  if (!barcode) return null;
+  const rows = await queryRows<{ name: string }>(
+    "SELECT name FROM products WHERE barcode = ? LIMIT 1",
+    [barcode]
+  );
+  return rows[0]
+    ? `That barcode is already on "${rows[0].name}".`
+    : "That barcode is already used by another item.";
+}
+
+function isDuplicateEntry(err: unknown): boolean {
+  return (err as { code?: string })?.code === "ER_DUP_ENTRY";
 }
 
 export async function updateProduct(
@@ -117,12 +148,14 @@ export async function updateProduct(
   const parsed = parseForm(formData);
   if ("error" in parsed) return { error: parsed.error };
 
-  await pool.query(
+  try {
+    await pool.query(
     `UPDATE products
-     SET name = ?, price = ?, cost = ?, description = ?, category_id = ?, stock = ?, low_stock_threshold = ?, expiry_date = ?
+     SET name = ?, barcode = ?, price = ?, cost = ?, description = ?, category_id = ?, stock = ?, low_stock_threshold = ?, expiry_date = ?
      WHERE id = ?`,
     [
       parsed.name,
+      parsed.barcode,
       parsed.price,
       parsed.cost,
       parsed.description,
@@ -132,7 +165,13 @@ export async function updateProduct(
       parsed.expiry_date,
       id,
     ]
-  );
+    );
+  } catch (err) {
+    if (isDuplicateEntry(err)) {
+      return { error: (await describeDuplicateBarcode(parsed.barcode))! };
+    }
+    throw err;
+  }
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");
@@ -156,12 +195,14 @@ export async function createProduct(
   const parsed = parseForm(formData);
   if ("error" in parsed) return { error: parsed.error };
 
-  await pool.query(
-    `INSERT INTO products (id, name, price, cost, description, category_id, stock, low_stock_threshold, expiry_date)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  try {
+    await pool.query(
+    `INSERT INTO products (id, name, barcode, price, cost, description, category_id, stock, low_stock_threshold, expiry_date)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       randomUUID(),
       parsed.name,
+      parsed.barcode,
       parsed.price,
       parsed.cost,
       parsed.description,
@@ -170,7 +211,13 @@ export async function createProduct(
       parsed.low_stock_threshold,
       parsed.expiry_date,
     ]
-  );
+    );
+  } catch (err) {
+    if (isDuplicateEntry(err)) {
+      return { error: (await describeDuplicateBarcode(parsed.barcode))! };
+    }
+    throw err;
+  }
 
   revalidatePath("/inventory");
   revalidatePath("/checkout");

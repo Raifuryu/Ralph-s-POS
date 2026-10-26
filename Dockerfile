@@ -6,7 +6,11 @@
 # misfiring (no TTY to confirm a reinstall) on node_modules copied in from
 # an earlier build stage.
 
-FROM node:22-alpine AS base
+# Node 24 ("Krypton") — the Active LTS, supported into 2028. A floating
+# major tag on purpose: each rebuild picks up that line's newest security
+# patch, which matters more here than byte-identical rebuilds, since the
+# only thing that updates this container is someone rebuilding it.
+FROM node:24-alpine AS base
 RUN apk add --no-cache libc6-compat tzdata
 # The store is in the Philippines — every displayed date/time already pins
 # Asia/Manila explicitly (lib/format.ts), but mysql2's default date parsing

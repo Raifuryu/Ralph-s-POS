@@ -68,7 +68,7 @@ const TRANSACTION_COLUMNS =
 const TRANSACTION_ITEM_COLUMNS =
   "id, transaction_id, product_id, product_name, unit_price, unit_cost, quantity, discount_amount, line_total";
 const PRODUCT_COLUMNS =
-  "id, name, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at";
+  "id, name, barcode, price, cost, stock, description, category_id, low_stock_threshold, expiry_date, is_active, created_at, updated_at";
 const SERVICE_COLUMNS =
   "id, name, cash_flow, default_fee, fee_tiers, wallet, allowed_payment_accounts, pricing_mode, unit_prices, is_active, created_at, updated_at";
 

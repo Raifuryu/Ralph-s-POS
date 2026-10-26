@@ -56,6 +56,12 @@ CREATE TABLE categories (
 CREATE TABLE products (
   id                   CHAR(36)       NOT NULL PRIMARY KEY,
   name                 VARCHAR(255)   NOT NULL,
+  -- Scanned at the counter to add this item to a sale, and set by scanning
+  -- it once in Inventory. NULL for anything without one (tingi, repacked
+  -- goods, anything homemade) — UNIQUE still allows many NULLs in MariaDB,
+  -- so only real codes have to be distinct. Stored as text, never a number:
+  -- EAN/UPC codes have meaningful leading zeros.
+  barcode              VARCHAR(64),
   price                DECIMAL(10,2)  NOT NULL,
   stock                INT,
   is_active            BOOLEAN        NOT NULL DEFAULT TRUE,
@@ -66,6 +72,7 @@ CREATE TABLE products (
   low_stock_threshold  INT,
   cost                 DECIMAL(12,2),
   expiry_date          DATE,
+  CONSTRAINT products_barcode_unique UNIQUE (barcode),
   CONSTRAINT products_category_id_fkey FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
   CONSTRAINT products_cost_nonnegative CHECK (cost IS NULL OR cost >= 0),
   CONSTRAINT products_low_stock_threshold_nonnegative CHECK (low_stock_threshold IS NULL OR low_stock_threshold >= 0),

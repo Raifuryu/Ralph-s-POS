@@ -4,12 +4,15 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
+import BarcodeScanner from "@/components/barcodeScanner";
 import { Button } from "@/components/ui/button";
 import { DrawerFooter } from "@/components/ui/drawer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScanBarcodeIcon } from "lucide-react";
+
 import { formatPeso } from "@/lib/format";
 import { roundMoney, sellingPriceFor, toNumber } from "@/lib/pricing";
 import type { Category, Product } from "@/lib/types";
@@ -56,6 +59,8 @@ export default function ProductForm({
   // Controlled too, since "Pack" mode below needs it to divide a pack total
   // down to the per-piece cost products.cost actually stores.
   const [stock, setStock] = useState(String(product?.stock ?? ""));
+  const [barcode, setBarcode] = useState(product?.barcode ?? "");
+  const [scanning, setScanning] = useState(false);
   /** Same two modes CartLineCard offers. "individual" is the default here
       (CartLineCard defaults to "pack") because Cost is optional on this tab
       and Qty can be left blank — pack mode has nothing to divide by then —
@@ -128,6 +133,43 @@ export default function ProductForm({
           defaultValue={product?.name}
           placeholder="e.g. Sardinas"
         />
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <Label htmlFor="barcode" className="text-xs">
+          Barcode{" "}
+          <span className="font-normal text-muted-foreground">(optional)</span>
+        </Label>
+        <div className="flex gap-2">
+          <Input
+            id="barcode"
+            name="barcode"
+            inputMode="numeric"
+            placeholder="Scan it once — then it adds itself at the counter"
+            value={barcode}
+            onChange={(event) => setBarcode(event.target.value)}
+          />
+          <Button
+            type="button"
+            variant={barcode ? "outline" : "default"}
+            onClick={() => setScanning((on) => !on)}
+          >
+            <ScanBarcodeIcon data-icon="inline-start" />
+            {scanning ? "Close" : "Scan"}
+          </Button>
+        </div>
+        {scanning ? (
+          <div className="mt-1">
+            <BarcodeScanner
+              hint="Point the back camera at the barcode."
+              onScan={(code) => {
+                setBarcode(code);
+                setScanning(false);
+              }}
+              onCancel={() => setScanning(false)}
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-3 gap-2">
@@ -320,6 +362,43 @@ export default function ProductForm({
                 placeholder="e.g. Sardinas"
               />
             </div>
+
+                  <div className="flex flex-col gap-1">
+                    <Label htmlFor="barcode" className="text-xs">
+                      Barcode{" "}
+                      <span className="font-normal text-muted-foreground">(optional)</span>
+                    </Label>
+                    <div className="flex gap-2">
+                      <Input
+                        id="barcode"
+                        name="barcode"
+                        inputMode="numeric"
+                        placeholder="Scan it once — then it adds itself at the counter"
+                        value={barcode}
+                        onChange={(event) => setBarcode(event.target.value)}
+                      />
+                      <Button
+                        type="button"
+                        variant={barcode ? "outline" : "default"}
+                        onClick={() => setScanning((on) => !on)}
+                      >
+                        <ScanBarcodeIcon data-icon="inline-start" />
+                        {scanning ? "Close" : "Scan"}
+                      </Button>
+                    </div>
+                    {scanning ? (
+                      <div className="mt-1">
+                        <BarcodeScanner
+                          hint="Point the back camera at the barcode."
+                          onScan={(code) => {
+                            setBarcode(code);
+                            setScanning(false);
+                          }}
+                          onCancel={() => setScanning(false)}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
 
             <div className="grid grid-cols-2 gap-2">
               <div className="flex flex-col gap-1">
