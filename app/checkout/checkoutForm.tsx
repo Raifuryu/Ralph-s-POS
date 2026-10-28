@@ -531,6 +531,9 @@ export default function CheckoutForm({
           calculator below, which all need their own fixed space regardless
           of how many lines are in the sale. Quantities are edited in "In
           this sale" below, not in either picker. */}
+      {/* The two pickers sit side by side; scanning gets its own full
+          width row below them, because its panel opens inline underneath
+          and a half-width viewfinder is too narrow to aim with. */}
       <div className="grid grid-cols-2 gap-2">
         <ItemPickerDrawer
           products={products}
@@ -539,28 +542,35 @@ export default function CheckoutForm({
           onAdd={(id) => setQuantity(id, (quantities[id] ?? 0) + 1)}
           pieceCount={pieceCount}
         />
+        <ServicePickerDrawer
+          services={services}
+          balances={balances}
+          paymentMethod={paymentMethod}
+          personalTake={personalTake}
+          drafts={serviceDrafts}
+          onAdd={(draft) => setServiceDrafts((prev) => [...prev, draft])}
+        />
+      </div>
 
-        <Button
-          type="button"
-          variant={scanning ? "default" : "outline"}
-          className="w-full justify-between"
-          onClick={() => {
-            setScanning((on) => !on);
-            setScanFeedback(null);
-          }}
-        >
-          <span>{scanning ? "Stop scanning" : "Scan barcode"}</span>
-          <ScanBarcodeIcon />
-        </Button>
+      <Button
+        type="button"
+        variant={scanning ? "default" : "outline"}
+        className="w-full justify-between"
+        onClick={() => {
+          setScanning((on) => !on);
+          setScanFeedback(null);
+        }}
+      >
+        <span>{scanning ? "Stop scanning" : "Scan barcode"}</span>
+        <ScanBarcodeIcon />
+      </Button>
 
-        {scanning ? (
-          <div className="flex flex-col gap-2 rounded-lg border p-2">
-            <BarcodeScanner
-              hint="Each scan adds one. Scan the same item again for another."
-              onScan={handleScan}
-              onCancel={() => setScanning(false)}
-            />
-            {scanFeedback ? (
+      {scanning ? (
+        <BarcodeScanner
+          hint="Each scan adds one. Scan the same item again for another."
+          onScan={handleScan}
+          scanNote={
+            scanFeedback ? (
               <p
                 role="status"
                 className={cn(
@@ -572,18 +582,10 @@ export default function CheckoutForm({
               >
                 {scanFeedback.text}
               </p>
-            ) : null}
-          </div>
-        ) : null}
-        <ServicePickerDrawer
-          services={services}
-          balances={balances}
-          paymentMethod={paymentMethod}
-          personalTake={personalTake}
-          drafts={serviceDrafts}
-          onAdd={(draft) => setServiceDrafts((prev) => [...prev, draft])}
+            ) : null
+          }
         />
-      </div>
+      ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col gap-2 border-t pt-3">
         <div className="flex items-center justify-between gap-2">

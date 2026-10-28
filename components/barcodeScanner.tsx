@@ -62,13 +62,20 @@ export default function BarcodeScanner({
   onScan,
   onCancel,
   hint,
+  scanNote,
 }: {
   /** Called once per distinct code. Scanning keeps running afterwards so
       several items can go in back to back — the caller closes this when
       it's done. */
   onScan: (code: string) => void;
-  onCancel: () => void;
+  /** Omit when the caller already has its own way to stop scanning — two
+      "close" controls on one panel is just clutter. */
+  onCancel?: () => void;
   hint?: string;
+  /** Shown directly under the viewfinder: what the last scan did. It sits
+      there rather than below the manual-entry row because that's where the
+      eye already is after a beep. */
+  scanNote?: React.ReactNode;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [status, setStatus] = useState<Status>({ kind: "starting" });
@@ -173,13 +180,15 @@ export default function BarcodeScanner({
             ref={videoRef}
             playsInline
             muted
-            className="h-56 w-full object-cover"
+            className="h-64 w-full object-cover"
           />
           {/* A window to aim through — a barcode fills it edge to edge at
               roughly the right distance. */}
+          {/* Wide and short, like the barcode itself — a square window
+              invites holding the phone too close to get the whole code in. */}
           <div
             aria-hidden
-            className="pointer-events-none absolute inset-x-6 top-1/2 h-20 -translate-y-1/2 rounded-lg border-2 border-white/80"
+            className="pointer-events-none absolute inset-x-4 top-1/2 h-24 -translate-y-1/2 rounded-lg border-2 border-white/80"
           />
           {status.kind === "starting" ? (
             <p className="absolute inset-0 flex items-center justify-center text-xs text-white">
@@ -188,6 +197,8 @@ export default function BarcodeScanner({
           ) : null}
         </div>
       )}
+
+      {scanNote}
 
       {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
 
@@ -226,9 +237,11 @@ export default function BarcodeScanner({
         </div>
       </div>
 
-      <Button type="button" variant="ghost" onClick={onCancel}>
-        Close
-      </Button>
+      {onCancel ? (
+        <Button type="button" variant="ghost" onClick={onCancel}>
+          Close
+        </Button>
+      ) : null}
     </div>
   );
 }

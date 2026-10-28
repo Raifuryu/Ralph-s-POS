@@ -166,7 +166,6 @@ export default function ProductForm({
                 setBarcode(code);
                 setScanning(false);
               }}
-              onCancel={() => setScanning(false)}
             />
           </div>
         ) : null}
@@ -394,8 +393,7 @@ export default function ProductForm({
                             setBarcode(code);
                             setScanning(false);
                           }}
-                          onCancel={() => setScanning(false)}
-                        />
+                                    />
                       </div>
                     ) : null}
                   </div>
