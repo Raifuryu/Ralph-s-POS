@@ -3,8 +3,15 @@
 import { useActionState, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ChevronDownIcon, ChevronRightIcon, PlusIcon, XIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  PlusIcon,
+  ScanBarcodeIcon,
+  XIcon,
+} from "lucide-react";
 
+import BarcodeScanner from "@/components/barcodeScanner";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -100,6 +107,12 @@ type CartLine = {
   /** Only meaningful for new-item lines. */
   categoryId: string;
   description: string;
+  /** Scanned (or typed) while unpacking — the natural moment to capture a
+      code, since the item is literally in hand. On a new-item line it's
+      saved with the product being created; on an existing-item line it
+      fills in a code that product doesn't have yet, and never overwrites
+      one it already has (see recordBulkRestock). */
+  barcode: string;
 };
 
 function emptyLine(): CartLine {
@@ -118,6 +131,7 @@ function emptyLine(): CartLine {
     costTouched: false,
     categoryId: "",
     description: "",
+    barcode: "",
   };
 }
 
@@ -230,6 +244,8 @@ function CartLineCard({
     pickerItems.find((item) => item.value === (line.productId ?? "__new__")) ??
     NEW_ITEM_OPTION;
 
+  const [scanning, setScanning] = useState(false);
+  const [scanMessage, setScanMessage] = useState<string | null>(null);
   const qty = toNumber(line.quantity);
   // Pack mode: Cost is the batch total, so cost-per-piece is derived by
   // dividing by Qty. Individual mode: Cost per item IS the per-piece figure
@@ -286,6 +302,25 @@ function CartLineCard({
         ) : null}
       </div>
     );
+  }
+
+  /** A scan either IS one of the items already stocked — in which case it
+      picks it, the same as choosing it from the list — or it's something
+      new, and the code is kept so the product gets created with it. */
+  function handleScan(code: string) {
+    const match = products.find((product) => product.barcode === code);
+    if (match && !otherSelectedIds.has(match.id)) {
+      handleProductChange({ value: match.id, label: match.name });
+      onChange({ barcode: code });
+      setScanMessage(`${match.name} — already stocked, picked it for you.`);
+      return;
+    }
+    if (match) {
+      setScanMessage(`${match.name} is already on another line in this cart.`);
+      return;
+    }
+    onChange({ productId: null, productName: "", barcode: code });
+    setScanMessage("New item — fill in the name and it'll be saved with this code.");
   }
 
   function handleProductChange(option: PickerOption | null) {
@@ -446,6 +481,32 @@ function CartLineCard({
               </ComboboxList>
             </ComboboxContent>
           </Combobox>
+          <Button
+            type="button"
+            variant={scanning ? "default" : "outline"}
+            size="sm"
+            className="self-start"
+            onClick={() => {
+              setScanning((on) => !on);
+              setScanMessage(null);
+            }}
+          >
+            <ScanBarcodeIcon data-icon="inline-start" />
+            {scanning ? "Stop scanning" : "Scan barcode"}
+          </Button>
+          {scanning ? (
+            <BarcodeScanner
+              hint="Scan what you're unpacking — it picks the item, or starts a new one."
+              onScan={handleScan}
+              scanNote={
+                scanMessage ? (
+                  <p className="rounded-lg bg-muted p-2 text-xs font-medium">
+                    {scanMessage}
+                  </p>
+                ) : null
+              }
+            />
+          ) : null}
         </div>
         <div className="mt-5 flex items-center gap-1">
           <Button
@@ -483,6 +544,22 @@ function CartLineCard({
               placeholder="e.g. Sardinas"
               value={line.newName}
               onChange={(event) => onChange({ newName: event.target.value })}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <Label htmlFor={`barcode-${line.key}`} className="text-xs">
+              Barcode{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </Label>
+            <Input
+              id={`barcode-${line.key}`}
+              inputMode="numeric"
+              placeholder="Scan above, or type it"
+              value={line.barcode}
+              onChange={(event) => onChange({ barcode: event.target.value })}
             />
           </div>
 
@@ -682,6 +759,7 @@ export default function BulkRestockForm({
       costTouched: false,
       categoryId: "",
       description: "",
+      barcode: "",
     },
   ]);
   // Gates the persist effect below so it never fires before the restore
@@ -729,6 +807,7 @@ export default function BulkRestockForm({
             ...line,
             costMode: line.costMode === "individual" ? "individual" : "pack",
             costPerItem: typeof line.costPerItem === "string" ? line.costPerItem : "",
+            barcode: typeof line.barcode === "string" ? line.barcode : "",
             productCost: typeof line.productCost === "number" ? line.productCost : null,
           }));
           // A line's product may have been deleted since the draft was
@@ -896,6 +975,7 @@ export default function BulkRestockForm({
             price: line.price,
             category_id: line.productId ? null : line.categoryId || null,
             description: line.productId ? null : line.description.trim() || null,
+            barcode: line.barcode.trim() || null,
           }))
         )}
       />

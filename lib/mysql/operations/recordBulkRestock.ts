@@ -22,6 +22,11 @@ export type BulkRestockLine = {
   price: number;
   categoryId: string | null;
   description: string | null;
+  /** Captured while unpacking. On a new product it's saved with it; on an
+      existing one it only fills a code that product doesn't have yet —
+      never overwrites a code already on file, since a restock is the wrong
+      place to silently re-identify an item. */
+  barcode?: string | null;
 };
 
 /** Where a restock's payment came from — either of the two Vault funds, an
@@ -170,14 +175,24 @@ export async function recordBulkRestock(
       const price = roundMoney(line.price);
       let productId: string;
 
+      const barcode = line.barcode?.trim() || null;
+
       if (line.productId !== null) {
         productId = line.productId;
         await conn.query("UPDATE products SET price = ? WHERE id = ?", [price, productId]);
+        if (barcode !== null) {
+          // COALESCE keeps whatever's already there — see BulkRestockLine's
+          // own barcode comment.
+          await conn.query(
+            "UPDATE products SET barcode = COALESCE(barcode, ?) WHERE id = ?",
+            [barcode, productId]
+          );
+        }
       } else {
         productId = randomUUID();
         await conn.query(
-          "INSERT INTO products (id, name, price, stock, category_id, description) VALUES (?, ?, ?, NULL, ?, ?)",
-          [productId, name, price, line.categoryId, description]
+          "INSERT INTO products (id, name, barcode, price, stock, category_id, description) VALUES (?, ?, ?, ?, NULL, ?, ?)",
+          [productId, name, barcode, price, line.categoryId, description]
         );
       }
 

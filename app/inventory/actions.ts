@@ -122,15 +122,19 @@ function parseForm(formData: FormData): Parsed | { error: string } {
     another item fails at the database. Turn that into something the owner
     can act on — which item already has it — instead of a driver error. */
 async function describeDuplicateBarcode(
-  barcode: string | null
-): Promise<string | null> {
-  if (!barcode) return null;
-  const rows = await queryRows<{ name: string }>(
-    "SELECT name FROM products WHERE barcode = ? LIMIT 1",
-    [barcode]
+  ...barcodes: (string | null)[]
+): Promise<string> {
+  const codes = barcodes.filter((code): code is string => Boolean(code));
+  if (codes.length === 0) return "That barcode is already used by another item.";
+  // Which of the submitted codes is actually taken, and by what — a cart
+  // can carry several, and naming the wrong one sends the owner hunting
+  // through the wrong line.
+  const rows = await queryRows<{ name: string; barcode: string }>(
+    `SELECT name, barcode FROM products WHERE barcode IN (${codes.map(() => "?").join(",")}) LIMIT 1`,
+    codes
   );
   return rows[0]
-    ? `That barcode is already on "${rows[0].name}".`
+    ? `Barcode ${rows[0].barcode} is already on "${rows[0].name}".`
     : "That barcode is already used by another item.";
 }
 
@@ -168,7 +172,7 @@ export async function updateProduct(
     );
   } catch (err) {
     if (isDuplicateEntry(err)) {
-      return { error: (await describeDuplicateBarcode(parsed.barcode))! };
+      return { error: await describeDuplicateBarcode(parsed.barcode) };
     }
     throw err;
   }
@@ -214,7 +218,7 @@ export async function createProduct(
     );
   } catch (err) {
     if (isDuplicateEntry(err)) {
-      return { error: (await describeDuplicateBarcode(parsed.barcode))! };
+      return { error: await describeDuplicateBarcode(parsed.barcode) };
     }
     throw err;
   }
@@ -302,8 +306,15 @@ export async function bulkRestock(
         ? line.description.trim()
         : null;
 
+    const barcodeRaw =
+      typeof line.barcode === "string" ? line.barcode.trim() : "";
+    if (barcodeRaw.length > 64) {
+      return { error: `${label}: that barcode is too long to store.` };
+    }
+
     items.push({
       productId,
+      barcode: barcodeRaw || null,
       name: productId ? null : name,
       quantity,
       cost,
@@ -353,6 +364,15 @@ export async function bulkRestock(
       user.id
     );
   } catch (err) {
+    if (isDuplicateEntry(err)) {
+      // Only a barcode can collide here — every other unique key on these
+      // tables is a generated id.
+      return {
+        error: await describeDuplicateBarcode(
+          ...items.map((item) => item.barcode ?? null)
+        ),
+      };
+    }
     return { error: (err as Error).message };
   }
 
